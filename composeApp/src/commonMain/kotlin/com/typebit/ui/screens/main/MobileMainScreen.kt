@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.typebit.app.Route
 import com.typebit.model.Torrent
+import com.typebit.platform.PlatformBackHandler
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
@@ -59,6 +60,11 @@ fun MobileMainScreen(
 ) {
     var detailHash by remember { mutableStateOf<String?>(null) }
 
+    // Android back gesture: while a detail page is open, back closes it
+    // (one level up) instead of leaving the app. This inner handler wins
+    // over the route-level one.
+    PlatformBackHandler(enabled = detailHash != null) { detailHash = null }
+
     if (detailHash != null) {
         val t = state.torrents.firstOrNull { it.hash == detailHash }
         if (t != null) {
@@ -73,7 +79,7 @@ fun MobileMainScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("TypeBit", style = MaterialTheme.typography.titleLarge)
+                        Text("TypeBitTorrent", style = MaterialTheme.typography.titleLarge)
                         Text(
                             "下载 ${Format.speed(state.globalDownRate)} · 上传 ${Format.speed(state.globalUpRate)}",
                             style = MaterialTheme.typography.labelSmall,

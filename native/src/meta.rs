@@ -51,7 +51,11 @@ impl TorrentMeta {
         let mut announce_list: Vec<Vec<String>> = t
             .announce_list
             .iter()
-            .map(|tier| tier.iter().map(|u| String::from_utf8_lossy(u).into_owned()).collect())
+            .map(|tier| {
+                tier.iter()
+                    .map(|u| String::from_utf8_lossy(u).into_owned())
+                    .collect()
+            })
             .collect();
 
         // A single top-level `announce` URL that is not already in the list
@@ -66,7 +70,11 @@ impl TorrentMeta {
             .files
             .iter()
             .map(|f| FileMeta {
-                path: f.path.iter().map(|s| String::from_utf8_lossy(s).into_owned()).collect(),
+                path: f
+                    .path
+                    .iter()
+                    .map(|s| String::from_utf8_lossy(s).into_owned())
+                    .collect(),
                 length: f.length,
             })
             .collect();
@@ -79,7 +87,10 @@ impl TorrentMeta {
             piece_length: t.piece_length,
             piece_count: t.piece_count(),
             private: t.private,
-            comment: t.comment.as_ref().map(|b| String::from_utf8_lossy(b).into_owned()),
+            comment: t
+                .comment
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b).into_owned()),
             created_by: t
                 .created_by
                 .as_ref()
@@ -217,7 +228,8 @@ impl MetaRegistry {
     }
 
     pub fn register_magnet(&mut self, hash: &str, name: &str) {
-        self.by_hash.insert(hash.to_string(), TorrentMeta::from_magnet(hash, name));
+        self.by_hash
+            .insert(hash.to_string(), TorrentMeta::from_magnet(hash, name));
     }
 
     pub fn mark_metadata_ready(&mut self, hash: &str) {

@@ -209,6 +209,7 @@ data class BitTorrentSettings(
     val endgamePieces: Int = 32,
     val smartScheduling: Boolean = true,
     val useDefaultTrackers: Boolean = true,
+    val antiLeechEnabled: Boolean = true,
     /** Extra tracker announce URLs, one per line. */
     val extraTrackers: String = "",
     /** Disk write-back cache budget in bytes. */

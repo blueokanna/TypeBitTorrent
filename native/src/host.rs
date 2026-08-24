@@ -20,7 +20,9 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream, UdpSocket};
+use std::net::{
+    Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream, UdpSocket,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -173,10 +175,18 @@ impl NativeHost {
     /// the requested one is taken — logged as a warning).
     pub fn bind_tcp(&mut self, port: u16) -> u16 {
         if self.listener.is_some() {
-            return self.listener.as_ref().unwrap().local_addr().map(|a| a.port()).unwrap_or(port);
+            return self
+                .listener
+                .as_ref()
+                .unwrap()
+                .local_addr()
+                .map(|a| a.port())
+                .unwrap_or(port);
         }
         let bind = || -> std::io::Result<TcpListener> {
-            let addr = format!("0.0.0.0:{port}").parse::<SocketAddr>().map_err(std::io::Error::other)?;
+            let addr = format!("0.0.0.0:{port}")
+                .parse::<SocketAddr>()
+                .map_err(std::io::Error::other)?;
             TcpListener::bind(addr)
         };
         match bind() {
@@ -188,13 +198,19 @@ impl NativeHost {
                 actual
             }
             Err(e) => {
-                self.log_internal(LogLevel::Warn, &format!("bind tcp {port} failed ({e}); falling back to ephemeral"));
+                self.log_internal(
+                    LogLevel::Warn,
+                    &format!("bind tcp {port} failed ({e}); falling back to ephemeral"),
+                );
                 match TcpListener::bind("0.0.0.0:0") {
                     Ok(l) => {
                         let _ = l.set_nonblocking(true);
                         let actual = l.local_addr().map(|a| a.port()).unwrap_or(0);
                         self.listener = Some(l);
-                        self.log_internal(LogLevel::Warn, &format!("TCP listening on ephemeral port {actual}"));
+                        self.log_internal(
+                            LogLevel::Warn,
+                            &format!("TCP listening on ephemeral port {actual}"),
+                        );
                         actual
                     }
                     Err(_) => {
@@ -386,13 +402,22 @@ impl Host for NativeHost {
         match UdpSocket::bind(addr) {
             Ok(s) => {
                 let _ = s.set_nonblocking(true);
-                self.log_internal(LogLevel::Info, &format!("UDP bound on port {}", s.local_addr().map(|a| a.port()).unwrap_or(port)));
+                self.log_internal(
+                    LogLevel::Info,
+                    &format!(
+                        "UDP bound on port {}",
+                        s.local_addr().map(|a| a.port()).unwrap_or(port)
+                    ),
+                );
                 self.udp = Some(s);
                 Ok(())
             }
             Err(e) => {
                 // Fall back to an ephemeral port so DHT still functions.
-                self.log_internal(LogLevel::Warn, &format!("bind udp {port} failed ({e}); using ephemeral"));
+                self.log_internal(
+                    LogLevel::Warn,
+                    &format!("bind udp {port} failed ({e}); using ephemeral"),
+                );
                 match UdpSocket::bind("0.0.0.0:0") {
                     Ok(s) => {
                         let _ = s.set_nonblocking(true);

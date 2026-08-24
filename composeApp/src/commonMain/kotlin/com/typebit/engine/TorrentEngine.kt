@@ -27,6 +27,9 @@ interface TorrentEngine {
 
     // -- torrents -----------------------------------------------------------
 
+    /** Parses `.torrent` bytes without adding (add-dialog preview). */
+    fun parseTorrent(data: ByteArray): TorrentInfoDto?
+
     fun addTorrent(data: ByteArray, saveDir: String): String?
 
     fun addMagnet(uri: String, saveDir: String): String?
@@ -99,6 +102,11 @@ class NativeTorrentEngine : TorrentEngine {
             nativeDestroyEngine(handle)
             handle = 0L
         }
+    }
+
+    override fun parseTorrent(data: ByteArray): TorrentInfoDto? {
+        val json = nativeParseTorrent(data) ?: return null
+        return runCatching { BRIDGE_JSON.decodeFromString<TorrentInfoDto>(json) }.getOrNull()
     }
 
     override fun addTorrent(data: ByteArray, saveDir: String): String? =

@@ -70,7 +70,7 @@ class ScreenshotTest {
                 MainScreen(state = store.state.value, store = store, onRoute = {})
             }
         }
-        rule.onNodeWithText("TypeBit").assertExists()
+        rule.onNodeWithText("TypeBitTorrent").assertExists()
         rule.onNodeWithText("暂无种子").assertExists()
         save(rule.onRoot().captureToImage(), "main-dark.png")
     }
@@ -83,7 +83,7 @@ class ScreenshotTest {
                 MainScreen(state = store.state.value, store = store, onRoute = {})
             }
         }
-        rule.onNodeWithText("TypeBit").assertExists()
+        rule.onNodeWithText("TypeBitTorrent").assertExists()
         rule.onNodeWithText("暂无种子").assertExists()
         save(rule.onRoot().captureToImage(), "main-amoled.png")
     }
@@ -96,7 +96,7 @@ class ScreenshotTest {
                 MainScreen(state = store.state.value, store = store, onRoute = {})
             }
         }
-        rule.onNodeWithText("TypeBit").assertExists()
+        rule.onNodeWithText("TypeBitTorrent").assertExists()
         rule.onNodeWithText("暂无种子").assertExists()
         rule.onNodeWithText("添加种子").assertExists()
         save(rule.onRoot().captureToImage(), "main-light.png")
@@ -137,6 +137,7 @@ private class FakeEngine : TorrentEngine {
     override fun start(configJson: String, saveDir: String): Boolean = false
     override fun stop() {}
     override val isRunning: Boolean = false
+    override fun parseTorrent(data: ByteArray): TorrentInfoDto? = null
     override fun addTorrent(data: ByteArray, saveDir: String): String? = null
     override fun addMagnet(uri: String, saveDir: String): String? = null
     override fun start(hash: String): Boolean = false

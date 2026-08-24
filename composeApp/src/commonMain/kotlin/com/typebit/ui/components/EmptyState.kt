@@ -48,10 +48,7 @@ fun EmptyState(
         LaunchedEffect(Unit) {
             scale.animateTo(
                 targetValue = 1f,
-                animationSpec = spring(
-                    dampingRatio = 0.7f,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
+                animationSpec = com.typebit.ui.theme.TypeBitMotion.expressive,
             )
         }
         Box(

@@ -3,7 +3,6 @@ package com.typebit
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.LocalWindow
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -22,7 +21,7 @@ fun main() = application {
     ) {
         // Enforce a minimum window size: below it the single-row toolbar and
         // the sidebar collapse. The user can still resize freely above this.
-        val window = LocalWindow.current
+        // `window` is the FrameWindowScope's ComposeWindow (AWT JFrame).
         DisposableEffect(Unit) {
             window.minimumSize = Dimension(MIN_W, MIN_H)
             onDispose {}

@@ -92,7 +92,7 @@ class AppStore(
                 tags = buildTags(),
             )
         }
-        refreshTorrents()
+        refreshStats()
 
         pollJob = scope.launch { pollLoop() }
     }
@@ -108,8 +108,31 @@ class AppStore(
     // actions
     // ------------------------------------------------------------------
 
+    /** Parses `.torrent` bytes without adding — add-dialog preview. */
+    fun parseTorrentFile(bytes: ByteArray): com.typebit.engine.TorrentInfoDto? =
+        engine.parseTorrent(bytes)
+
     fun addTorrentFile(bytes: ByteArray, fileName: String) {
-        val saveDir = effectiveSaveDir()
+        val s = _state.value.settings
+        addTorrentFileEx(
+            bytes = bytes,
+            fileName = fileName,
+            saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
+            category = "",
+            tags = emptyList(),
+            paused = s.downloads.addTorrentsInPause,
+        )
+    }
+
+    /** Adds a `.torrent` with the add-dialog options applied. */
+    fun addTorrentFileEx(
+        bytes: ByteArray,
+        fileName: String,
+        saveDir: String,
+        category: String,
+        tags: List<String>,
+        paused: Boolean,
+    ) {
         val hash = engine.addTorrent(bytes, saveDir) ?: run {
             _state.update { it.copy(lastError = "无法解析种子文件：$fileName") }
             return
@@ -122,18 +145,37 @@ class AppStore(
             saveDir = saveDir,
             data = B64.encode(bytes),
             addedAt = System.currentTimeMillis(),
-            paused = _state.value.settings.downloads.addTorrentsInPause,
+            paused = paused,
+            category = category,
+            tags = tags,
         )
         records = records + record
         persistRecords()
         if (!record.paused) engine.start(hash)
-        refreshTorrents()
+        refreshStats()
     }
 
     fun addMagnet(uri: String) {
+        val s = _state.value.settings
+        addMagnetEx(
+            uri = uri,
+            saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
+            category = "",
+            tags = emptyList(),
+            paused = s.downloads.addTorrentsInPause,
+        )
+    }
+
+    /** Adds a magnet with the add-dialog options applied. */
+    fun addMagnetEx(
+        uri: String,
+        saveDir: String,
+        category: String,
+        tags: List<String>,
+        paused: Boolean,
+    ) {
         val trimmed = uri.trim()
         if (trimmed.isEmpty()) return
-        val saveDir = effectiveSaveDir()
         val hash = engine.addMagnet(trimmed, saveDir) ?: run {
             _state.update { it.copy(lastError = "无法解析磁力链接") }
             return
@@ -146,24 +188,26 @@ class AppStore(
             saveDir = saveDir,
             data = trimmed,
             addedAt = System.currentTimeMillis(),
-            paused = _state.value.settings.downloads.addTorrentsInPause,
+            paused = paused,
+            category = category,
+            tags = tags,
         )
         records = records + record
         persistRecords()
         if (!record.paused) engine.start(hash)
-        refreshTorrents()
+        refreshStats()
     }
 
     fun start(hash: String) {
         engine.start(hash)
         markPaused(hash, paused = false)
-        refreshTorrents()
+        refreshStats()
     }
 
     fun pause(hash: String) {
         engine.pause(hash)
         markPaused(hash, paused = true)
-        refreshTorrents()
+        refreshStats()
     }
 
     fun resume(hash: String) = start(hash)
@@ -245,9 +289,9 @@ class AppStore(
             // 1) Drain engine events first (cheap, authoritative).
             drainEvents(engine.takeEvents())
 
-            // 2) Refresh per-torrent stats and global rates.
-            refreshTorrents()
-            refreshGlobal()
+            // 2) Refresh per-torrent stats + global rates in ONE state
+            //    update (fewer recompositions per poll tick).
+            refreshStats()
 
             // 3) Persist resume data on a slow cadence (like qBittorrent).
             val now = System.currentTimeMillis()
@@ -263,6 +307,9 @@ class AppStore(
         _state.update { s ->
             var dht = s.dhtNodes
             var torrents = s.torrents
+            var leechCount = s.antiLeechCount
+            var leechClients = s.antiLeechClients
+            val antiLeechOn = s.settings.bitTorrent.antiLeechEnabled
             for (ev in events) {
                 when (ev.t) {
                     1 -> torrents = bumpPeer(torrents, ev.h, +1)
@@ -273,34 +320,41 @@ class AppStore(
                     6 -> Unit // metadata failed — surfaced via status
                     7 -> torrents = applyTrackerAnnounce(torrents, ev.h, ev.peers ?: 0)
                     8 -> dht = ev.n ?: dht
+                    9 -> if (antiLeechOn) {
+                        leechCount++
+                        val name = ev.c ?: "未知客户端"
+                        if (name !in leechClients) {
+                            leechClients = (leechClients + name).takeLast(20)
+                        }
+                    }
                 }
             }
-            s.copy(dhtNodes = dht, torrents = torrents)
+            s.copy(dhtNodes = dht, torrents = torrents, antiLeechCount = leechCount, antiLeechClients = leechClients)
         }
     }
 
-    private fun refreshTorrents() {
+    /**
+     * Combined per-tick refresh: torrents + global rates + DHT in a single
+     * `_state.update`. The native queries are batched where the bridge
+     * allows it; the whole tick emits exactly one state change so Compose
+     * recomposes once per poll instead of three times.
+     */
+    private fun refreshStats() {
         val now = System.currentTimeMillis()
         val states = engine.torrentStates().associateBy { it.hash }
-        _state.update { s ->
-            val updated = records.map { rec ->
-                val base = s.torrents.firstOrNull { it.hash == rec.hash }
-                buildTorrent(rec, base, states[rec.hash], now)
-            }
-            s.copy(torrents = updated)
-        }
-    }
-
-    private fun refreshGlobal() {
         val totals = engine.totals()
-        val now = System.currentTimeMillis()
         val dt = (now - lastGlobalPoll).coerceAtLeast(1L)
         val downRate = if (lastTotals == null) 0L else (totals.first - lastTotals!!.first) * 1000 / dt
         val upRate = if (lastTotals == null) 0L else (totals.second - lastTotals!!.second) * 1000 / dt
         lastTotals = totals
         lastGlobalPoll = now
-        _state.update {
-            it.copy(
+        _state.update { s ->
+            val updated = records.map { rec ->
+                val base = s.torrents.firstOrNull { it.hash == rec.hash }
+                buildTorrent(rec, base, states[rec.hash], now)
+            }
+            s.copy(
+                torrents = updated,
                 globalDownRate = downRate.coerceAtLeast(0),
                 globalUpRate = upRate.coerceAtLeast(0),
                 totalDownloaded = totals.first,

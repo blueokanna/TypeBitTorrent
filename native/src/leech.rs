@@ -14,10 +14,10 @@ pub fn detect_client(peer_id: &[u8]) -> Option<&'static str> {
     if peer_id.len() != 20 {
         return None;
     }
-    let code: String = if peer_id[0] == b'-' {
+    let code: String = if is_bep20(peer_id) {
         String::from_utf8_lossy(&peer_id[1..3]).to_ascii_uppercase()
     } else {
-        String::from_utf8_lossy(&peer_id[0..4]).to_ascii_uppercase()
+        String::from_utf8_lossy(&peer_id[0..2]).to_ascii_uppercase()
     };
     Some(match code.as_str() {
         "XL" => "Xunlei (迅雷)",
@@ -53,16 +53,22 @@ const LEECH_TAGS: &[&str] = &[
     "DN", // Old Demonoid leech build.
 ];
 
+/// True for a well-formed BEP-20 ID: `-XX####-` (dash, code, 4-char version,
+/// dash at index 7).
+fn is_bep20(peer_id: &[u8]) -> bool {
+    peer_id.len() == 20 && peer_id[0] == b'-' && peer_id[7] == b'-'
+}
+
 /// Returns the client name when [peer_id] belongs to a known leeching
 /// client, else `None`.
 pub fn detect_leech(peer_id: &[u8]) -> Option<&'static str> {
     if peer_id.len() != 20 {
         return None;
     }
-    let code: String = if peer_id[0] == b'-' {
+    let code: String = if is_bep20(peer_id) {
         String::from_utf8_lossy(&peer_id[1..3]).to_ascii_uppercase()
     } else {
-        String::from_utf8_lossy(&peer_id[0..4]).to_ascii_uppercase()
+        String::from_utf8_lossy(&peer_id[0..2]).to_ascii_uppercase()
     };
     if LEECH_TAGS.contains(&code.as_str()) {
         detect_client(peer_id)
@@ -86,13 +92,19 @@ mod tests {
     #[test]
     fn detects_xunlei_bep20() {
         // -XL1234-...
-        assert_eq!(detect_leech(&pid(b"-XL1234-123456789012")), Some("Xunlei (迅雷)"));
+        assert_eq!(
+            detect_leech(&pid(b"-XL1234-123456789012")),
+            Some("Xunlei (迅雷)")
+        );
     }
 
     #[test]
     fn detects_nonstandard_xunlei() {
         // XL0001...
-        assert_eq!(detect_leech(&pid(b"XL0001-1234567890123")), Some("Xunlei (迅雷)"));
+        assert_eq!(
+            detect_leech(&pid(b"XL0001-1234567890123")),
+            Some("Xunlei (迅雷)")
+        );
     }
 
     #[test]

@@ -3,6 +3,8 @@ package com.typebit.ui.screens.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,13 +28,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,9 +46,11 @@ import com.typebit.data.AppSettings
 import com.typebit.data.AppearanceSettings
 import com.typebit.data.ThemeMode
 import com.typebit.platform.rememberWallpaperPicker
-import com.typebit.ui.theme.TypeBitTypography
 import com.typebit.ui.wallpaper.WallpaperLayer
 import com.typebit.ui.wallpaper.loadWallpaperBitmap
+import com.typebit.ui.wallpaper.prepareWallpaper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // ---------------------------------------------------------------------------
 // 外观
@@ -71,7 +78,7 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
         Text(
             "Monet 动态色彩由壁纸（或手动种子色）经 HCT 色彩空间实时生成整套 MD3 配色。",
-            style = TypeBitTypography.labelSmall,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -90,26 +97,31 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                 onSelect = { update(s.copy(wallpaperFit = it)) },
                 labelOf = { if (it) "完整显示（Fit）" else "填充窗口（Crop）" },
             )
-            SettingSlider(
+            CommitSlider(
                 label = "垂直位置",
                 value = s.wallpaperOffsetY,
                 valueRange = -1f..1f,
-                suffix = { if (it > 0) "下移 %d%%".format((it * 100).toInt()) else if (it < 0) "上移 %d%%".format((-it * 100).toInt()) else "居中" },
-                onValueChange = { update(s.copy(wallpaperOffsetY = it)) },
+                // The slider maps -1..1 onto the full pan band (±95% of the
+                // window height), so 100% = show the very top of the image.
+                suffix = {
+                    val pct = (it * 95).toInt()
+                    if (pct > 0) "下移 $pct%" else if (pct < 0) "上移 ${-pct}%" else "居中"
+                },
+                onCommit = { update(s.copy(wallpaperOffsetY = it)) },
             )
-            SettingSlider(
+            CommitSlider(
                 label = "模糊半径",
                 value = s.blurRadiusPx,
                 valueRange = 0f..80f,
                 suffix = { "%.0f px".format(it) },
-                onValueChange = { update(s.copy(blurRadiusPx = it)) },
+                onCommit = { update(s.copy(blurRadiusPx = it)) },
             )
-            SettingSlider(
+            CommitSlider(
                 label = "DIM 遮罩强度",
                 value = s.dimAlpha,
                 valueRange = 0f..0.85f,
                 suffix = { "%.0f%%".format(it * 100) },
-                onValueChange = { update(s.copy(dimAlpha = it)) },
+                onCommit = { update(s.copy(dimAlpha = it)) },
             )
             OutlinedButton(
                 onClick = { showPreview = true },
@@ -124,7 +136,7 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         SeedOverrideRow(s, update)
         Text(
             "留空 = 从壁纸自动提取种子色（类似 Android 的动态取色）。",
-            style = TypeBitTypography.labelSmall,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -157,40 +169,49 @@ private fun WallpaperButtons(
         Spacer(Modifier.width(12.dp))
         Text(
             if (s.wallpaperPath.isBlank()) "尚未选择" else s.wallpaperPath.substringAfterLast('/').substringAfterLast('\\'),
-            style = TypeBitTypography.labelSmall,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
     }
 }
 
-/** Label + Material 3 slider row. */
+/**
+ * Label + Material 3 slider row that only reports the value when the drag
+ * ENDS. While the thumb moves, only the local value changes, so the
+ * expensive global recomposition (and the one-shot wallpaper re-blur) runs
+ * once per drag instead of on every frame — this is what keeps the
+ * wallpaper sliders buttery instead of janky.
+ */
 @Composable
-private fun SettingSlider(
+private fun CommitSlider(
     label: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     suffix: (Float) -> String,
-    onValueChange: (Float) -> Unit,
+    onCommit: (Float) -> Unit,
 ) {
+    var local by remember(value) { mutableFloatStateOf(value) }
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, Modifier.weight(1f), style = TypeBitTypography.bodyMedium)
+            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             Text(
-                suffix(value),
-                style = TypeBitTypography.labelSmall,
+                suffix(local),
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Slider(
-            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
+            value = local.coerceIn(valueRange.start, valueRange.endInclusive),
+            onValueChange = { local = it },
+            onValueChangeFinished = { onCommit(local) },
             valueRange = valueRange,
         )
     }
 }
 
 /** Preset Material-You seed swatches + a hex field for a manual override. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SeedOverrideRow(
     s: AppearanceSettings,
@@ -206,10 +227,10 @@ private fun SeedOverrideRow(
         "紫色" to "0xFF6750A4",
         "粉色" to "0xFF9E315C",
     )
-    Row(
+    FlowRow(
         Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         presets.forEach { (name, hex) ->
             val color = parseArgb(hex)
@@ -220,7 +241,7 @@ private fun SeedOverrideRow(
             }
             Box(
                 Modifier
-                    .size(32.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(color?.let { Color(it) } ?: Color.Gray)
                     .then(
@@ -275,7 +296,17 @@ private fun WallpaperPreviewDialog(
         ThemeMode.DARK, ThemeMode.AMOLED -> true
         ThemeMode.SYSTEM -> systemDark
     }
-    val bitmap = remember(appearance.wallpaperPath) { loadWallpaperBitmap(appearance.wallpaperPath) }
+    // Decode + prepare (downscale + blur) off the UI thread; keyed by path
+    // and radius so a stale load is cancelled and the old bitmap is released
+    // to GC. The blur is applied here (one-shot) because WallpaperLayer only
+    // draws static, pre-blurred bitmaps — identical to the app background.
+    val bitmap by produceState<ImageBitmap?>(null, appearance.wallpaperPath, appearance.blurRadiusPx) {
+        val raw = withContext(Dispatchers.IO) { loadWallpaperBitmap(appearance.wallpaperPath) }
+        value = raw?.let {
+            withContext(Dispatchers.Default) { prepareWallpaper(it, appearance.blurRadiusPx) }
+        }
+    }
+    val previewBg = if (dark) Color(0xFF121316) else Color(0xFFFBF9FA)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -286,8 +317,10 @@ private fun WallpaperPreviewDialog(
                 WallpaperLayer(
                     bitmap = bitmap,
                     dimAmount = appearance.dimAlpha,
-                    blurRadiusPx = appearance.blurRadiusPx,
                     scrimColor = if (dark) Color.Black else Color.White,
+                    // Always paint a solid backdrop so a failed decode still
+                    // shows a clean panel instead of a transparent hole.
+                    backgroundColor = previewBg,
                     contentScale = if (appearance.wallpaperFit) ContentScale.Fit else ContentScale.Crop,
                     verticalOffsetRatio = appearance.wallpaperOffsetY,
                 ) {
@@ -297,15 +330,23 @@ private fun WallpaperPreviewDialog(
                             .verticalScroll(rememberScrollState())
                             .padding(16.dp),
                     ) {
+                        if (appearance.wallpaperEnabled && bitmap == null) {
+                            Text(
+                                "壁纸加载失败：${appearance.wallpaperPath}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                        }
                         Text(
                             "主标题（${if (dark) "亮色文字" else "黑色文字"}）",
-                            style = TypeBitTypography.headlineSmall,
+                            style = MaterialTheme.typography.headlineSmall,
                             color = if (dark) Color(0xFFE6E1E9) else Color(0xFF1C1B1F),
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
                             "正文示例：在任意壁纸上文字都保持清晰可读，得益于 DIM 遮罩与字体对比度。",
-                            style = TypeBitTypography.bodyMedium,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = if (dark) Color(0xFFCBC5CF) else Color(0xFF44474E),
                         )
                         Spacer(Modifier.height(12.dp))
@@ -321,7 +362,7 @@ private fun WallpaperPreviewDialog(
                         ) {
                             Text(
                                 "表面卡片",
-                                style = TypeBitTypography.titleMedium,
+                                style = MaterialTheme.typography.titleMedium,
                                 color = if (dark) Color(0xFFE6E1E9) else Color(0xFF1C1B1F),
                                 modifier = Modifier.align(Alignment.Center),
                             )

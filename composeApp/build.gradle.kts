@@ -18,8 +18,6 @@ kotlin {
     jvm("desktop")
 
     sourceSets {
-        // Shared JVM source set: hosts the `actual external` JNI declarations
-        // so they exist exactly once for both Android (ART) and desktop (JVM).
         val jvmShared by creating {
             dependsOn(commonMain.get())
         }
@@ -96,7 +94,7 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Deb)
             packageName = "TypeBitTorrent"
             packageVersion = "0.1.0"
-            description = "TypeBit - a cross-platform BitTorrent client on the TypeBit Rust engine"
+            description = "TypeBitTorrent - a cross-platform BitTorrent client on the TypeBit Rust engine"
             vendor = "blueokanna"
 
             windows {

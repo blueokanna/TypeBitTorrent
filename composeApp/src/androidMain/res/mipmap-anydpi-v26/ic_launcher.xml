@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The real TypeBitTorrent logo (assets/typebittorrent.png) fills the
+         full icon and is masked to the launcher shape. -->
+    <background android:drawable="@drawable/typebit_icon" />
+    <foreground android:drawable="@android:color/transparent" />
+    <!-- Simple glyph for Android 13+ themed (monochrome) icons. -->
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

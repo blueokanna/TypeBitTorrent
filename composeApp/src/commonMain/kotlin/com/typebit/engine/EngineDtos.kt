@@ -69,6 +69,8 @@ data class EngineEventDto(
     val piece: Int? = null,
     val peers: Int? = null,
     val n: Int? = null,
+    /** Anti-leech: detected client name (t=9). */
+    val c: String? = null,
 )
 
 /** A log line drained from the engine. */

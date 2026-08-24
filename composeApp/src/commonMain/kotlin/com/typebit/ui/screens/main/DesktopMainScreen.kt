@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -43,6 +45,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.StopCircle
@@ -164,20 +167,23 @@ fun DesktopMainScreen(
 @Composable
 private fun Sidebar(state: AppState, store: AppStore) {
     Column(
-        // The drawer background is painted explicitly so it follows the
-        // theme (AMOLED → pure black), not the drawer's default gray.
         Modifier.fillMaxHeight().width(240.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(12.dp),
     ) {
-        // Brand header
+        // Brand header on an OPAQUE surface so the title + subtitle keep
+        // full contrast no matter how bright the wallpaper behind is.
         Row(
-            Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
+            Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
-                    .size(44.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center,
@@ -186,22 +192,23 @@ private fun Sidebar(state: AppState, store: AppStore) {
                     Icons.Default.Download,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(22.dp),
                 )
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
             Column {
                 Text(
-                    "TypeBit",
+                    "TypeBitTorrent",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
                 )
                 Text(
                     "BitTorrent 客户端",
-                    style = MaterialTheme.typography.labelSmall,
-                    // A clear secondary tier under the brand title: readable
-                    // on any wallpaper/dim scrim without fighting the title.
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
             }
         }
@@ -331,51 +338,60 @@ private fun AppTopBar(
 ) {
     var query by remember { mutableStateOf("") }
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text(
-                    state.filter.labelRes,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // On narrow windows the live speeds are the first thing to give
+            // up space — the search field and actions never squash.
+            val compact = maxWidth < 1080.dp
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        state.filter.labelRes,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "${state.filteredTorrents.size} 个种子",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.width(20.dp))
+                // Large-radius search field, MD3 search-bar styling. The
+                // widthIn floor stops it from collapsing on narrow windows.
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = {
+                        query = it
+                        store.setSearch(it)
+                    },
+                    placeholder = { Text("搜索名称或哈希…") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                    },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                    ),
+                    modifier = Modifier.weight(1f).widthIn(min = 180.dp),
                 )
-                Text(
-                    "${state.filteredTorrents.size} 个种子",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.width(20.dp))
-            // Large-radius search field, MD3 search-bar styling.
-            OutlinedTextField(
-                value = query,
-                onValueChange = {
-                    query = it
-                    store.setSearch(it)
-                },
-                placeholder = { Text("搜索名称或哈希…") },
-                leadingIcon = {
-                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
-                },
-                singleLine = true,
-                shape = MaterialTheme.shapes.extraLarge,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                ),
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(12.dp))
-            SpeedPair(
-                down = state.globalDownRate,
-                up = state.globalUpRate,
-                modifier = Modifier.padding(end = 8.dp),
-            )
-            FilledTonalIconButton(onClick = {
+                Spacer(Modifier.width(12.dp))
+                if (!compact) {
+                    SpeedPair(
+                        down = state.globalDownRate,
+                        up = state.globalUpRate,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                }
+                FilledTonalIconButton(onClick = {
                 state.torrents.filter { it.status.name != "SEEDING" && it.status.name != "PAUSED" }
                     .forEach { store.start(it.hash) }
             }) {
@@ -400,6 +416,7 @@ private fun AppTopBar(
             Spacer(Modifier.width(4.dp))
             FilledIconButton(onClick = { onRoute(Route.ADD) }) {
                 Icon(Icons.Default.Add, contentDescription = "添加种子")
+            }
             }
         }
     }
@@ -434,6 +451,22 @@ private fun StatusBar(state: AppState, store: AppStore) {
                 Text("下载 ${Format.speed(state.globalDownRate)}", style = MaterialTheme.typography.labelMedium)
                 Text("上传 ${Format.speed(state.globalUpRate)}", style = MaterialTheme.typography.labelMedium)
                 Text("DHT ${state.dhtNodes} 节点", style = MaterialTheme.typography.labelMedium)
+                if (state.antiLeechCount > 0 && state.settings.bitTorrent.antiLeechEnabled) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Security,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "反吸血 ${state.antiLeechCount}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                }
                 if (state.lastError != null) {
                     Text(
                         state.lastError.orEmpty(),

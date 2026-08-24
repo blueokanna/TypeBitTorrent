@@ -8,6 +8,9 @@ package com.typebit.engine
 
 actual external fun nativeCreateEngine(configJson: String, saveDir: String): Long
 actual external fun nativeDestroyEngine(handle: Long)
+/** Parse `.torrent` bytes → metainfo JSON (no engine add) for the dialog. */
+actual external fun nativeParseTorrent(data: ByteArray): String?
+
 actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String): String?
 actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
 actual external fun nativeStart(handle: Long, hash: String): Int

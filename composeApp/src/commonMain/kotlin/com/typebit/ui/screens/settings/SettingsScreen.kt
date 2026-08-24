@@ -1,6 +1,13 @@
 package com.typebit.ui.screens.settings
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,7 +31,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -123,11 +129,18 @@ fun SettingsScreen(
                         )
                     }
                 }
-                // Vertical divider: MUST pin its width to 1.dp. A bare
-                // `fillMaxHeight()` leaves the default `fillMaxWidth`,
-                // which steals the whole Row width and collapses the
-                // weight(1f) editor pane to zero width.
-                HorizontalDivider(Modifier.width(1.dp).fillMaxHeight())
+                // Vertical divider between the sidebar and the editor pane.
+                // `HorizontalDivider` always applies its own `fillMaxWidth`
+                // + `height(thickness)` internally, so pinning the width is
+                // not enough — it collapses to a 1x1 dot instead of a line.
+                // `VerticalDivider` is unavailable in this M3 version, so a
+                // 1.dp Box draws the true vertical separator.
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
                 // Editor pane on a distinct container tone. The scrollable
                 // Column fills the remaining width/height directly so the
                 // section content is always laid out (no nested-Surface
@@ -139,8 +152,22 @@ fun SettingsScreen(
                         .background(MaterialTheme.colorScheme.surface)
                         .verticalScroll(rememberScrollState())
                         .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    CategoryContent(categories[category], settings, onChange)
+                    // Category switch fades instead of snapping. The section
+                    // MUST be wrapped in an explicit Column: AnimatedContent
+                    // only lays out the first top-level child it measures, so
+                    // a bare multi-card section would render just its first
+                    // card and swallow the rest of the settings.
+                    AnimatedContent(
+                        targetState = categories[category],
+                        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                        label = "settingsCategory",
+                    ) { cat ->
+                        Column {
+                            CategoryContent(cat, settings, onChange)
+                        }
+                    }
                     Spacer(Modifier.height(24.dp))
                 }
             }
@@ -155,7 +182,16 @@ fun SettingsScreen(
                     labelOf = { it.label },
                 )
                 SettingsScaffold {
-                    CategoryContent(categories[category], settings, onChange)
+                    AnimatedContent(
+                        targetState = categories[category],
+                        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                        label = "settingsCategoryMobile",
+                    ) { cat ->
+                        // Same single-Column requirement as the desktop pane.
+                        Column {
+                            CategoryContent(cat, settings, onChange)
+                        }
+                    }
                 }
             }
         }

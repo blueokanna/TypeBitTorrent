@@ -14,6 +14,7 @@ use jni::sys::{jboolean, jbyteArray, jdouble, jint, jlong, jstring};
 use jni::JNIEnv;
 
 use crate::engine::{parse_session_config, Cmd, EngineHandle};
+use crate::meta::TorrentMeta;
 
 /// Upper bound for one blocking engine call (add/start/progress/…).
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -89,6 +90,24 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeDestroyEngin
 // torrents
 // ---------------------------------------------------------------------------
 
+/// Parse a `.torrent` blob into its metainfo JSON WITHOUT adding it to the
+/// engine — powers the add-torrent dialog's "preview before download".
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeParseTorrent(
+    env: JNIEnv,
+    _class: JClass,
+    data: JByteArray,
+) -> jstring {
+    let bytes = env.convert_byte_array(&data).unwrap_or_default();
+    let json = typebit::metainfo::Torrent::from_bytes(&bytes)
+        .ok()
+        .map(|t| TorrentMeta::from_torrent(&t).to_json());
+    match json {
+        Some(s) => new_jstring(&env, &s),
+        None => std::ptr::null_mut(),
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddTorrent(
     mut env: JNIEnv,
@@ -104,7 +123,15 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddTorrent(
     let bytes = env.convert_byte_array(&data).unwrap_or_default();
     let dir = jstr(&mut env, &save_dir);
     let (tx, rx) = channel();
-    match h.request(Cmd::AddTorrent { data: bytes, save_dir: dir, tx }, rx, REPLY_TIMEOUT) {
+    match h.request(
+        Cmd::AddTorrent {
+            data: bytes,
+            save_dir: dir,
+            tx,
+        },
+        rx,
+        REPLY_TIMEOUT,
+    ) {
         Some(Ok(hex)) => new_jstring(&env, &hex),
         _ => std::ptr::null_mut(),
     }
@@ -125,7 +152,15 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddMagnet(
     let uri = jstr(&mut env, &uri);
     let dir = jstr(&mut env, &save_dir);
     let (tx, rx) = channel();
-    match h.request(Cmd::AddMagnet { uri, save_dir: dir, tx }, rx, REPLY_TIMEOUT) {
+    match h.request(
+        Cmd::AddMagnet {
+            uri,
+            save_dir: dir,
+            tx,
+        },
+        rx,
+        REPLY_TIMEOUT,
+    ) {
         Some(Ok(hex)) => new_jstring(&env, &hex),
         _ => std::ptr::null_mut(),
     }
@@ -220,7 +255,8 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeProgress(
     };
     let hash = jstr(&mut env, &hash);
     let (tx, rx) = channel();
-    h.request(Cmd::Progress { hash, tx }, rx, REPLY_TIMEOUT).unwrap_or(0.0)
+    h.request(Cmd::Progress { hash, tx }, rx, REPLY_TIMEOUT)
+        .unwrap_or(0.0)
 }
 
 #[no_mangle]
@@ -236,7 +272,8 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeDownloaded(
     };
     let hash = jstr(&mut env, &hash);
     let (tx, rx) = channel();
-    h.request(Cmd::Downloaded { hash, tx }, rx, REPLY_TIMEOUT).unwrap_or(0) as jlong
+    h.request(Cmd::Downloaded { hash, tx }, rx, REPLY_TIMEOUT)
+        .unwrap_or(0) as jlong
 }
 
 #[no_mangle]
@@ -252,7 +289,9 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeIsComplete(
     };
     let hash = jstr(&mut env, &hash);
     let (tx, rx) = channel();
-    if h.request(Cmd::IsComplete { hash, tx }, rx, REPLY_TIMEOUT).unwrap_or(false) {
+    if h.request(Cmd::IsComplete { hash, tx }, rx, REPLY_TIMEOUT)
+        .unwrap_or(false)
+    {
         1
     } else {
         0
@@ -307,7 +346,8 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentCount
         None => return 0,
     };
     let (tx, rx) = channel();
-    h.request(Cmd::TorrentCount { tx }, rx, REPLY_TIMEOUT).unwrap_or(0) as jint
+    h.request(Cmd::TorrentCount { tx }, rx, REPLY_TIMEOUT)
+        .unwrap_or(0) as jint
 }
 
 #[no_mangle]
@@ -321,7 +361,8 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeDhtNodeCount
         None => return 0,
     };
     let (tx, rx) = channel();
-    h.request(Cmd::DhtCount { tx }, rx, REPLY_TIMEOUT).unwrap_or(0) as jint
+    h.request(Cmd::DhtCount { tx }, rx, REPLY_TIMEOUT)
+        .unwrap_or(0) as jint
 }
 
 #[no_mangle]

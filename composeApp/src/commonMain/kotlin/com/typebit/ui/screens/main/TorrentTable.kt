@@ -194,7 +194,7 @@ private fun TorrentRow(
             hovered -> MaterialTheme.colorScheme.surfaceContainerHigh
             else -> Color.Transparent
         },
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = com.typebit.ui.theme.TypeBitMotion.color,
         label = "rowBg",
     )
     Row(

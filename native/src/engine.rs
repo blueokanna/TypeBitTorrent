@@ -150,16 +150,15 @@ pub fn spawn_engine(
         .spawn(move || run_loop(cfg, logs_worker, cmd_rx, events_worker))
         .map_err(|e| format!("failed to spawn engine thread: {e}"))?;
 
-    Ok(EngineHandle { cmd_tx, events, logs })
+    Ok(EngineHandle {
+        cmd_tx,
+        events,
+        logs,
+    })
 }
 
 /// The engine thread's main loop.
-fn run_loop(
-    engine_cfg: EngineConfig,
-    logs: LogBuffer,
-    cmd_rx: Receiver<Cmd>,
-    events: EventQueue,
-) {
+fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, events: EventQueue) {
     let down_limit = Arc::new(AtomicU64::new(0));
     let up_limit = Arc::new(AtomicU64::new(0));
     let mut host = NativeHost::new(down_limit.clone(), up_limit.clone(), logs.clone());
@@ -175,14 +174,9 @@ fn run_loop(
     while running {
         // 1) Drain commands.
         while let Ok(cmd) = cmd_rx.try_recv() {
-            if let Some(stop) = handle_cmd(
-                &mut engine,
-                &mut meta,
-                cmd,
-                &events,
-                &down_limit,
-                &up_limit,
-            ) {
+            if let Some(stop) =
+                handle_cmd(&mut engine, &mut meta, cmd, &events, &down_limit, &up_limit)
+            {
                 running = !stop;
                 break;
             }
@@ -360,7 +354,11 @@ fn handle_cmd(
             let _ = tx.send(n);
         }
         Cmd::PeerId { tx } => {
-            let pid = engine.peer_id().iter().map(|b| format!("{b:02x}")).collect::<String>();
+            let pid = engine
+                .peer_id()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
             let _ = tx.send(pid);
         }
         Cmd::SetLimits { down, up } => {
@@ -412,7 +410,11 @@ fn event_to_json(ev: &EngineEvent) -> String {
     let mut w = JsonWriter::new();
     w.begin_object();
     match ev {
-        EngineEvent::PeerConnected { info_hash, addr, peer_id } => {
+        EngineEvent::PeerConnected {
+            info_hash,
+            addr,
+            peer_id,
+        } => {
             w.kv_u64("t", 1);
             w.comma();
             w.kv_string("h", &info_hash.to_hex());
@@ -496,8 +498,8 @@ fn anti_leech_json(client: &str, addr: &str) -> String {
 pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, SessionConfig), String> {
     use nextjson::Value;
 
-    let root: Value = nextjson::nextdecode(json.as_bytes())
-        .map_err(|e| format!("bad config json: {e}"))?;
+    let root: Value =
+        nextjson::nextdecode(json.as_bytes()).map_err(|e| format!("bad config json: {e}"))?;
 
     let num = |key: &str, default: u64| -> u64 {
         root.get(key).and_then(Value::as_u64).unwrap_or(default)
@@ -540,9 +542,8 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
     let flag = |key: &str, default: bool| -> bool {
         root.get(key).and_then(Value::as_bool).unwrap_or(default)
     };
-    let str_opt = |key: &str| -> Option<String> {
-        root.get(key).and_then(Value::as_str).map(str::to_string)
-    };
+    let str_opt =
+        |key: &str| -> Option<String> { root.get(key).and_then(Value::as_str).map(str::to_string) };
 
     let max_peers = num("max_peers", 80) as u32;
     let request_pipeline = num("request_pipeline", typebit::consts::REQUEST_PIPELINE as u64) as u32;

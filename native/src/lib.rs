@@ -39,8 +39,14 @@ mod tests {
         let info = typebit::bencode::dict(vec![
             (b"name".as_slice(), typebit::bencode::bytes("smoke.bin")),
             (b"piece length".as_slice(), typebit::bencode::int(16 * 1024)),
-            (b"length".as_slice(), typebit::bencode::int(piece.len() as i64)),
-            (b"pieces".as_slice(), typebit::bencode::bytes(typebit::crypto::Sha1::digest(&piece))),
+            (
+                b"length".as_slice(),
+                typebit::bencode::int(piece.len() as i64),
+            ),
+            (
+                b"pieces".as_slice(),
+                typebit::bencode::bytes(typebit::crypto::Sha1::digest(&piece)),
+            ),
         ]);
         let root = typebit::bencode::dict(vec![(b"info".as_slice(), info)]);
         let bytes = typebit::bencode::encode_to_vec(&root);

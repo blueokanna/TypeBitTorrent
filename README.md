@@ -95,9 +95,18 @@ gradlew.bat :composeApp:assembleDebug
 - **Material You theming** (外观 settings): a from-scratch pure-Kotlin
   HCT/CAM16 engine (verified against the official material-color-utilities
   vectors, 6/6 tests) drives the whole MD3 palette from a **wallpaper**
-  (gaussian blur + DIM + readability scrim, with a live preview dialog),
-  a manual seed-color override, light/dark/**AMOLED** modes and MD3
-  Expressive shapes/type/motion.
+  (gaussian blur + DIM + readability scrim, **fill/fit modes + vertical pan**,)
+  with a live preview dialog), a manual seed-color override,
+  light/dark/**AMOLED** modes and MD3 Expressive shapes/type/motion.
+- **Tracker-list import**: paste an HTTPS URL (e.g. `ngosang/trackerslist`)
+  in BitTorrent settings — the app fetches it, parses plain/JSON/HTML and
+  appends the announce URLs to your extra-trackers.
+- **Anti-leech detection**: every peer connection is fingerprinted from its
+  peer ID; known leeching clients (Xunlei and its variants) are detected,
+  counted and surfaced in the status bar + engine log.
+- **Performance**: a single combined state refresh per poll tick (one
+  recomposition), bounded event/log queues, keyed lazy lists and a hard
+  minimum window size so the layout never collapses.
 
 ## Honest limitations (read before you file a bug)
 
@@ -117,6 +126,11 @@ fake what the engine cannot report:
   bridge implements none of these yet.
 - **Per-torrent speed limits and listen-port changes apply on the next
   engine start** — the 0.1.0 API has no runtime setters for them.
+- **Anti-leech is detection-only**: `typebit 0.1.0`'s `Host` trait exposes
+  no per-peer reject/ban API, so the bridge identifies leeching clients
+  from peer IDs and reports them (status bar + logs) but cannot refuse
+  their connections yet. Connection-level blocking is a roadmap item that
+  needs an engine hook.
 - The built-in **WebUI server is a roadmap item**; its settings are
   persisted but not served.
 

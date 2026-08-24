@@ -68,12 +68,14 @@ fun TypeBitTheme(
     seedArgb: Int,
     darkTheme: Boolean,
     amoled: Boolean = false,
+    /** Pre-blurred wallpaper bitmap (see [com.typebit.ui.wallpaper.blurWallpaper]). */
     wallpaper: ImageBitmap? = null,
     wallpaperEnabled: Boolean = false,
     wallpaperDim: Float = 0.45f,
-    wallpaperBlurPx: Float = 24f,
     wallpaperFit: Boolean = false,
     wallpaperOffsetY: Float = 0f,
+    /** Average wallpaper luminance 0..1 (drives auto-contrast scrim). */
+    wallpaperBrightness: Float = 0.5f,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = remember(seedArgb, darkTheme, amoled, wallpaperEnabled) {
@@ -82,12 +84,23 @@ fun TypeBitTheme(
             darkTheme -> DynamicScheme.dark(seedArgb)
             else -> DynamicScheme.light(seedArgb)
         }
-        // With a wallpaper behind the UI the surfaces become translucent so
-        // the image glows through; text roles stay opaque and keep contrast.
         if (wallpaperEnabled) base.withTranslucentSurfaces() else base
     }
 
-    // Slightly brighter status hues on dark surfaces for contrast.
+    val effectiveDim = remember(wallpaperEnabled, wallpaperDim, wallpaperBrightness, darkTheme) {
+        if (!wallpaperEnabled) {
+            wallpaperDim.coerceIn(0f, 0.85f)
+        } else {
+            val base = wallpaperDim.coerceIn(0f, 0.85f)
+            val boost = if (darkTheme) {
+                ((wallpaperBrightness - 0.5f) * 0.9f).coerceAtLeast(0f)
+            } else {
+                ((0.5f - wallpaperBrightness) * 0.9f).coerceAtLeast(0f)
+            }
+            (base + boost).coerceIn(0.35f, 0.88f)
+        }
+    }
+
     val status = if (darkTheme) {
         StatusColorSet(
             download = Color(0xFF64B5F6),
@@ -104,19 +117,13 @@ fun TypeBitTheme(
     CompositionLocalProvider(LocalStatusColors provides status) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = TypeBitTypography,
+            typography = typebitTypography(),
             shapes = TypeBitShapes,
         ) {
             WallpaperLayer(
                 bitmap = if (wallpaperEnabled) wallpaper else null,
-                dimAmount = wallpaperDim,
-                blurRadiusPx = wallpaperBlurPx,
-                // Light theme: white scrim keeps black text readable on a
-                // bright wallpaper. Dark theme: black scrim (AMOLED-like).
+                dimAmount = effectiveDim,
                 scrimColor = if (darkTheme) Color.Black else Color.White,
-                // The theme background is painted explicitly so the whole
-                // window follows the scheme (AMOLED → pure black). Desktop
-                // windows are transparent by default.
                 backgroundColor = colorScheme.background,
                 contentScale = if (wallpaperFit) ContentScale.Fit else ContentScale.Crop,
                 verticalOffsetRatio = wallpaperOffsetY,
@@ -128,17 +135,20 @@ fun TypeBitTheme(
 }
 
 /**
- * With the wallpaper enabled every surface becomes translucent so the image
- * (already dimmed + blurred) shows through. The translucency is conservative
- * — text contrast is preserved by the scrim, not by chance.
+ * Wallpaper handling:
+ * - `background` stays SEMI-transparent so the wallpaper is clearly visible
+ *   in the empty background (this is the whole point of a wallpaper).
+ * - Every component surface (cards, fields, bars) is essentially OPAQUE
+ *   (0.98) so text stays crisp and wallpaper watermarks never bleed through
+ *   controls — that was the "elements look overlapped" bug.
  */
 private fun ColorScheme.withTranslucentSurfaces(): ColorScheme = copy(
     background = background.copy(alpha = 0.90f),
-    surface = surface.copy(alpha = 0.86f),
-    surfaceContainerLowest = surfaceContainerLowest.copy(alpha = 0.90f),
-    surfaceContainerLow = surfaceContainerLow.copy(alpha = 0.84f),
-    surfaceContainer = surfaceContainer.copy(alpha = 0.84f),
-    surfaceContainerHigh = surfaceContainerHigh.copy(alpha = 0.86f),
-    surfaceContainerHighest = surfaceContainerHighest.copy(alpha = 0.88f),
-    surfaceVariant = surfaceVariant.copy(alpha = 0.84f),
+    surface = surface.copy(alpha = 0.98f),
+    surfaceContainerLowest = surfaceContainerLowest.copy(alpha = 0.98f),
+    surfaceContainerLow = surfaceContainerLow.copy(alpha = 0.98f),
+    surfaceContainer = surfaceContainer.copy(alpha = 0.98f),
+    surfaceContainerHigh = surfaceContainerHigh.copy(alpha = 0.98f),
+    surfaceContainerHighest = surfaceContainerHighest.copy(alpha = 0.98f),
+    surfaceVariant = surfaceVariant.copy(alpha = 0.98f),
 )

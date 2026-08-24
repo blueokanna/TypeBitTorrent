@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Launch theme for the Compose app. The UI itself is rendered entirely
+        by the M3 (Material You) TypeBitTheme; this XML theme only styles the
+        brief launch window + Android 12+ splash so they match the app.
+        DeviceDefault gives Material You on Android 12+, an OEM-neutral look
+        before that, and we override the window background to avoid a
+        light/dark flash mismatching the Compose surface.
+    -->
+    <style name="Theme.TypeBitTorrent" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/typebit_window_bg_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+
+        <!-- Android 12+ splash: brand blue background + the real app icon. -->
+        <item name="android:windowSplashScreenBackground">@color/typebit_splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/typebit_splash_bg</item>
+    </style>
+</resources>

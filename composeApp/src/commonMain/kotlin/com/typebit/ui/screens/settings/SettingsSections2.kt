@@ -109,6 +109,11 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
             update(s.copy(enableUpnp = it, enableNatPmp = it))
         })
         SettingSwitch("匿名模式", "尽量隐藏客户端特征", s.anonymousMode, { update(s.copy(anonymousMode = it)) })
+        SettingSwitch(
+            "反吸血检测",
+            "识别迅雷等吸血客户端并上报统计（引擎 0.1.0 无拒绝 API，见 README）",
+            s.antiLeechEnabled, { update(s.copy(antiLeechEnabled = it)) },
+        )
     }
 
     SectionCard("加密") {

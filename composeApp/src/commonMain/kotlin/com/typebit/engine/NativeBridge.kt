@@ -19,6 +19,9 @@ expect fun nativeDestroyEngine(handle: Long)
 // Torrents
 // ---------------------------------------------------------------------------
 
+/** Parses `.torrent` bytes → metainfo JSON (no engine add); null on error. */
+expect fun nativeParseTorrent(data: ByteArray): String?
+
 /** Adds a `.torrent`; returns the hex infohash or null on error. */
 expect fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String): String?
 

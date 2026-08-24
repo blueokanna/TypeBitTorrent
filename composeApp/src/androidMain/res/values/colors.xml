@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TypeBit brand blue (default Monet seed 0xFF0061A4). -->
+    <color name="typebit_primary">#FF0061A4</color>
+    <color name="typebit_splash_bg">#FF0061A4</color>
+    <color name="typebit_window_bg_light">#FFFBF9FA</color>
+    <color name="typebit_window_bg_dark">#FF131314</color>
+</resources>

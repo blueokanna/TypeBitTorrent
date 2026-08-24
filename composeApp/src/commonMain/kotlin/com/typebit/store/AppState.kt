@@ -18,6 +18,10 @@ data class AppState(
     val engineRunning: Boolean = false,
     val peerId: String = "",
     val dhtNodes: Int = 0,
+    /** Anti-leech: count of known leeching clients detected so far. */
+    val antiLeechCount: Int = 0,
+    /** Anti-leech: most recent detected client names (deduped, capped). */
+    val antiLeechClients: List<String> = emptyList(),
     /** Wire-level global rates (bytes/sec), from the native host. */
     val globalDownRate: Long = 0,
     val globalUpRate: Long = 0,
