@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Kotlin / Compose
+.kotlin/
+
+# Rust / native
+native/target/
+native/.cargo-cache/
+composeApp/src/desktopMain/resources/native/*.dll
+composeApp/src/androidMain/jniLibs/
+*.dll
+*.so
+*.dylib
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
