@@ -9,6 +9,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import com.typebit.ui.monet.DynamicScheme
 import com.typebit.ui.wallpaper.WallpaperLayer
 
@@ -71,6 +72,8 @@ fun TypeBitTheme(
     wallpaperEnabled: Boolean = false,
     wallpaperDim: Float = 0.45f,
     wallpaperBlurPx: Float = 24f,
+    wallpaperFit: Boolean = false,
+    wallpaperOffsetY: Float = 0f,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = remember(seedArgb, darkTheme, amoled, wallpaperEnabled) {
@@ -111,6 +114,12 @@ fun TypeBitTheme(
                 // Light theme: white scrim keeps black text readable on a
                 // bright wallpaper. Dark theme: black scrim (AMOLED-like).
                 scrimColor = if (darkTheme) Color.Black else Color.White,
+                // The theme background is painted explicitly so the whole
+                // window follows the scheme (AMOLED → pure black). Desktop
+                // windows are transparent by default.
+                backgroundColor = colorScheme.background,
+                contentScale = if (wallpaperFit) ContentScale.Fit else ContentScale.Crop,
+                verticalOffsetRatio = wallpaperOffsetY,
             ) {
                 content()
             }

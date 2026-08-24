@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -105,8 +107,6 @@ fun DesktopMainScreen(
         Column(Modifier.fillMaxSize()) {
             AppTopBar(state = state, store = store, onRoute = onRoute)
 
-            TorrentToolbar(state = state, store = store)
-
             // Content switches between empty state and the table card.
             AnimatedContent(
                 targetState = state.torrents.isEmpty(),
@@ -117,10 +117,12 @@ fun DesktopMainScreen(
                 if (empty) {
                     EmptyState(
                         title = "暂无种子",
-                        subtitle = "点击右上角 + 添加 .torrent 文件或磁力链接",
+                        subtitle = "点击上方 + 添加 .torrent 文件或磁力链接",
                         action = {
-                            FilledTonalIconButton(onClick = { onRoute(Route.ADD) }) {
-                                Icon(Icons.Default.Add, contentDescription = "添加种子")
+                            Button(onClick = { onRoute(Route.ADD) }) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("添加种子")
                             }
                         },
                     )
@@ -161,7 +163,13 @@ fun DesktopMainScreen(
 /** Brand + filter/category navigation sidebar. */
 @Composable
 private fun Sidebar(state: AppState, store: AppStore) {
-    Column(Modifier.fillMaxHeight().width(264.dp).padding(12.dp)) {
+    Column(
+        // The drawer background is painted explicitly so it follows the
+        // theme (AMOLED → pure black), not the drawer's default gray.
+        Modifier.fillMaxHeight().width(240.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(12.dp),
+    ) {
         // Brand header
         Row(
             Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
@@ -191,7 +199,9 @@ private fun Sidebar(state: AppState, store: AppStore) {
                 Text(
                     "BitTorrent 客户端",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // A clear secondary tier under the brand title: readable
+                    // on any wallpaper/dim scrim without fighting the title.
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
                 )
             }
         }
@@ -308,23 +318,27 @@ private fun filterIcon(f: TorrentFilter): ImageVector = when (f) {
     TorrentFilter.ERROR -> Icons.Default.ErrorOutline
 }
 
-/** Surface-container top bar: title + live speeds + tonal actions. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Single MD3-Expressive header row: title + live speeds + search field +
+ * bulk actions + navigation. Everything the user needs on one line — no
+ * stacked toolbars.
+ */
 @Composable
 private fun AppTopBar(
     state: AppState,
     store: AppStore,
     onRoute: (Route) -> Unit,
 ) {
+    var query by remember { mutableStateOf("") }
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
+            Column {
                 Text(
                     state.filter.labelRes,
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
@@ -333,11 +347,50 @@ private fun AppTopBar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Spacer(Modifier.width(20.dp))
+            // Large-radius search field, MD3 search-bar styling.
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    store.setSearch(it)
+                },
+                placeholder = { Text("搜索名称或哈希…") },
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                },
+                singleLine = true,
+                shape = MaterialTheme.shapes.extraLarge,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(12.dp))
             SpeedPair(
                 down = state.globalDownRate,
                 up = state.globalUpRate,
-                modifier = Modifier.padding(end = 12.dp),
+                modifier = Modifier.padding(end = 8.dp),
             )
+            FilledTonalIconButton(onClick = {
+                state.torrents.filter { it.status.name != "SEEDING" && it.status.name != "PAUSED" }
+                    .forEach { store.start(it.hash) }
+            }) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "全部开始")
+            }
+            FilledTonalIconButton(onClick = {
+                state.torrents.forEach { store.pause(it.hash) }
+            }) {
+                Icon(Icons.Default.Pause, contentDescription = "全部暂停")
+            }
+            FilledTonalIconButton(onClick = {
+                state.selectedHash?.let { store.remove(it) }
+            }) {
+                Icon(Icons.Default.Delete, contentDescription = "删除所选")
+            }
             IconButton(onClick = { onRoute(Route.SEARCH) }) {
                 Icon(Icons.Default.Search, contentDescription = "搜索")
             }
@@ -348,54 +401,6 @@ private fun AppTopBar(
             FilledIconButton(onClick = { onRoute(Route.ADD) }) {
                 Icon(Icons.Default.Add, contentDescription = "添加种子")
             }
-        }
-    }
-}
-
-/** Toolbar row: large-radius search field + bulk actions. */
-@Composable
-private fun TorrentToolbar(state: AppState, store: AppStore) {
-    var query by remember { mutableStateOf("") }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = {
-                query = it
-                store.setSearch(it)
-            },
-            placeholder = { Text("搜索名称或哈希…") },
-            leadingIcon = {
-                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
-            },
-            singleLine = true,
-            shape = MaterialTheme.shapes.extraLarge,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                focusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-                unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
-            ),
-            modifier = Modifier.weight(1f),
-        )
-        FilledTonalIconButton(onClick = {
-            state.torrents.filter { it.status.name != "SEEDING" && it.status.name != "PAUSED" }
-                .forEach { store.start(it.hash) }
-        }) {
-            Icon(Icons.Default.PlayArrow, contentDescription = "全部开始")
-        }
-        FilledTonalIconButton(onClick = {
-            state.torrents.forEach { store.pause(it.hash) }
-        }) {
-            Icon(Icons.Default.Pause, contentDescription = "全部暂停")
-        }
-        FilledTonalIconButton(onClick = {
-            state.selectedHash?.let { store.remove(it) }
-        }) {
-            Icon(Icons.Default.Delete, contentDescription = "删除所选")
         }
     }
 }

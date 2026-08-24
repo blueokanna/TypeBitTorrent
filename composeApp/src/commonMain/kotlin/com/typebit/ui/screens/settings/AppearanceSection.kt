@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -82,6 +83,20 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
         if (s.wallpaperEnabled) {
             WallpaperButtons(s, update)
+            SettingDropdown(
+                label = "显示模式",
+                options = listOf(false, true),
+                selected = s.wallpaperFit,
+                onSelect = { update(s.copy(wallpaperFit = it)) },
+                labelOf = { if (it) "完整显示（Fit）" else "填充窗口（Crop）" },
+            )
+            SettingSlider(
+                label = "垂直位置",
+                value = s.wallpaperOffsetY,
+                valueRange = -1f..1f,
+                suffix = { if (it > 0) "下移 %d%%".format((it * 100).toInt()) else if (it < 0) "上移 %d%%".format((-it * 100).toInt()) else "居中" },
+                onValueChange = { update(s.copy(wallpaperOffsetY = it)) },
+            )
             SettingSlider(
                 label = "模糊半径",
                 value = s.blurRadiusPx,
@@ -273,6 +288,8 @@ private fun WallpaperPreviewDialog(
                     dimAmount = appearance.dimAlpha,
                     blurRadiusPx = appearance.blurRadiusPx,
                     scrimColor = if (dark) Color.Black else Color.White,
+                    contentScale = if (appearance.wallpaperFit) ContentScale.Fit else ContentScale.Crop,
+                    verticalOffsetRatio = appearance.wallpaperOffsetY,
                 ) {
                     Column(
                         Modifier

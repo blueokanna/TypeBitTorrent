@@ -1,8 +1,23 @@
 package com.typebit.ui.screens.settings
 
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.typebit.data.AdvancedSettings
 import com.typebit.data.AppSettings
 import com.typebit.data.BitTorrentSettings
@@ -11,10 +26,75 @@ import com.typebit.data.EncryptionMode
 import com.typebit.data.RssSettings
 import com.typebit.data.UtpMixedMode
 import com.typebit.data.WebUiSettings
+import com.typebit.platform.fetchUrlText
+import com.typebit.util.TrackerListParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ---------------------------------------------------------------------------
 // BitTorrent
 // ---------------------------------------------------------------------------
+
+/**
+ * Import a tracker list from a URL (e.g. an `ngosang/trackerslist` raw
+ * endpoint). Fetches, parses (plain/JSON/HTML), de-duplicates and appends
+ * the results to the extra-trackers field.
+ */
+@Composable
+private fun TrackerImportRow(
+    s: BitTorrentSettings,
+    update: (BitTorrentSettings) -> Unit,
+) {
+    var url by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        SettingTextField(
+            label = "从 URL 导入 Tracker",
+            value = url,
+            onValueChange = { url = it },
+            placeholder = "https://…/trackers_all.txt",
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(
+            enabled = url.isNotBlank() && !busy,
+            onClick = {
+                busy = true
+                status = ""
+                scope.launch {
+                    val body = withContext(Dispatchers.IO) { fetchUrlText(url.trim(), 15_000) }
+                    val imported = body?.let { TrackerListParser.parse(it) }.orEmpty()
+                    if (imported.isEmpty()) {
+                        status = "导入失败：无法解析任何 tracker"
+                    } else {
+                        val existing = s.extraTrackers.lineSequence()
+                            .map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+                        var added = 0
+                        for (t in imported) if (existing.add(t)) added++
+                        update(s.copy(extraTrackers = existing.joinToString("\n")))
+                        status = "导入 $added 个 tracker（共 ${existing.size}）"
+                    }
+                    busy = false
+                }
+            },
+        ) {
+            Text(if (busy) "导入中…" else "导入")
+        }
+    }
+    if (status.isNotEmpty()) {
+        Text(
+            status,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (status.startsWith("导入失败")) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+}
 
 @Composable
 fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
@@ -57,6 +137,7 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         SettingSwitch("智能分块调度", "视频类内容优先下载首尾分块（可先播放）", s.smartScheduling, { update(s.copy(smartScheduling = it)) })
         SettingSwitch("使用内置默认 Tracker", "种子未声明 Tracker 时使用默认列表", s.useDefaultTrackers, { update(s.copy(useDefaultTrackers = it)) })
         SettingTextField("额外 Tracker", s.extraTrackers, { update(s.copy(extraTrackers = it)) }, placeholder = "每行一个 announce URL")
+        TrackerImportRow(s, update)
         SettingNumberField("磁盘缓存 (MiB)", (s.cacheBytes / 1024 / 1024).toString(), {
             update(s.copy(cacheBytes = (it.toLongOrNull() ?: 64L) * 1024 * 1024))
         }, suffix = "MiB")

@@ -55,6 +55,13 @@ data class AppearanceSettings(
     /** Black (dark) / white (light) readability scrim, 0..0.85. */
     val dimAlpha: Float = 0.45f,
     /**
+     * `false` = Crop (fill the window, may cut edges), `true` = Fit (show
+     * the whole image, letterboxed). Mirrors desktop "fill / fit" choices.
+     */
+    val wallpaperFit: Boolean = false,
+    /** Vertical pan of the wallpaper in -1..1 (only effective in Crop). */
+    val wallpaperOffsetY: Float = 0f,
+    /**
      * Optional explicit seed color (ARGB). When set it wins over the color
      * extracted from the wallpaper — a manual Monet override.
      */

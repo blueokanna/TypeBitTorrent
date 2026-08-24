@@ -77,6 +77,8 @@ fun App() {
         wallpaperEnabled = appearance.wallpaperEnabled,
         wallpaperDim = appearance.dimAlpha,
         wallpaperBlurPx = appearance.blurRadiusPx,
+        wallpaperFit = appearance.wallpaperFit,
+        wallpaperOffsetY = appearance.wallpaperOffsetY,
     ) {
         AppRoot(store)
     }

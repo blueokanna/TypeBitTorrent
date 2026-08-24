@@ -19,6 +19,7 @@ use typebit::{EngineConfig, EngineEvent, Host, InfoHash};
 
 use crate::host::{LogBuffer, NativeHost};
 use crate::json::JsonWriter;
+use crate::leech;
 use crate::meta::MetaRegistry;
 
 /// Engine tick cadence (ms). Chosen to balance CPU and UI responsiveness.
@@ -203,10 +204,23 @@ fn run_loop(
         // 4) Serialize events into the shared queue (one object per event).
         let evs = engine.take_events();
         if !evs.is_empty() {
-            // Keep the mirror in sync: metadata arriving for a magnet.
+            // Keep the mirror in sync: metadata arriving for a magnet, and
+            // run anti-leech detection on every peer connection.
             for ev in &evs {
                 if let EngineEvent::MetadataComplete { info_hash } = ev {
                     meta.mark_metadata_ready(&info_hash.to_hex());
+                }
+                if let EngineEvent::PeerConnected { peer_id, addr, .. } = ev {
+                    if let Some(name) = leech::detect_leech(peer_id) {
+                        let a = addr_string(addr);
+                        engine.host.log(
+                            typebit::platform::LogLevel::Warn,
+                            &format!("anti-leech: {name} ({a}) is a known leeching client"),
+                        );
+                        if let Ok(mut q) = events.lock() {
+                            q.push_back(anti_leech_json(name, &a));
+                        }
+                    }
                 }
             }
             if let Ok(mut q) = events.lock() {
@@ -457,6 +471,19 @@ fn event_to_json(ev: &EngineEvent) -> String {
 
 fn addr_string(a: &NetAddr) -> String {
     a.to_alloc_string()
+}
+
+/// Anti-leech detection event (t=9): a known leeching client connected.
+fn anti_leech_json(client: &str, addr: &str) -> String {
+    let mut w = JsonWriter::new();
+    w.begin_object();
+    w.kv_u64("t", 9);
+    w.comma();
+    w.kv_string("c", client);
+    w.comma();
+    w.kv_string("a", addr);
+    w.end_object();
+    w.into_string()
 }
 
 // ---------- config parsing ----------

@@ -76,6 +76,33 @@ class ScreenshotTest {
     }
 
     @Test
+    fun mainAmoled_pureBlackBackground() {
+        val store = makeStore()
+        rule.setContent {
+            TypeBitTheme(seedArgb = 0xFF0061A4.toInt(), darkTheme = true, amoled = true) {
+                MainScreen(state = store.state.value, store = store, onRoute = {})
+            }
+        }
+        rule.onNodeWithText("TypeBit").assertExists()
+        rule.onNodeWithText("暂无种子").assertExists()
+        save(rule.onRoot().captureToImage(), "main-amoled.png")
+    }
+
+    @Test
+    fun mainLight_rendersLayout() {
+        val store = makeStore()
+        rule.setContent {
+            TypeBitTheme(seedArgb = 0xFF0061A4.toInt(), darkTheme = false) {
+                MainScreen(state = store.state.value, store = store, onRoute = {})
+            }
+        }
+        rule.onNodeWithText("TypeBit").assertExists()
+        rule.onNodeWithText("暂无种子").assertExists()
+        rule.onNodeWithText("添加种子").assertExists()
+        save(rule.onRoot().captureToImage(), "main-light.png")
+    }
+
+    @Test
     fun settingsLight_rendersContent() {
         val store = makeStore()
         rule.setContent {
