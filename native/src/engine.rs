@@ -73,6 +73,12 @@ pub enum Cmd {
     TorrentStates {
         tx: Sender<String>,
     },
+    /// One batched snapshot for the whole UI poll tick: per-torrent runtime
+    /// stats + meta essentials + DHT count, all in a single JSON response.
+    /// This collapses what used to be 4N+3 blocking JNI round-trips into one.
+    Snapshot {
+        tx: Sender<String>,
+    },
     TorrentCount {
         tx: Sender<usize>,
     },
@@ -344,6 +350,74 @@ fn handle_cmd(
                 w.end_object();
             }
             w.end_array();
+            let _ = tx.send(w.into_string());
+        }
+        Cmd::Snapshot { tx } => {
+            // One batched response for the whole UI poll tick. Iterating the
+            // saved state keeps the paused/have data authoritative, while the
+            // per-session queries are cheap in-process lookups (no JNI).
+            let st = engine.save_state();
+            let dht = engine.dht().map(|d| d.table().size()).unwrap_or(0);
+            let (d_total, u_total) = engine.host.totals();
+            let mut w = JsonWriter::new();
+            w.begin_object();
+            w.kv_u64("dht", dht as u64);
+            w.comma();
+            w.key("totals");
+            w.begin_object();
+            w.kv_u64("d", d_total);
+            w.comma();
+            w.kv_u64("u", u_total);
+            w.end_object();
+            w.comma();
+            w.key("torrents");
+            w.begin_array();
+            for (i, t) in st.torrents.iter().enumerate() {
+                if i > 0 {
+                    w.comma();
+                }
+                let hash = hex_of(&t.info_hash);
+                let ih = InfoHash::from_hex(&hash).ok();
+                let progress = ih.as_ref().map(|h| engine.progress(h)).unwrap_or(0.0);
+                let downloaded = ih.as_ref().map(|h| engine.downloaded(h)).unwrap_or(0);
+                let complete = ih.as_ref().map(|h| engine.is_complete(h)).unwrap_or(false);
+                let (name, size, pieces, meta_ready) = meta
+                    .get(&hash)
+                    .map(|m| {
+                        (
+                            m.name.clone(),
+                            m.size,
+                            m.piece_count as u64,
+                            m.metadata_ready,
+                        )
+                    })
+                    .unwrap_or_else(|| (String::new(), 0, 0, false));
+                w.begin_object();
+                w.kv_string("h", &hash);
+                w.comma();
+                w.kv_f64("p", progress);
+                w.comma();
+                w.kv_u64("d", downloaded);
+                w.comma();
+                w.kv_bool("c", complete);
+                w.comma();
+                w.kv_bool("paused", t.paused);
+                w.comma();
+                w.kv_u64("have", count_bits(&t.have));
+                w.comma();
+                w.kv_string("hx", &hex_of(&t.have));
+                w.comma();
+                w.kv_string("name", &name);
+                w.comma();
+                w.kv_u64("size", size);
+                w.comma();
+                w.kv_u64("pieces", pieces);
+                w.comma();
+                w.kv_bool("meta", meta_ready);
+                w.end_object();
+            }
+            w.end_array();
+            w.end_object();
             let _ = tx.send(w.into_string());
         }
         Cmd::TorrentCount { tx } => {

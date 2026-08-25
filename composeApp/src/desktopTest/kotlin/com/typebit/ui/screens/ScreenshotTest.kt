@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performClick
 import com.typebit.data.SettingsRepository
 import com.typebit.data.TorrentRepository
 import com.typebit.engine.EngineEventDto
+import com.typebit.engine.EngineSnapshotDto
 import com.typebit.engine.LogEntryDto
 import com.typebit.engine.TorrentEngine
 import com.typebit.engine.TorrentInfoDto
@@ -18,9 +19,6 @@ import com.typebit.store.AppStore
 import com.typebit.ui.screens.main.MainScreen
 import com.typebit.ui.screens.settings.SettingsScreen
 import com.typebit.ui.theme.TypeBitTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
@@ -122,7 +120,6 @@ class ScreenshotTest {
             engine = FakeEngine(),
             settingsRepo = SettingsRepository(),
             torrentRepo = TorrentRepository(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
         )
 
     private fun save(bitmap: ImageBitmap, name: String) {
@@ -149,6 +146,7 @@ private class FakeEngine : TorrentEngine {
     override fun isComplete(hash: String): Boolean = false
     override fun torrentInfo(hash: String): TorrentInfoDto? = null
     override fun torrentStates(): List<TorrentStateDto> = emptyList()
+    override fun snapshot(): EngineSnapshotDto = EngineSnapshotDto()
     override fun torrentCount(): Int = 0
     override fun dhtNodeCount(): Int = 0
     override fun peerId(): String = ""

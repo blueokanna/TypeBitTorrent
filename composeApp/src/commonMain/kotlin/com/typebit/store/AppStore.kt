@@ -6,6 +6,8 @@ import com.typebit.data.SettingsRepository
 import com.typebit.data.TorrentRepository
 import com.typebit.engine.EngineEventDto
 import com.typebit.engine.TorrentEngine
+import com.typebit.engine.TorrentInfoDto
+import com.typebit.engine.TorrentSnapshotDto
 import com.typebit.model.Torrent
 import com.typebit.model.TorrentFilter
 import com.typebit.model.TorrentRecord
@@ -14,7 +16,10 @@ import com.typebit.model.TrackerInfo
 import com.typebit.platform.Platform
 import com.typebit.util.B64
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,28 +27,45 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.toLocalDateTime
 
 /**
  * The single source of truth for the UI.
  *
- * Unidirectional data flow: UI → [dispatch] → (engine + persistence) →
- * [state]. The engine runs on its own Rust thread; the store owns a poll
- * loop that drains events, refreshes stats and periodically persists resume
- * data. Nothing outside this class mutates [state].
+ * Unidirectional data flow: UI → action → (engine + persistence) → [state].
+ * The engine runs on its own Rust thread; the store owns a poll loop that
+ * drains events, refreshes stats and periodically persists resume data.
+ *
+ * Performance contract: every engine call is a blocking JNI round-trip, so
+ * ALL of it runs on a private single-threaded background executor
+ * ([engineScope]) — never on the UI thread. Doing it on the main thread was
+ * the source of the settings jank and the unresponsive pause/resume buttons
+ * (a blocked JNI reply froze the click handler; the state only caught up
+ * after navigating away and back). `limitedParallelism(1)` also serializes
+ * actions against the poll loop, so the state bookkeeping is race-free.
  */
 class AppStore(
     private val engine: TorrentEngine,
     private val settingsRepo: SettingsRepository,
     private val torrentRepo: TorrentRepository,
-    private val scope: CoroutineScope,
 ) {
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
+    private fun newEngineScope(): CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+
+    private var engineScope: CoroutineScope = newEngineScope()
+
     // Persisted app-level records (engine cannot carry category/tags/source).
+    // Only touched from [engineScope] — never from the UI thread.
     private var records: List<TorrentRecord> = emptyList()
+
+    /** Full metainfo mirror cache; refetched only when metadata arrives. */
+    private val infoCache = HashMap<String, TorrentInfoDto>()
 
     // Speed bookkeeping: (poll time, downloaded bytes) per hash.
     private val lastSeen = HashMap<String, Pair<Long, Long>>()
@@ -53,6 +75,17 @@ class AppStore(
     private var pollJob: Job? = null
     private var lastSaveAt = 0L
 
+    // Native-applied settings, diffed so a settings edit only crosses the
+    // JNI boundary when the value that matters actually changed.
+    private var lastAppliedLimits: Pair<Long, Long>? = null
+    private var lastAppliedSessionConfig: String? = null
+    private var settingsSaveJob: Job? = null
+
+    /** Runs [block] on the engine executor (off the UI thread, serialized). */
+    private fun onEngine(block: suspend () -> Unit) {
+        engineScope.launch { block() }
+    }
+
     // ------------------------------------------------------------------
     // lifecycle
     // ------------------------------------------------------------------
@@ -60,6 +93,11 @@ class AppStore(
     /** Boots the engine, restores state and starts the poll loop. */
     fun start() {
         if (_state.value.engineRunning) return
+        if (!engineScope.isActive) engineScope = newEngineScope()
+        onEngine { boot() }
+    }
+
+    private suspend fun boot() {
         val settings = settingsRepo.load()
         val saveDir = settings.downloads.defaultSavePath
             .ifBlank { Platform.defaultDownloadDir() }
@@ -73,6 +111,11 @@ class AppStore(
         records = torrentRepo.loadRecords()
         for (rec in records) {
             reAddRecord(rec)
+        }
+        // Pre-populate the info cache so the first tick renders full rows;
+        // it is refetched whenever the snapshot reports new metadata.
+        for (rec in records) {
+            engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
         }
         // Restore verified-piece bitfields + DHT table.
         torrentRepo.loadResumeState()?.let { engine.loadState(it) }
@@ -94,13 +137,29 @@ class AppStore(
         }
         refreshStats()
 
-        pollJob = scope.launch { pollLoop() }
+        pollJob = onEngineJob { pollLoop() }
     }
 
+    private fun onEngineJob(block: suspend () -> Unit): Job =
+        engineScope.launch { block() }
+
+    /**
+     * Stops the engine and flushes persistence. Runs the shutdown work on
+     * the engine executor but waits for it with a bounded timeout so the
+     * data survives process exit (the executor's threads are daemons on the
+     * JVM, so a pure fire-and-forget shutdown could be cut off mid-write).
+     */
     fun stop() {
         pollJob?.cancel()
-        persistResume()
-        engine.stop()
+        engineScope.cancel()
+        runBlocking {
+            withTimeoutOrNull(5_000) {
+                settingsSaveJob?.cancel()
+                settingsRepo.save(_state.value.settings)
+                persistResume()
+                engine.stop()
+            }
+        }
         _state.update { it.copy(engineRunning = false) }
     }
 
@@ -108,7 +167,10 @@ class AppStore(
     // actions
     // ------------------------------------------------------------------
 
-    /** Parses `.torrent` bytes without adding — add-dialog preview. */
+    /**
+     * Parses `.torrent` bytes without adding — add-dialog preview.
+     * Blocking JNI parse; callers should run it off the UI thread.
+     */
     fun parseTorrentFile(bytes: ByteArray): com.typebit.engine.TorrentInfoDto? =
         engine.parseTorrent(bytes)
 
@@ -132,12 +194,13 @@ class AppStore(
         category: String,
         tags: List<String>,
         paused: Boolean,
-    ) {
+    ) = onEngine {
         val hash = engine.addTorrent(bytes, saveDir) ?: run {
             _state.update { it.copy(lastError = "无法解析种子文件：$fileName") }
-            return
+            return@onEngine
         }
         val info = engine.torrentInfo(hash)
+        if (info != null) infoCache[hash] = info
         val record = TorrentRecord(
             hash = hash,
             name = info?.name ?: fileName.removeSuffix(".torrent"),
@@ -173,14 +236,15 @@ class AppStore(
         category: String,
         tags: List<String>,
         paused: Boolean,
-    ) {
+    ) = onEngine {
         val trimmed = uri.trim()
-        if (trimmed.isEmpty()) return
+        if (trimmed.isEmpty()) return@onEngine
         val hash = engine.addMagnet(trimmed, saveDir) ?: run {
             _state.update { it.copy(lastError = "无法解析磁力链接") }
-            return
+            return@onEngine
         }
         val info = engine.torrentInfo(hash)
+        if (info != null) infoCache[hash] = info
         val record = TorrentRecord(
             hash = hash,
             name = info?.name ?: "magnet",
@@ -198,29 +262,72 @@ class AppStore(
         refreshStats()
     }
 
-    fun start(hash: String) {
-        engine.start(hash)
-        markPaused(hash, paused = false)
-        refreshStats()
-    }
+    /** Starts or resumes a torrent. */
+    fun start(hash: String) = resume(hash)
 
+    /**
+     * Pauses a torrent. The status flips to PAUSED immediately (optimistic
+     * UI), then the engine + records are updated on the background executor;
+     * the poll tick confirms the authoritative state. Never blocks the UI.
+     */
     fun pause(hash: String) {
-        engine.pause(hash)
-        markPaused(hash, paused = true)
-        refreshStats()
+        _state.update { s ->
+            s.copy(
+                torrents = s.torrents.map { t ->
+                    if (t.hash == hash && t.status != TorrentStatus.PAUSED) {
+                        t.copy(status = TorrentStatus.PAUSED)
+                    } else t
+                },
+            )
+        }
+        onEngine {
+            engine.pause(hash)
+            setRecordPaused(hash, paused = true)
+            refreshStats()
+        }
     }
 
-    fun resume(hash: String) = start(hash)
+    /** Resumes a paused torrent. Optimistic status, then authoritative. */
+    fun resume(hash: String) {
+        _state.update { s ->
+            s.copy(
+                torrents = s.torrents.map { t ->
+                    if (t.hash == hash && t.status == TorrentStatus.PAUSED) {
+                        t.copy(status = if (t.isComplete) TorrentStatus.SEEDING else TorrentStatus.DOWNLOADING)
+                    } else t
+                },
+            )
+        }
+        onEngine {
+            engine.start(hash)
+            setRecordPaused(hash, paused = false)
+            refreshStats()
+        }
+    }
 
+    /** Removes a torrent. Optimistic UI, then authoritative cleanup. */
     fun remove(hash: String) {
-        engine.remove(hash)
-        records = records.filterNot { it.hash == hash }
-        persistRecords()
         _state.update {
             it.copy(
                 torrents = it.torrents.filterNot { t -> t.hash == hash },
                 selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
             )
+        }
+        onEngine {
+            engine.remove(hash)
+            infoCache.remove(hash)
+            lastSeen.remove(hash)
+            records = records.filterNot { it.hash == hash }
+            persistRecords()
+            // Authoritative removal — also re-covers the (rare) case where a
+            // poll tick between the optimistic update and this coroutine
+            // rebuilt the row from the not-yet-updated records list.
+            _state.update {
+                it.copy(
+                    torrents = it.torrents.filterNot { t -> t.hash == hash },
+                    selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
+                )
+            }
         }
     }
 
@@ -236,15 +343,41 @@ class AppStore(
         _state.update { it.copy(searchQuery = query) }
     }
 
+    /**
+     * Applies a settings edit. The UI state updates immediately; disk I/O
+     * and engine calls happen on the background executor, diffed so they
+     * only cross the JNI boundary when the relevant value changed, and the
+     * JSON write is coalesced (rapid edits collapse into one save).
+     */
     fun updateSettings(settings: AppSettings) {
         _state.update { it.copy(settings = settings) }
-        settingsRepo.save(settings)
-        // Live-applied settings (the rest take effect at next engine start).
-        applyLimits(settings)
-        engine.setSessionConfig(EngineConfigJson.sessionConfig(settings))
+        onEngine { applySettings(settings) }
     }
 
-    fun setCategory(hash: String, category: String) {
+    private suspend fun applySettings(settings: AppSettings) {
+        // 1) Live speed limits — only when the effective value moved.
+        val limits = effectiveLimits(settings.speed)
+        if (limits != lastAppliedLimits) {
+            engine.setGlobalLimits(limits.first, limits.second)
+            lastAppliedLimits = limits
+        }
+        // 2) Session defaults for future torrents — only when changed.
+        val cfg = EngineConfigJson.sessionConfig(settings)
+        if (cfg != lastAppliedSessionConfig) {
+            engine.setSessionConfig(cfg)
+            lastAppliedSessionConfig = cfg
+        }
+        // 3) Persist, coalesced: a slider drag / keystroke storm becomes a
+        //    single write after the input settles (plus the final save in
+        //    [stop]).
+        settingsSaveJob?.cancel()
+        settingsSaveJob = onEngineJob {
+            delay(400)
+            settingsRepo.save(settings)
+        }
+    }
+
+    fun setCategory(hash: String, category: String) = onEngine {
         records = records.map { if (it.hash == hash) it.copy(category = category) else it }
         persistRecords()
         _state.update {
@@ -255,7 +388,7 @@ class AppStore(
         }
     }
 
-    fun toggleTag(hash: String, tag: String) {
+    fun toggleTag(hash: String, tag: String) = onEngine {
         records = records.map { r ->
             if (r.hash == hash) {
                 val tags = if (tag in r.tags) r.tags - tag else r.tags + tag
@@ -282,15 +415,15 @@ class AppStore(
     // ------------------------------------------------------------------
 
     private suspend fun pollLoop() {
-        while (scope.isActive && pollJob?.isActive == true) {
+        while (engineScope.isActive && pollJob?.isActive == true) {
             val interval = _state.value.settings.behavior.refreshIntervalMs.coerceIn(200, 5000)
             delay(interval.toLong())
 
             // 1) Drain engine events first (cheap, authoritative).
             drainEvents(engine.takeEvents())
 
-            // 2) Refresh per-torrent stats + global rates in ONE state
-            //    update (fewer recompositions per poll tick).
+            // 2) Refresh per-torrent stats + global rates in ONE native
+            //    snapshot call and ONE state update.
             refreshStats()
 
             // 3) Persist resume data on a slow cadence (like qBittorrent).
@@ -302,23 +435,33 @@ class AppStore(
         }
     }
 
+    /**
+     * Applies engine events without rebuilding the whole list per event:
+     * deltas are aggregated per torrent first, then applied in one pass.
+     */
     private fun drainEvents(events: List<EngineEventDto>) {
         if (events.isEmpty()) return
         _state.update { s ->
             var dht = s.dhtNodes
-            var torrents = s.torrents
             var leechCount = s.antiLeechCount
             var leechClients = s.antiLeechClients
             val antiLeechOn = s.settings.bitTorrent.antiLeechEnabled
+
+            val peerAbs = HashMap<String, Int>()
+            val peerAdj = HashMap<String, Int>()
+            val pieceAdj = HashMap<String, Int>()
+            val complete = HashSet<String>()
+            val metadata = HashSet<String>()
+
             for (ev in events) {
                 when (ev.t) {
-                    1 -> torrents = bumpPeer(torrents, ev.h, +1)
-                    2 -> torrents = bumpPieces(torrents, ev.h, +1)
+                    1 -> peerAdj.merge(ev.h, 1, Int::plus)
+                    2 -> pieceAdj.merge(ev.h, 1, Int::plus)
                     3 -> Unit // hash failure — no state change surfaced
-                    4 -> torrents = markComplete(torrents, ev.h)
-                    5 -> torrents = markMetadata(torrents, ev.h)
+                    4 -> if (ev.h.isNotEmpty()) complete.add(ev.h)
+                    5 -> if (ev.h.isNotEmpty()) metadata.add(ev.h)
                     6 -> Unit // metadata failed — surfaced via status
-                    7 -> torrents = applyTrackerAnnounce(torrents, ev.h, ev.peers ?: 0)
+                    7 -> if (ev.h.isNotEmpty()) peerAbs[ev.h] = ev.peers ?: 0
                     8 -> dht = ev.n ?: dht
                     9 -> if (antiLeechOn) {
                         leechCount++
@@ -329,29 +472,68 @@ class AppStore(
                     }
                 }
             }
-            s.copy(dhtNodes = dht, torrents = torrents, antiLeechCount = leechCount, antiLeechClients = leechClients)
+
+            if (peerAbs.isEmpty() && peerAdj.isEmpty() && pieceAdj.isEmpty() &&
+                complete.isEmpty() && metadata.isEmpty()
+            ) {
+                return@update s.copy(
+                    dhtNodes = dht,
+                    antiLeechCount = leechCount,
+                    antiLeechClients = leechClients,
+                )
+            }
+
+            val torrents = s.torrents.map { t ->
+                var out = t
+                peerAbs[t.hash]?.let { out = out.copy(peers = it) }
+                peerAdj[t.hash]?.let { out = out.copy(peers = (out.peers + it).coerceAtLeast(0)) }
+                pieceAdj[t.hash]?.let {
+                    out = out.copy(havePieces = (out.havePieces + it).coerceAtMost(out.pieceCount.coerceAtLeast(0)))
+                }
+                if (t.hash in complete) {
+                    out = out.copy(status = TorrentStatus.SEEDING, progress = 1.0, completedAt = System.currentTimeMillis())
+                }
+                if (t.hash in metadata) out = out.copy(metadataReady = true)
+                out
+            }
+
+            s.copy(
+                dhtNodes = dht,
+                torrents = torrents,
+                antiLeechCount = leechCount,
+                antiLeechClients = leechClients,
+            )
         }
     }
 
     /**
-     * Combined per-tick refresh: torrents + global rates + DHT in a single
-     * `_state.update`. The native queries are batched where the bridge
-     * allows it; the whole tick emits exactly one state change so Compose
-     * recomposes once per poll instead of three times.
+     * Per-tick refresh driven by ONE batched native snapshot (DHT count,
+     * global totals and every torrent's runtime stats). Full metainfo is
+     * only refetched when the snapshot reports freshly-arrived metadata, so
+     * the per-tick JNI traffic is constant regardless of torrent count.
      */
     private fun refreshStats() {
         val now = System.currentTimeMillis()
-        val states = engine.torrentStates().associateBy { it.hash }
-        val totals = engine.totals()
+        val snap = engine.snapshot()
+        val byHash = snap.torrents.associateBy { it.h }
+        val totals = snap.totalsPair
         val dt = (now - lastGlobalPoll).coerceAtLeast(1L)
         val downRate = if (lastTotals == null) 0L else (totals.first - lastTotals!!.first) * 1000 / dt
         val upRate = if (lastTotals == null) 0L else (totals.second - lastTotals!!.second) * 1000 / dt
         lastTotals = totals
         lastGlobalPoll = now
+
+        // Metadata arrived for a magnet → refresh the full mirror once.
+        for (row in snap.torrents) {
+            if (row.meta && infoCache[row.h]?.metadata_ready != true) {
+                engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
+            }
+        }
+
         _state.update { s ->
             val updated = records.map { rec ->
                 val base = s.torrents.firstOrNull { it.hash == rec.hash }
-                buildTorrent(rec, base, states[rec.hash], now)
+                buildTorrent(rec, base, byHash[rec.hash], now)
             }
             s.copy(
                 torrents = updated,
@@ -359,49 +541,55 @@ class AppStore(
                 globalUpRate = upRate.coerceAtLeast(0),
                 totalDownloaded = totals.first,
                 totalUploaded = totals.second,
-                dhtNodes = engine.dhtNodeCount(),
+                dhtNodes = snap.dht,
             )
         }
     }
 
-    private fun buildTorrent(rec: TorrentRecord, base: Torrent?, state: com.typebit.engine.TorrentStateDto?, now: Long): Torrent {
-        val info = engine.torrentInfo(rec.hash)
-        val progress = engine.progress(rec.hash)
-        val downloaded = engine.downloaded(rec.hash)
-        val complete = engine.isComplete(rec.hash)
+    /**
+     * Rebuilds one display model from the snapshot row + the cached full
+     * metainfo. The status is deterministic — paused wins, then complete
+     * (seeding), then metadata availability — instead of the old heuristic
+     * that guessed from stale progress deltas and made pause/resume appear
+     * broken.
+     */
+    private fun buildTorrent(rec: TorrentRecord, base: Torrent?, row: TorrentSnapshotDto?, now: Long): Torrent {
+        val info = infoCache[rec.hash]
+        val paused = (row?.paused ?: false) || rec.paused
+        val complete = row?.c ?: (base?.isComplete == true)
+        val progress = row?.p ?: base?.progress ?: 0.0
+        val downloaded = row?.d ?: base?.downloadedBytes ?: 0L
+        val metadataReady = row?.meta ?: (info?.metadata_ready ?: base?.metadataReady ?: false)
+        val havePieces = row?.have?.toInt() ?: base?.havePieces ?: 0
 
-        // Status resolution.
         val status = when {
-            state?.paused == true || (base?.status == TorrentStatus.PAUSED && progress == base.progress && base.status != TorrentStatus.SEEDING) && !complete -> TorrentStatus.PAUSED
-            !rec.paused && complete -> TorrentStatus.SEEDING
-            !rec.paused && progress in 0.0001..0.9999 -> TorrentStatus.DOWNLOADING
-            !rec.paused && progress < 0.0001 && info?.metadata_ready == false -> TorrentStatus.FETCHING_METADATA
-            !rec.paused && progress < 0.0001 -> TorrentStatus.DOWNLOADING
-            rec.paused -> TorrentStatus.PAUSED
-            else -> TorrentStatus.STOPPED
+            paused -> TorrentStatus.PAUSED
+            complete -> TorrentStatus.SEEDING
+            !metadataReady -> TorrentStatus.FETCHING_METADATA
+            else -> TorrentStatus.DOWNLOADING
         }
 
-        // Per-torrent download rate from deltas.
+        // Per-torrent download rate from byte deltas.
         val prev = lastSeen[rec.hash]
         val dt = (now - (prev?.first ?: now)).coerceAtLeast(1L)
         val downRate = if (prev == null) 0L else (downloaded - prev.second).coerceAtLeast(0) * 1000 / dt
         lastSeen[rec.hash] = now to downloaded
 
-        val havePieces = state?.have?.toInt() ?: base?.havePieces ?: 0
+        val snapName = row?.name?.takeIf { it.isNotBlank() }
         return Torrent(
             hash = rec.hash,
-            name = info?.effectiveName() ?: rec.name,
+            name = snapName ?: info?.effectiveName() ?: rec.name,
             saveDir = rec.saveDir,
             status = status,
-            sizeBytes = info?.size ?: base?.sizeBytes ?: 0L,
+            sizeBytes = (row?.size ?: 0L).takeIf { it > 0L } ?: info?.size ?: base?.sizeBytes ?: 0L,
             downloadedBytes = downloaded,
             uploadedBytes = 0L, // typebit 0.1.0 limitation — see README
             progress = progress,
-            pieceCount = info?.piece_count?.toInt() ?: base?.pieceCount ?: 0,
+            pieceCount = (row?.pieces?.toInt() ?: 0).takeIf { it > 0 } ?: info?.piece_count?.toInt() ?: base?.pieceCount ?: 0,
             havePieces = havePieces,
             pieceLength = info?.piece_length ?: base?.pieceLength ?: 0L,
             isPrivate = info?.`private` ?: base?.isPrivate ?: false,
-            metadataReady = info?.metadata_ready ?: base?.metadataReady ?: false,
+            metadataReady = metadataReady,
             addedAt = rec.addedAt,
             createdAt = info?.creation_date?.times(1000),
             createdBy = info?.created_by,
@@ -416,26 +604,9 @@ class AppStore(
             completedAt = base?.completedAt,
             category = rec.category,
             tags = rec.tags,
-            haveBitsHex = state?.hx ?: base?.haveBitsHex.orEmpty(),
+            haveBitsHex = row?.hx ?: base?.haveBitsHex.orEmpty(),
         )
     }
-
-    // ---- event helpers ----
-
-    private fun bumpPeer(torrents: List<Torrent>, hash: String, delta: Int): List<Torrent> =
-        torrents.map { if (it.hash == hash) it.copy(peers = (it.peers + delta).coerceAtLeast(0)) else it }
-
-    private fun bumpPieces(torrents: List<Torrent>, hash: String, delta: Int): List<Torrent> =
-        torrents.map { if (it.hash == hash) it.copy(havePieces = (it.havePieces + delta).coerceAtMost(it.pieceCount.coerceAtLeast(0))) else it }
-
-    private fun markComplete(torrents: List<Torrent>, hash: String): List<Torrent> =
-        torrents.map { if (it.hash == hash) it.copy(status = TorrentStatus.SEEDING, progress = 1.0, completedAt = System.currentTimeMillis()) else it }
-
-    private fun markMetadata(torrents: List<Torrent>, hash: String): List<Torrent> =
-        torrents.map { if (it.hash == hash) it.copy(metadataReady = true) else it }
-
-    private fun applyTrackerAnnounce(torrents: List<Torrent>, hash: String, peers: Int): List<Torrent> =
-        torrents.map { if (it.hash == hash) it.copy(peers = peers) else it }
 
     // ---- persistence helpers ----
 
@@ -452,7 +623,7 @@ class AppStore(
         }
     }
 
-    private fun markPaused(hash: String, paused: Boolean) {
+    private fun setRecordPaused(hash: String, paused: Boolean) {
         records = records.map { if (it.hash == hash) it.copy(paused = paused) else it }
         persistRecords()
     }
@@ -462,17 +633,26 @@ class AppStore(
     }
 
     private fun persistResume() {
+        // Guard: `stop()` can run before the async boot finished creating
+        // the engine (quick app exit) — the native handle would be 0.
+        if (!engine.isRunning) return
         engine.saveState()?.let { torrentRepo.saveResumeState(it) }
     }
 
     private fun applyLimits(settings: AppSettings) {
-        val speed = settings.speed
+        val (down, up) = effectiveLimits(settings.speed)
+        engine.setGlobalLimits(down, up)
+        lastAppliedLimits = down to up
+    }
+
+    /** Effective (down, up) byte-per-second limits, honoring the schedule. */
+    private fun effectiveLimits(speed: com.typebit.data.SpeedSettings): Pair<Long, Long> {
         val active = if (speed.alternativeLimitsEnabled && speed.scheduleEnabled && scheduleOpen(speed)) {
             speed.altDownloadLimitKib to speed.altUploadLimitKib
         } else {
             speed.globalDownloadLimitKib to speed.globalUploadLimitKib
         }
-        engine.setGlobalLimits(active.first * 1024, active.second * 1024)
+        return active.first * 1024 to active.second * 1024
     }
 
     /** Whether the alternative-limit schedule window is currently open. */

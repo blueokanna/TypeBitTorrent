@@ -55,6 +55,13 @@ interface TorrentEngine {
     /** All torrents' persisted have/paused state. */
     fun torrentStates(): List<TorrentStateDto>
 
+    /**
+     * One batched snapshot for a whole poll tick — DHT count plus every
+     * torrent's runtime stats (progress/downloaded/complete/paused/have +
+     * meta essentials). One JNI round-trip instead of 4N+3.
+     */
+    fun snapshot(): EngineSnapshotDto
+
     fun torrentCount(): Int
 
     fun dhtNodeCount(): Int
@@ -143,6 +150,13 @@ class NativeTorrentEngine : TorrentEngine {
         return runCatching {
             BRIDGE_JSON.decodeFromString<List<TorrentStateDto>>(json)
         }.getOrDefault(emptyList())
+    }
+
+    override fun snapshot(): EngineSnapshotDto {
+        val json = requireEngine().let { nativeSnapshot(it) }
+        return runCatching {
+            BRIDGE_JSON.decodeFromString<EngineSnapshotDto>(json)
+        }.getOrDefault(EngineSnapshotDto())
     }
 
     override fun torrentCount(): Int = requireEngine().let { nativeTorrentCount(it) }

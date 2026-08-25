@@ -55,6 +55,54 @@ data class TorrentStateDto(
 )
 
 /**
+ * Per-torrent runtime row inside one batched snapshot. Field names mirror
+ * the compact keys produced by `Cmd::Snapshot` (see native/src/engine.rs).
+ */
+@Serializable
+data class TorrentSnapshotDto(
+    val h: String = "",
+    /** Progress 0.0..1.0. */
+    val p: Double = 0.0,
+    /** Payload bytes downloaded. */
+    val d: Long = 0L,
+    /** True once every piece is verified. */
+    val c: Boolean = false,
+    /** Engine-side paused flag (from saved state). */
+    val paused: Boolean = false,
+    /** Verified piece count. */
+    val have: Long = 0L,
+    /** Verified-piece bitfield, MSB-first, hex-encoded. */
+    val hx: String = "",
+    /** Metadata mirror name (empty until known). */
+    val name: String = "",
+    /** Total size in bytes (0 until metadata is known). */
+    val size: Long = 0L,
+    /** Total piece count (0 until metadata is known). */
+    val pieces: Long = 0L,
+    /** True once the metadata mirror is complete (magnets). */
+    val meta: Boolean = false,
+)
+
+/** One batched engine snapshot: global counters + per-torrent rows. */
+@Serializable
+data class EngineSnapshotDto(
+    /** DHT routing-table size. */
+    val dht: Int = 0,
+    /** Cumulative wire bytes: (downloaded, uploaded). */
+    val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
+    val torrents: List<TorrentSnapshotDto> = emptyList(),
+) {
+    val totalsPair: Pair<Long, Long> get() = totals.d to totals.u
+}
+
+/** Global wire counters embedded in a snapshot. */
+@Serializable
+data class SnapshotTotalsDto(
+    val d: Long = 0L,
+    val u: Long = 0L,
+)
+
+/**
  * One engine event. `t` selects the variant:
  * 1=PeerConnected(h,a,p) 2=PieceVerified(h,piece) 3=HashFailure(h,piece)
  * 4=TorrentComplete(h) 5=MetadataComplete(h) 6=MetadataFailed(h)

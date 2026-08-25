@@ -31,6 +31,7 @@ final class NativeBridgeKt {
     static native boolean nativeIsComplete(long handle, String hash);
     static native String nativeTorrentInfo(long handle, String hash);
     static native String nativeTorrentStates(long handle);
+    static native String nativeSnapshot(long handle);
     static native int nativeTorrentCount(long handle);
     static native int nativeDhtNodeCount(long handle);
     static native String nativePeerId(long handle);
@@ -107,6 +108,10 @@ public class SmokeTest {
         System.out.println("[14] isComplete = " + NativeBridgeKt.nativeIsComplete(h, hash));
         System.out.println("[15] states = " + NativeBridgeKt.nativeTorrentStates(h));
         System.out.println("[16] totals = " + NativeBridgeKt.nativeTotals(h));
+
+        String snap = NativeBridgeKt.nativeSnapshot(h);
+        check(snap != null && snap.contains("\"torrents\":[") && snap.contains("\"dht\""), "batched snapshot");
+        System.out.println("[16b] snapshot = " + snap);
 
         byte[] state = NativeBridgeKt.nativeSaveState(h);
         check(state != null && state.length > 0, "save state");

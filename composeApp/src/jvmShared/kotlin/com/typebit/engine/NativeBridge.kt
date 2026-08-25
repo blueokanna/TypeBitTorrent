@@ -22,6 +22,7 @@ actual external fun nativeDownloaded(handle: Long, hash: String): Long
 actual external fun nativeIsComplete(handle: Long, hash: String): Boolean
 actual external fun nativeTorrentInfo(handle: Long, hash: String): String?
 actual external fun nativeTorrentStates(handle: Long): String
+actual external fun nativeSnapshot(handle: Long): String
 actual external fun nativeTorrentCount(handle: Long): Int
 actual external fun nativeDhtNodeCount(handle: Long): Int
 actual external fun nativePeerId(handle: Long): String

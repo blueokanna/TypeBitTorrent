@@ -59,6 +59,13 @@ expect fun nativeTorrentInfo(handle: Long, hash: String): String?
 /** All torrents' persisted state as a JSON array. */
 expect fun nativeTorrentStates(handle: Long): String
 
+/**
+ * One batched UI snapshot: `{"dht":n,"torrents":[{"h","p","d","c","paused",
+ * "have","hx","name","size","pieces","meta"},…]}`. Replaces the per-torrent
+ * query fan-out (progress/downloaded/isComplete/torrentInfo) with one call.
+ */
+expect fun nativeSnapshot(handle: Long): String
+
 /** Number of torrents in the engine. */
 expect fun nativeTorrentCount(handle: Long): Int
 

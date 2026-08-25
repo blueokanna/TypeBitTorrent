@@ -246,6 +246,11 @@ impl MetaRegistry {
         self.by_hash.get(hash).map(TorrentMeta::to_json)
     }
 
+    /// Structured access for the batched UI snapshot (no JSON round-trip).
+    pub fn get(&self, hash: &str) -> Option<&TorrentMeta> {
+        self.by_hash.get(hash)
+    }
+
     /// All hashes as a JSON array string.
     pub fn hashes_json(&self) -> String {
         let mut w = JsonWriter::new();

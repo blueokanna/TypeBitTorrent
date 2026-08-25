@@ -15,7 +15,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +36,6 @@ import com.typebit.ui.wallpaper.averageBrightness
 import com.typebit.ui.wallpaper.extractSeedColor
 import com.typebit.ui.wallpaper.loadWallpaperBitmap
 import com.typebit.ui.wallpaper.prepareWallpaper
-import kotlinx.coroutines.CoroutineScope
 
 /** Top-level destinations. Desktop uses a dialog for ADD; Android a screen. */
 enum class Route { MAIN, ADD, SETTINGS, SEARCH, RSS, ABOUT }
@@ -47,8 +45,7 @@ private const val DEFAULT_SEED = 0xFF0061A4.toInt()
 
 @Composable
 fun App() {
-    val scope = rememberCoroutineScope()
-    val store = remember { createAppStore(scope) }
+    val store = remember { createAppStore() }
     DisposableEffect(Unit) {
         store.start()
         onDispose { store.stop() }
@@ -121,12 +118,11 @@ fun App() {
 }
 
 /** Wires the concrete engine/repositories into the store — the composition root. */
-internal fun createAppStore(scope: CoroutineScope): AppStore =
+internal fun createAppStore(): AppStore =
     AppStore(
         engine = NativeTorrentEngine(),
         settingsRepo = SettingsRepository(),
         torrentRepo = TorrentRepository(),
-        scope = scope,
     )
 
 @Composable

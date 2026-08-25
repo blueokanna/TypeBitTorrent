@@ -335,6 +335,26 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentState
     new_jstring(&env, &json)
 }
 
+/// One batched UI snapshot: `{"dht":n,"torrents":[…]}`. This is the single
+/// per-tick query — it replaces the 4N+3 per-torrent round-trips the store
+/// used to make (progress/downloaded/isComplete/torrentInfo for every hash).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeSnapshot(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    let h = match handle_from(&env, handle) {
+        Some(h) => h,
+        None => return new_jstring(&env, "{\"dht\":0,\"torrents\":[]}"),
+    };
+    let (tx, rx) = channel();
+    let json = h
+        .request(Cmd::Snapshot { tx }, rx, REPLY_TIMEOUT)
+        .unwrap_or_else(|| "{\"dht\":0,\"torrents\":[]}".to_string());
+    new_jstring(&env, &json)
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentCount(
     env: JNIEnv,
