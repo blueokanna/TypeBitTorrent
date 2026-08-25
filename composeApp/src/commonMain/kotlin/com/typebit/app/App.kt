@@ -33,6 +33,7 @@ import com.typebit.platform.PlatformBackHandler
 import com.typebit.store.AppStore
 import com.typebit.ui.screens.about.AboutScreen
 import com.typebit.ui.screens.add.AddTorrentScreen
+import com.typebit.ui.screens.add.CreateTorrentScreen
 import com.typebit.ui.screens.main.MainScreen
 import com.typebit.ui.screens.rss.RssScreen
 import com.typebit.ui.screens.search.SearchScreen
@@ -48,6 +49,7 @@ import kotlinx.coroutines.withContext
 enum class Route {
         MAIN,
         ADD,
+        CREATE,
         SETTINGS,
         SEARCH,
         RSS,
@@ -156,6 +158,11 @@ internal fun AppRoot(store: AppStore) {
                         Route.ADD ->
                                 AddTorrentScreen(
                                         state = state,
+                                        store = store,
+                                        onBack = { onRoute(Route.MAIN) },
+                                )
+                        Route.CREATE ->
+                                CreateTorrentScreen(
                                         store = store,
                                         onBack = { onRoute(Route.MAIN) },
                                 )

@@ -144,7 +144,7 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         SettingTextField("额外 Tracker", s.extraTrackers, { update(s.copy(extraTrackers = it)) }, placeholder = "每行一个 announce URL")
         TrackerImportRow(s, update)
         SettingNumberField("磁盘缓存 (MiB)", (s.cacheBytes / 1024 / 1024).toString(), {
-            update(s.copy(cacheBytes = (it.toLongOrNull() ?: 64L) * 1024 * 1024))
+            update(s.copy(cacheBytes = (it.toLongOrNull() ?: 256L) * 1024 * 1024))
         }, suffix = "MiB")
     }
 
@@ -212,7 +212,7 @@ fun AdvancedSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
 
     SectionCard("磁盘与缓存") {
         SettingNumberField("磁盘缓存 (MiB)", (s.diskCacheBytes / 1024 / 1024).toString(), {
-            update(s.copy(diskCacheBytes = (it.toLongOrNull() ?: 64L) * 1024 * 1024))
+            update(s.copy(diskCacheBytes = (it.toLongOrNull() ?: 256L) * 1024 * 1024))
         }, suffix = "MiB")
         SettingNumberField("保存恢复数据间隔 (秒)", s.saveResumeDataIntervalSec.toString(), { update(s.copy(saveResumeDataIntervalSec = it.toIntOrNull() ?: s.saveResumeDataIntervalSec)) })
         SettingSwitch("使用操作系统缓存", "", s.osCache, { update(s.copy(osCache = it)) })

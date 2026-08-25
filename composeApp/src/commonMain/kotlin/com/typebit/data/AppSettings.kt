@@ -213,7 +213,7 @@ data class BitTorrentSettings(
     /** Extra tracker announce URLs, one per line. */
     val extraTrackers: String = "",
     /** Disk write-back cache budget in bytes. */
-    val cacheBytes: Long = 64L * 1024 * 1024,
+    val cacheBytes: Long = 256L * 1024 * 1024,
     val seedingSlots: Int = 8,
     val leechingSlots: Int = 8,
     val optimisticIntervalMs: Long = 30_000,
@@ -261,7 +261,7 @@ enum class UtpMixedMode { PREFER_TCP, PEER_PROPORTIONAL, TCP }
 
 @Serializable
 data class AdvancedSettings(
-    val diskCacheBytes: Long = 64L * 1024 * 1024,
+    val diskCacheBytes: Long = 256L * 1024 * 1024,
     val saveResumeDataIntervalSec: Int = 60,
     val osCache: Boolean = true,
     val networkBufferSizeKib: Int = 0,

@@ -136,6 +136,13 @@ private class FakeEngine : TorrentEngine {
     override fun stop() {}
     override val isRunning: Boolean = false
     override fun parseTorrent(data: ByteArray): TorrentInfoDto? = null
+    override fun makeTorrent(
+        files: List<Pair<String, List<String>>>,
+        pieceLength: Int,
+        name: String,
+        announce: String?,
+        comment: String?,
+    ): ByteArray? = null
     override fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int>): String? = null
     override fun addMagnet(uri: String, saveDir: String): String? = null
     override fun start(hash: String): Boolean = false

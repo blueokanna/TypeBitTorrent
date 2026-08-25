@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.AllInbox
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -452,6 +453,9 @@ private fun AppTopBar(
                 )
             }
             Spacer(Modifier.width(4.dp))
+            FilledTonalIconButton(onClick = { onRoute(Route.CREATE) }) {
+                Icon(Icons.Default.Build, contentDescription = "制作种子")
+            }
             FilledIconButton(onClick = { onRoute(Route.ADD) }) {
                 Icon(Icons.Default.Add, contentDescription = "添加种子")
             }
@@ -489,6 +493,13 @@ private fun StatusBar(state: AppState, store: AppStore) {
                 Text("下载 ${Format.speed(state.globalDownRate)}", style = MaterialTheme.typography.labelMedium)
                 Text("上传 ${Format.speed(state.globalUpRate)}", style = MaterialTheme.typography.labelMedium)
                 Text("DHT ${state.dhtNodes} 节点", style = MaterialTheme.typography.labelMedium)
+                if (state.extIp.isNotEmpty()) {
+                    Text(
+                        "外网 ${state.extIp}${if (state.extPort != 0) ":${state.extPort}" else ""}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
                 if (state.antiLeechCount > 0 && state.settings.bitTorrent.antiLeechEnabled) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(

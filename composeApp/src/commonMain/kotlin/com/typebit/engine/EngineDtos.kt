@@ -128,6 +128,10 @@ data class EngineSnapshotDto(
     val dht: Int = 0,
     /** Trackers currently active (not failed) across all torrents (live). */
     val trackers: Int = 0,
+    /** NAT-detected external UDP IP (BEP-42), empty until confirmed. */
+    val extIp: String = "",
+    /** NAT-detected external UDP port (BEP-42), 0 until confirmed. */
+    val extPort: Int = 0,
     /** Cumulative wire bytes: (downloaded, uploaded). */
     val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
     val torrents: List<TorrentSnapshotDto> = emptyList(),

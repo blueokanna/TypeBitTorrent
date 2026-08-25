@@ -23,6 +23,14 @@ expect fun nativeDestroyEngine(handle: Long)
 expect fun nativeParseTorrent(data: ByteArray): String?
 
 /**
+ * Creates a v1 `.torrent` from local files (blocking — call off the main
+ * thread). `filesJson` is `[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]},…]`;
+ * `pieceLength` must be a supported power of two (16 KiB .. 256 MiB).
+ * Returns the raw `.torrent` bytes, or null on error.
+ */
+expect fun nativeMakeTorrent(filesJson: String, pieceLength: Int, name: String, announce: String, comment: String): ByteArray?
+
+/**
  * Adds a `.torrent`; returns the hex infohash or null on error.
  * `prioritiesJson` is a JSON array of per-file priority bytes
  * (`[0,1,2,…]`; 0=Skip 1=Normal 2=High) aligned with the file table.

@@ -10,6 +10,8 @@ actual external fun nativeCreateEngine(configJson: String, saveDir: String): Lon
 actual external fun nativeDestroyEngine(handle: Long)
 /** Parse `.torrent` bytes → metainfo JSON (no engine add) for the dialog. */
 actual external fun nativeParseTorrent(data: ByteArray): String?
+/** Create a v1 `.torrent` from local files (blocking; off the main thread). */
+actual external fun nativeMakeTorrent(filesJson: String, pieceLength: Int, name: String, announce: String, comment: String): ByteArray?
 
 actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?

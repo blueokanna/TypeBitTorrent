@@ -16,6 +16,7 @@ typebit = { version = "0.1.3", path = "../../TypeBit", features = ["std"] }
 jni = { version = "0.22.4" }
 getrandom = "0.4"
 nextjson = { version = "0.1", default-features = false }
+courierust = { version = "1.0", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "thin"

@@ -449,11 +449,20 @@ fn handle_cmd(
             let dht = engine.dht().map(|d| d.table().size()).unwrap_or(0);
             let trackers = engine.active_trackers();
             let (d_total, u_total) = engine.host.totals();
+            // NAT-detected external UDP endpoint (BEP-42 cross-confirmation).
+            let (ext_ip, ext_port) = engine
+                .dht_external()
+                .map(|(ip, p)| (fmt_ext_ip(&ip), p))
+                .unwrap_or_else(|| (String::new(), 0u16));
             let mut w = JsonWriter::new();
             w.begin_object();
             w.kv_u64("dht", dht as u64);
             w.comma();
             w.kv_u64("trackers", trackers as u64);
+            w.comma();
+            w.kv_string("ext_ip", &ext_ip);
+            w.comma();
+            w.kv_u64("ext_port", ext_port as u64);
             w.comma();
             w.key("totals");
             w.begin_object();
@@ -648,6 +657,26 @@ fn hex_of(bytes: &[u8]) -> String {
 
 fn count_bits(bytes: &[u8]) -> u64 {
     bytes.iter().map(|b| b.count_ones() as u64).sum()
+}
+
+/// Format a 16-byte BEP-42 address: IPv4 when stored in the leading 4
+/// bytes (or IPv4-mapped), else hex IPv6.
+fn fmt_ext_ip(ip: &[u8; 16]) -> String {
+    let mapped = ip[0..10].iter().all(|&b| b == 0) && ip[10] == 0xFF && ip[11] == 0xFF;
+    let v4 = if mapped {
+        Some([ip[12], ip[13], ip[14], ip[15]])
+    } else if ip[4..].iter().all(|&b| b == 0) {
+        Some([ip[0], ip[1], ip[2], ip[3]])
+    } else {
+        None
+    };
+    match v4 {
+        Some(a) => format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
+        None => (0..8)
+            .map(|i| format!("{:x}", u16::from_be_bytes([ip[i * 2], ip[i * 2 + 1]])))
+            .collect::<Vec<_>>()
+            .join(":"),
+    }
 }
 
 /// Serialize one engine event into a JSON object string.
@@ -1087,20 +1116,7 @@ fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meta::TorrentMeta;
     use std::fs;
-
-    /// A tiny torrent metainfo with a single file, used to exercise the
-    /// staging→finalize promotion path without a real download.
-    fn single_file_meta(dir: &str) -> TorrentMeta {
-        let mut m = TorrentMeta::from_magnet("aabbccddeeff00112233445566778899aabbccdd", "x.bin");
-        m.save_dir = dir.to_string();
-        m.files.push(crate::meta::FileMeta {
-            path: vec!["x.bin".to_string()],
-            length: 4,
-        });
-        m
-    }
 
     /// A download writes `<final>.part` (never the final name); after
     /// `finalize_file` the file appears under the final name and the staging

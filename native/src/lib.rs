@@ -15,6 +15,7 @@ pub mod engine;
 pub mod host;
 pub mod jni_glue;
 pub mod json;
+pub mod make_torrent;
 pub mod meta;
 
 use jni::sys::{jint, JNI_VERSION_1_6};

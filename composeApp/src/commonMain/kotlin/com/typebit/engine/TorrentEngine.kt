@@ -31,6 +31,19 @@ interface TorrentEngine {
     fun parseTorrent(data: ByteArray): TorrentInfoDto?
 
     /**
+     * Creates a v1 `.torrent` from local files. Each entry is
+     * `(absolute path, relative path components)`; `pieceLength` must be a
+     * supported power of two (16 KiB .. 256 MiB). Returns the raw bytes.
+     */
+    fun makeTorrent(
+        files: List<Pair<String, List<String>>>,
+        pieceLength: Int,
+        name: String,
+        announce: String?,
+        comment: String?,
+    ): ByteArray?
+
+    /**
      * Adds a `.torrent` with per-file priorities (0=Skip, 1=Normal, 2=High)
      * aligned with the file table. Empty list keeps every file at Normal.
      */
@@ -141,6 +154,35 @@ class NativeTorrentEngine : TorrentEngine {
     override fun parseTorrent(data: ByteArray): TorrentInfoDto? {
         val json = nativeParseTorrent(data) ?: return null
         return runCatching { BRIDGE_JSON.decodeFromString<TorrentInfoDto>(json) }.getOrNull()
+    }
+
+    override fun makeTorrent(
+        files: List<Pair<String, List<String>>>,
+        pieceLength: Int,
+        name: String,
+        announce: String?,
+        comment: String?,
+    ): ByteArray? {
+        val filesJson = buildString {
+            append('[')
+            files.forEachIndexed { i, (abs, rel) ->
+                if (i > 0) append(',')
+                append("{\"abs\":${jsonString(abs)},\"rel\":[")
+                rel.forEachIndexed { j, c ->
+                    if (j > 0) append(',')
+                    append(jsonString(c))
+                }
+                append("]}")
+            }
+            append(']')
+        }
+        return nativeMakeTorrent(
+            filesJson,
+            pieceLength,
+            name,
+            announce.orEmpty(),
+            comment.orEmpty(),
+        )
     }
 
     override fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int>): String? {
@@ -267,4 +309,22 @@ class NativeTorrentEngine : TorrentEngine {
         check(handle != 0L) { "engine not started" }
         return handle
     }
+}
+
+/** JSON string literal with proper escaping (for the make-torrent file list). */
+private fun jsonString(s: String): String {
+    val sb = StringBuilder(s.length + 2)
+    sb.append('"')
+    for (c in s) {
+        when (c) {
+            '"' -> sb.append("\\\"")
+            '\\' -> sb.append("\\\\")
+            '\n' -> sb.append("\\n")
+            '\r' -> sb.append("\\r")
+            '\t' -> sb.append("\\t")
+            else -> sb.append(c)
+        }
+    }
+    sb.append('"')
+    return sb.toString()
 }

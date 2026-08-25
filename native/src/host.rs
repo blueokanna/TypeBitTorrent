@@ -26,6 +26,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{
     Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream, UdpSocket,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -43,6 +44,9 @@ const MAX_OPEN_FILES: usize = 4096;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Log ring capacity.
 const LOG_CAPACITY: usize = 2048;
+/// Cap on concurrent in-flight HTTP jobs on the async worker (bounds
+/// abandoned threads when a server hangs past its timeouts).
+const MAX_HTTP_ACTIVE: usize = 8;
 
 /// Shared log ring: `(level, message)` pairs, oldest first.
 pub type LogBuffer = Arc<Mutex<VecDeque<(u8, String)>>>;
@@ -58,6 +62,20 @@ enum ConnSlot {
 /// A completed outbound connect handed back from a helper thread.
 type ConnectResult = (ConnId, std::io::Result<TcpStream>);
 
+/// One queued HTTP job for the async worker.
+struct HttpJob {
+    id: u64,
+    url: String,
+    range: Option<(u64, u64)>,
+    timeout_ms: u64,
+}
+
+/// Handle to the shared async HTTP worker thread.
+struct HttpWorkerHandle {
+    jobs_tx: Sender<HttpJob>,
+    done_rx: Receiver<(u64, Result<Vec<u8>>)>,
+}
+
 /// The complete std-backed host.
 pub struct NativeHost {
     listener: Option<TcpListener>,
@@ -70,6 +88,13 @@ pub struct NativeHost {
     pending_connects: usize,
     files: HashMap<DiskId, std::fs::File>,
     http: typebit::host_std::StdHost,
+    /// Async HTTP worker (lazily spawned); lets the engine submit tracker
+    /// announces and web-seed fetches without ever blocking on HTTP.
+    http_worker: Option<HttpWorkerHandle>,
+    /// Completed HTTP jobs not yet handed to the engine.
+    http_pending_results: VecDeque<(u64, Result<Vec<u8>>)>,
+    /// Monotonic job id allocator (1-based).
+    next_http_job: u64,
     /// Cumulative wire bytes (downloaded, uploaded) for the status bar.
     down_total: u64,
     up_total: u64,
@@ -90,6 +115,9 @@ impl NativeHost {
             pending_connects: 0,
             files: HashMap::new(),
             http: typebit::host_std::StdHost::new(),
+            http_worker: None,
+            http_pending_results: VecDeque::new(),
+            next_http_job: 0,
             down_total: 0,
             up_total: 0,
             logs,
@@ -268,6 +296,144 @@ impl NativeHost {
             ),
         }
     }
+
+    // ---------- async HTTP worker ----------
+
+    /// Lazily spawn the shared HTTP worker thread (one per host, never per request). The worker owns a
+    /// bounded-timeout courierust client and runs jobs on capped inner threads so a hung server can never
+    /// stall the engine or the queue for more than its timeouts.
+    fn ensure_http_worker(&mut self) {
+        if self.http_worker.is_some() {
+            return;
+        }
+        let (jobs_tx, jobs_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        std::thread::Builder::new()
+            .name("typebit-http".to_string())
+            .spawn(move || http_worker_loop(jobs_rx, done_tx))
+            .ok();
+        self.http_worker = Some(HttpWorkerHandle { jobs_tx, done_rx });
+    }
+
+    fn next_http_job_id(&mut self) -> u64 {
+        self.next_http_job = self.next_http_job.wrapping_add(1).max(1);
+        self.next_http_job
+    }
+
+    /// Enqueue an async HTTP job; returns the job id or 0 on failure.
+    fn enqueue_http_job(&mut self, url: &str, range: Option<(u64, u64)>, timeout_ms: u64) -> u64 {
+        self.ensure_http_worker();
+        let id = self.next_http_job_id();
+        let h = match self.http_worker.as_ref() {
+            Some(h) => h,
+            None => return 0,
+        };
+        let job = HttpJob {
+            id,
+            url: url.to_string(),
+            range,
+            timeout_ms,
+        };
+        if h.jobs_tx.send(job).is_err() {
+            return 0;
+        }
+        id
+    }
+
+    /// Move completed jobs off the worker channel into the pending buffer
+    /// and return everything pending (the engine routes them by id).
+    fn http_drain_done(&mut self) -> VecDeque<(u64, Result<Vec<u8>>)> {
+        if let Some(h) = self.http_worker.as_ref() {
+            while let Ok(item) = h.done_rx.try_recv() {
+                self.http_pending_results.push_back(item);
+            }
+        }
+        std::mem::take(&mut self.http_pending_results)
+    }
+
+    /// Wait (bounded by `timeout_ms`) for one specific async job and append
+    /// its body to `out`. Used by the synchronous fallback paths (proxy-mode
+    /// web seeds); other jobs' results stay buffered for the engine.
+    fn wait_http_job(&mut self, id: u64, timeout_ms: u64, out: &mut Vec<u8>) -> Result<()> {
+        let deadline = self.now_ms().saturating_add(timeout_ms);
+        loop {
+            let jobs = self.http_drain_done();
+            for (jid, res) in jobs {
+                if jid == id {
+                    out.extend_from_slice(&res?);
+                    return Ok(());
+                }
+                self.http_pending_results.push_back((jid, res));
+            }
+            if self.now_ms() >= deadline {
+                return Err(Error::Timeout);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+/// The async HTTP worker thread: receives jobs, executes each on a capped inner thread (so one hung
+/// server cannot serialize the whole queue beyond its own timeouts), and reports results back.
+fn http_worker_loop(jobs_rx: Receiver<HttpJob>, done_tx: Sender<(u64, Result<Vec<u8>>)>) {
+    use courierust::courierust_client::ClientConfig;
+    let client = courierust::courierust_client::Client::with_config(ClientConfig {
+        connect_timeout: Some(Duration::from_secs(6)),
+        read_timeout: Some(Duration::from_secs(10)),
+        handshake_timeout: Some(Duration::from_secs(6)),
+        ..Default::default()
+    });
+    let active = Arc::new(AtomicUsize::new(0));
+    while let Ok(job) = jobs_rx.recv() {
+        // Back-pressure: cap concurrent inner threads.
+        while active.load(Ordering::SeqCst) >= MAX_HTTP_ACTIVE {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        active.fetch_add(1, Ordering::SeqCst);
+        let client = client.clone();
+        let done_tx = done_tx.clone();
+        let active = active.clone();
+        std::thread::spawn(move || {
+            let res = http_job_execute(&client, &job);
+            let _ = done_tx.send((job.id, res));
+            active.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
+}
+
+/// Execute one HTTP job (plain GET or byte-range GET).
+fn http_job_execute(
+    client: &courierust::courierust_client::Client,
+    job: &HttpJob,
+) -> Result<Vec<u8>> {
+    let _ = job.timeout_ms; // courierust's own timeouts bound each request
+    match job.range {
+        None => {
+            let resp = client.get(&job.url).map_err(|_| Error::Io)?;
+            if resp.status.as_u16() != 200 {
+                return Err(Error::Tracker);
+            }
+            resp.body.collect().map(|b| b.to_vec()).map_err(|_| Error::Io)
+        }
+        Some((start, end)) => {
+            use courierust::courierust_body::Body;
+            use courierust::courierust_http::header::{HeaderName, HeaderValue};
+            use courierust::courierust_http::method::Method;
+            use courierust::courierust_http::request::Request;
+            let mut req = Request::<Body>::new(Method::GET, "/");
+            let value = format!("bytes={}-{}", start, end);
+            req.headers.insert(
+                HeaderName::from_lowercase("range"),
+                HeaderValue::from_bytes(value.as_bytes()).map_err(|_| Error::InvalidInput)?,
+            );
+            let resp = client.execute(&job.url, req).map_err(|_| Error::Io)?;
+            let status = resp.status.as_u16();
+            if status != 200 && status != 206 {
+                return Err(Error::Tracker);
+            }
+            resp.body.collect().map(|b| b.to_vec()).map_err(|_| Error::Io)
+        }
+    }
 }
 
 impl Host for NativeHost {
@@ -293,11 +459,17 @@ impl Host for NativeHost {
     }
 
     fn http_get(&mut self, url: &str, timeout_ms: u64, out: &mut Vec<u8>) -> Result<()> {
-        self.http.http_get(url, timeout_ms, out)
+        // Route through the async worker with a bounded wait so even the
+        // synchronous fallback paths can never block the engine indefinitely.
+        let id = self.http_get_async(url, timeout_ms);
+        if id == 0 {
+            return self.http.http_get(url, timeout_ms, out);
+        }
+        self.wait_http_job(id, timeout_ms, out)
     }
 
-    /// BEP-19 web seeds: delegate the Range request to the std host (which
-    /// rejects a body that is not exactly the requested window).
+    /// BEP-19 web seeds: delegate the Range request to the async worker
+    /// (which rejects a body that is not exactly the requested window).
     fn http_get_range(
         &mut self,
         url: &str,
@@ -306,8 +478,31 @@ impl Host for NativeHost {
         timeout_ms: u64,
         out: &mut Vec<u8>,
     ) -> Result<()> {
-        self.http
-            .http_get_range(url, range_start, range_end, timeout_ms, out)
+        let id = self.http_get_range_async(url, range_start, range_end, timeout_ms);
+        if id == 0 {
+            return self
+                .http
+                .http_get_range(url, range_start, range_end, timeout_ms, out);
+        }
+        self.wait_http_job(id, timeout_ms, out)
+    }
+
+    fn http_get_async(&mut self, url: &str, timeout_ms: u64) -> u64 {
+        self.enqueue_http_job(url, None, timeout_ms)
+    }
+
+    fn http_get_range_async(
+        &mut self,
+        url: &str,
+        range_start: u64,
+        range_end: u64,
+        timeout_ms: u64,
+    ) -> u64 {
+        self.enqueue_http_job(url, Some((range_start, range_end)), timeout_ms)
+    }
+
+    fn http_take_done(&mut self) -> std::vec::Vec<(u64, Result<Vec<u8>>)> {
+        self.http_drain_done().into_iter().collect()
     }
 
     /// A LAN address of this host, required by UPnP IGD AddPortMapping.

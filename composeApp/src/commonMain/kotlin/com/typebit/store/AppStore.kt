@@ -175,6 +175,26 @@ class AppStore(
     fun parseTorrentFile(bytes: ByteArray): com.typebit.engine.TorrentInfoDto? =
         engine.parseTorrent(bytes)
 
+    /**
+     * Creates a v1 `.torrent` from local files (blocking — call off the UI
+     * thread). `files` is `(absolutePath, fileName)` pairs; `pieceLength`
+     * must be a supported power of two (16 KiB .. 256 MiB).
+     */
+    fun makeTorrent(
+        files: List<Pair<String, String>>,
+        pieceLength: Int,
+        name: String,
+        announce: String?,
+        comment: String?,
+    ): ByteArray? =
+        engine.makeTorrent(
+            files = files.map { it.first to listOf(it.second) },
+            pieceLength = pieceLength,
+            name = name,
+            announce = announce,
+            comment = comment,
+        )
+
     fun addTorrentFile(bytes: ByteArray, fileName: String) {
         val s = _state.value.settings
         addTorrentFileEx(
@@ -651,6 +671,8 @@ class AppStore(
                 totalUploaded = totals.second,
                 dhtNodes = snap.dht,
                 trackerCount = snap.trackers,
+                extIp = snap.extIp,
+                extPort = snap.extPort,
             )
         }
     }

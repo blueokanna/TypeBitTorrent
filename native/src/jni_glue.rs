@@ -127,6 +127,89 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeParseTorrent
     })
 }
 
+/// Parse a JSON array of files for `nativeMakeTorrent`: `[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]}, …]`.
+fn parse_make_files(json: &str) -> Result<Vec<crate::make_torrent::FileSpec>, String> {
+    use nextjson::Value;
+    let v: Value = nextjson::nextdecode(json.as_bytes())
+        .map_err(|e| format!("bad files json: {e}"))?;
+    let arr = v.as_array().ok_or("files must be a JSON array")?;
+    let mut out = Vec::with_capacity(arr.len());
+    for e in arr {
+        let abs = e
+            .get("abs")
+            .and_then(Value::as_str)
+            .ok_or("file entry missing abs")?
+            .to_string();
+        let mut rel = Vec::new();
+        if let Some(r) = e.get("rel").and_then(Value::as_array) {
+            for c in r {
+                rel.push(
+                    c.as_str()
+                        .ok_or("file entry has a non-string rel component")?
+                        .to_string(),
+                );
+            }
+        }
+        if rel.is_empty() {
+            return Err("file entry missing rel".into());
+        }
+        out.push(crate::make_torrent::FileSpec {
+            abs_path: std::path::PathBuf::from(abs),
+            rel_path: rel,
+        });
+    }
+    Ok(out)
+}
+
+fn opt_str(s: &str) -> Option<&str> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// Create a v1 `.torrent` from local files (blocking, caller's thread). `files_json` is the array
+/// parsed by [`parse_make_files`]; returns raw `.torrent` bytes, or null (with a Java exception).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrent(
+    unowned: EnvUnowned,
+    _class: JClass,
+    files_json: JString,
+    piece_length: jint,
+    name: JString,
+    announce: JString,
+    comment: JString,
+) -> jbyteArray {
+    with_env(unowned, |env| {
+        let files_json = jstr(env, &files_json);
+        let name = jstr(env, &name);
+        let announce = jstr(env, &announce);
+        let comment = jstr(env, &comment);
+        let specs = match parse_make_files(&files_json) {
+            Ok(s) => s,
+            Err(e) => {
+                throw(env, &format!("nativeMakeTorrent: {e}"));
+                return Ok(std::ptr::null_mut());
+            }
+        };
+        match crate::make_torrent::create_torrent_v1(
+            &specs,
+            piece_length as u32,
+            if name.trim().is_empty() { "torrent" } else { name.trim() },
+            opt_str(&announce),
+            opt_str(&comment),
+        ) {
+            Ok(bytes) => Ok(env.byte_array_from_slice(&bytes)?.into_raw()),
+            Err(e) => {
+                throw(env, &format!("nativeMakeTorrent: {e}"));
+                Ok(std::ptr::null_mut())
+            }
+        }
+    })
+}
+
 /// Adds a `.torrent`; `priorities_json` is a JSON array of per-file priority
 /// bytes (`[0,1,2,…]`, 0=Skip 1=Normal 2=High) aligned with the file table.
 #[no_mangle]

@@ -129,6 +129,8 @@ fun TorrentTable(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                // Horizontal scroll via drag on the visible scrollbar below
+                // (and Shift+wheel, built into CMP desktop scrollables).
                 .horizontalScroll(hState),
         ) {
             Column(Modifier.width(totalWidth)) {

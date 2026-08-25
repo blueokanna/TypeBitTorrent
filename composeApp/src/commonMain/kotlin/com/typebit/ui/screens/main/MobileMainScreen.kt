@@ -22,8 +22,9 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.RssFeed
@@ -103,6 +104,9 @@ fun MobileMainScreen(
                         ) {
                             StatusPill("DHT ${state.dhtNodes}")
                             StatusPill("Tracker ${state.trackerCount}")
+                            if (state.extIp.isNotEmpty()) {
+                                StatusPill("外网 ${state.extIp}${if (state.extPort != 0) ":${state.extPort}" else ""}")
+                            }
                             Text(
                                 "↓ ${Format.speed(state.globalDownRate)}",
                                 style = MaterialTheme.typography.labelSmall,
@@ -117,6 +121,9 @@ fun MobileMainScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { onRoute(Route.CREATE) }) {
+                        Icon(Icons.Default.Build, contentDescription = "制作种子")
+                    }
                     IconButton(onClick = { gridMode = !gridMode }) {
                         Icon(
                             if (gridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
