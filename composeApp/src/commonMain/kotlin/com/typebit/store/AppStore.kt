@@ -183,6 +183,7 @@ class AppStore(
             category = "",
             tags = emptyList(),
             paused = s.downloads.addTorrentsInPause,
+            filePriorities = emptyList(),
         )
     }
 
@@ -194,8 +195,9 @@ class AppStore(
         category: String,
         tags: List<String>,
         paused: Boolean,
+        filePriorities: List<Int> = emptyList(),
     ) = onEngine {
-        val hash = engine.addTorrent(bytes, saveDir) ?: run {
+        val hash = engine.addTorrent(bytes, saveDir, filePriorities) ?: run {
             _state.update { it.copy(lastError = "无法解析种子文件：$fileName") }
             return@onEngine
         }
@@ -211,6 +213,7 @@ class AppStore(
             paused = paused,
             category = category,
             tags = tags,
+            filePriorities = filePriorities,
         )
         records = records + record
         persistRecords()
@@ -226,6 +229,7 @@ class AppStore(
             category = "",
             tags = emptyList(),
             paused = s.downloads.addTorrentsInPause,
+            filePriorities = emptyList(),
         )
     }
 
@@ -236,6 +240,7 @@ class AppStore(
         category: String,
         tags: List<String>,
         paused: Boolean,
+        filePriorities: List<Int> = emptyList(),
     ) = onEngine {
         val trimmed = uri.trim()
         if (trimmed.isEmpty()) return@onEngine
@@ -255,9 +260,12 @@ class AppStore(
             paused = paused,
             category = category,
             tags = tags,
+            filePriorities = filePriorities,
         )
         records = records + record
         persistRecords()
+        // File priorities can only be applied once the metadata arrives;
+        // refreshStats does that when the snapshot reports `meta` flips.
         if (!record.paused) engine.start(hash)
         refreshStats()
     }
@@ -333,6 +341,48 @@ class AppStore(
 
     fun select(hash: String?) {
         _state.update { it.copy(selectedHash = hash) }
+    }
+
+    /**
+     * Sets one file's download priority at runtime (0=Skip, 1=Normal,
+     * 2=High) and persists it. Skipped files stop being requested.
+     */
+    fun setFilePriority(hash: String, file: Int, priority: Int) = onEngine {
+        if (engine.setFilePriority(hash, file, priority)) {
+            records = records.map { rec ->
+                if (rec.hash == hash) {
+                    val prio = rec.filePriorities.toMutableList()
+                    while (prio.size <= file) prio.add(1)
+                    prio[file] = priority
+                    rec.copy(filePriorities = prio)
+                } else rec
+            }
+            persistRecords()
+        }
+    }
+
+    /** Adds a tracker URL to a running torrent and persists it. */
+    fun addTracker(hash: String, url: String) = onEngine {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return@onEngine
+        if (engine.addTracker(hash, trimmed)) {
+            records = records.map { rec ->
+                if (rec.hash == hash && trimmed !in rec.trackers) {
+                    rec.copy(trackers = rec.trackers + trimmed)
+                } else rec
+            }
+            persistRecords()
+        }
+    }
+
+    /** Removes a tracker URL from a running torrent and persists it. */
+    fun removeTracker(hash: String, url: String) = onEngine {
+        if (engine.removeTracker(hash, url)) {
+            records = records.map { rec ->
+                if (rec.hash == hash) rec.copy(trackers = rec.trackers - url) else rec
+            }
+            persistRecords()
+        }
     }
 
     fun setFilter(filter: TorrentFilter) {
@@ -470,6 +520,20 @@ class AppStore(
                             leechClients = (leechClients + name).takeLast(20)
                         }
                     }
+                    10 -> if (antiLeechOn) {
+                        // Built-in anti-leech engine banned a peer (0.1.1).
+                        leechCount++
+                        val reason = when (ev.r) {
+                            "corrupt" -> "封禁:供块校验失败"
+                            "protocol" -> "封禁:协议违规"
+                            "free-ride" -> "封禁:只下不上"
+                            else -> "封禁:${ev.r ?: "未知原因"}"
+                        }
+                        val label = "${reason} ${ev.a ?: ""}".trim()
+                        if (label !in leechClients) {
+                            leechClients = (leechClients + label).takeLast(20)
+                        }
+                    }
                 }
             }
 
@@ -523,10 +587,15 @@ class AppStore(
         lastTotals = totals
         lastGlobalPoll = now
 
-        // Metadata arrived for a magnet → refresh the full mirror once.
+        // Metadata arrived for a magnet → refresh the full mirror once, and
+        // apply the persisted per-file priorities now that files are known.
         for (row in snap.torrents) {
             if (row.meta && infoCache[row.h]?.metadata_ready != true) {
                 engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
+                val rec = records.firstOrNull { it.hash == row.h }
+                if (rec != null && rec.kind == "MAGNET" && rec.filePriorities.isNotEmpty()) {
+                    applyPriorities(row.h, rec.filePriorities)
+                }
             }
         }
 
@@ -583,7 +652,7 @@ class AppStore(
             status = status,
             sizeBytes = (row?.size ?: 0L).takeIf { it > 0L } ?: info?.size ?: base?.sizeBytes ?: 0L,
             downloadedBytes = downloaded,
-            uploadedBytes = 0L, // typebit 0.1.0 limitation — see README
+            uploadedBytes = 0L, // typebit 0.1.1 does not expose per-torrent uploads — see README
             progress = progress,
             pieceCount = (row?.pieces?.toInt() ?: 0).takeIf { it > 0 } ?: info?.piece_count?.toInt() ?: base?.pieceCount ?: 0,
             havePieces = havePieces,
@@ -595,7 +664,7 @@ class AppStore(
             createdBy = info?.created_by,
             comment = info?.comment,
             kind = info?.kind ?: rec.kind,
-            trackers = base?.trackers ?: info?.announce_list.orEmpty().flatten().map { TrackerInfo(url = it) },
+            trackers = buildTrackers(info, rec, base),
             files = base?.files ?: info?.files.orEmpty().map { com.typebit.model.FileEntry(it.path, it.length) },
             seeds = base?.seeds ?: 0,
             peers = base?.peers ?: 0,
@@ -605,7 +674,22 @@ class AppStore(
             category = rec.category,
             tags = rec.tags,
             haveBitsHex = row?.hx ?: base?.haveBitsHex.orEmpty(),
+            filePriorities = rec.filePriorities,
         )
+    }
+
+    /**
+     * The tracker list shown in the detail tab: the metainfo announce tiers
+     * plus any runtime-added trackers persisted on the record. `base` (the
+     * previous frame) already carries the merged list, so the merge only
+     * runs when a frame is first built.
+     */
+    private fun buildTrackers(info: TorrentInfoDto?, rec: TorrentRecord, base: Torrent?): List<TrackerInfo> {
+        val fromMeta = base?.trackers
+            ?: info?.announce_list.orEmpty().flatten().map { TrackerInfo(url = it) }
+        if (base != null || rec.trackers.isEmpty()) return fromMeta
+        val known = fromMeta.mapTo(HashSet()) { it.url }
+        return fromMeta + rec.trackers.filter { it !in known }.map { TrackerInfo(url = it) }
     }
 
     // ---- persistence helpers ----
@@ -615,11 +699,28 @@ class AppStore(
             "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir)
             else -> {
                 val bytes = B64.decode(rec.data)
-                if (bytes == null) null else engine.addTorrent(bytes, rec.saveDir)
+                if (bytes == null) null else engine.addTorrent(bytes, rec.saveDir, rec.filePriorities)
             }
         }
         if (hash == null) {
             _state.update { it.copy(lastError = "恢复失败：${rec.name}") }
+            return
+        }
+        // Re-apply runtime-added trackers (they are not part of the engine's
+        // saved state, so the app-level record is the source of truth).
+        for (t in rec.trackers) {
+            engine.addTracker(hash, t)
+        }
+        // Magnet priorities are applied once refreshStats sees metadata.
+        if (rec.kind != "MAGNET" && rec.filePriorities.isNotEmpty()) {
+            applyPriorities(hash, rec.filePriorities)
+        }
+    }
+
+    /** Applies per-file priorities to an engine torrent (index-aligned). */
+    private fun applyPriorities(hash: String, priorities: List<Int>) {
+        for ((index, p) in priorities.withIndex()) {
+            if (p != 1) engine.setFilePriority(hash, index, p)
         }
     }
 

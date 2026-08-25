@@ -11,7 +11,7 @@ actual external fun nativeDestroyEngine(handle: Long)
 /** Parse `.torrent` bytes → metainfo JSON (no engine add) for the dialog. */
 actual external fun nativeParseTorrent(data: ByteArray): String?
 
-actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String): String?
+actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
 actual external fun nativeStart(handle: Long, hash: String): Int
 actual external fun nativePause(handle: Long, hash: String): Int
@@ -29,6 +29,11 @@ actual external fun nativePeerId(handle: Long): String
 actual external fun nativeTotals(handle: Long): String
 actual external fun nativeSetGlobalLimits(handle: Long, downBytesPerSec: Long, upBytesPerSec: Long): Int
 actual external fun nativeSetSessionConfig(handle: Long, configJson: String): Int
+actual external fun nativeSetFilePriority(handle: Long, hash: String, file: Int, priority: Int): Int
+actual external fun nativeFilePriorities(handle: Long, hash: String): String?
+actual external fun nativeAddTracker(handle: Long, hash: String, url: String): Int
+actual external fun nativeRemoveTracker(handle: Long, hash: String, url: String): Int
+actual external fun nativeTrackers(handle: Long, hash: String): String?
 actual external fun nativeSaveState(handle: Long): ByteArray?
 actual external fun nativeLoadState(handle: Long, data: ByteArray): Int
 actual external fun nativeTakeEvents(handle: Long): String

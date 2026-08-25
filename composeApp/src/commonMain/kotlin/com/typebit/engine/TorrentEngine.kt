@@ -30,7 +30,11 @@ interface TorrentEngine {
     /** Parses `.torrent` bytes without adding (add-dialog preview). */
     fun parseTorrent(data: ByteArray): TorrentInfoDto?
 
-    fun addTorrent(data: ByteArray, saveDir: String): String?
+    /**
+     * Adds a `.torrent` with per-file priorities (0=Skip, 1=Normal, 2=High)
+     * aligned with the file table. Empty list keeps every file at Normal.
+     */
+    fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int> = emptyList()): String?
 
     fun addMagnet(uri: String, saveDir: String): String?
 
@@ -41,6 +45,23 @@ interface TorrentEngine {
     fun resume(hash: String)
 
     fun remove(hash: String): Boolean
+
+    // -- selective download + runtime trackers (typebit 0.1.1) --------------
+
+    /** Sets one file's priority: 0=Skip, 1=Normal, 2=High. */
+    fun setFilePriority(hash: String, file: Int, priority: Int): Boolean
+
+    /** Current per-file priorities of a torrent, or null when unknown. */
+    fun filePriorities(hash: String): List<Int>?
+
+    /** Adds a tracker URL to a running torrent (no restart needed). */
+    fun addTracker(hash: String, url: String): Boolean
+
+    /** Removes a tracker URL from a running torrent. */
+    fun removeTracker(hash: String, url: String): Boolean
+
+    /** Current tracker URLs of a torrent, or null when unknown. */
+    fun trackers(hash: String): List<String>?
 
     // -- queries ------------------------------------------------------------
 
@@ -116,8 +137,10 @@ class NativeTorrentEngine : TorrentEngine {
         return runCatching { BRIDGE_JSON.decodeFromString<TorrentInfoDto>(json) }.getOrNull()
     }
 
-    override fun addTorrent(data: ByteArray, saveDir: String): String? =
-        requireEngine().let { nativeAddTorrent(it, data, saveDir) }
+    override fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int>): String? {
+        val prioJson = filePriorities.joinToString(prefix = "[", postfix = "]")
+        return requireEngine().let { nativeAddTorrent(it, data, saveDir, prioJson) }
+    }
 
     override fun addMagnet(uri: String, saveDir: String): String? =
         requireEngine().let { nativeAddMagnet(it, uri, saveDir) }
@@ -133,6 +156,29 @@ class NativeTorrentEngine : TorrentEngine {
     }
 
     override fun remove(hash: String): Boolean = requireEngine().let { nativeRemove(it, hash) == 0 }
+
+    override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean =
+        requireEngine().let { nativeSetFilePriority(it, hash, file, priority) == 0 }
+
+    override fun filePriorities(hash: String): List<Int>? {
+        val json = requireEngine().let { nativeFilePriorities(it, hash) } ?: return null
+        return runCatching {
+            BRIDGE_JSON.decodeFromString<List<Int>>(json)
+        }.getOrNull()
+    }
+
+    override fun addTracker(hash: String, url: String): Boolean =
+        requireEngine().let { nativeAddTracker(it, hash, url) == 0 }
+
+    override fun removeTracker(hash: String, url: String): Boolean =
+        requireEngine().let { nativeRemoveTracker(it, hash, url) == 0 }
+
+    override fun trackers(hash: String): List<String>? {
+        val json = requireEngine().let { nativeTrackers(it, hash) } ?: return null
+        return runCatching {
+            BRIDGE_JSON.decodeFromString<List<String>>(json)
+        }.getOrNull()
+    }
 
     override fun progress(hash: String): Double = requireEngine().let { nativeProgress(it, hash) }
 

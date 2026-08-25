@@ -7,19 +7,18 @@
 //! JSON and pushed into a shared queue that Kotlin polls.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use typebit::engine::Engine;
 use typebit::platform::NetAddr;
-use typebit::session::SessionConfig;
+use typebit::session::{FilePriority, SessionConfig, WebSeedConfig};
+use typebit::socks::ProxyConfig;
 use typebit::{EngineConfig, EngineEvent, Host, InfoHash};
 
 use crate::host::{LogBuffer, NativeHost};
 use crate::json::JsonWriter;
-use crate::leech;
 use crate::meta::MetaRegistry;
 
 /// Engine tick cadence (ms). Chosen to balance CPU and UI responsiveness.
@@ -33,6 +32,9 @@ pub enum Cmd {
     AddTorrent {
         data: Vec<u8>,
         save_dir: String,
+        /// Per-file priority bytes (0=Skip, 1=Normal, 2=High), aligned with
+        /// the torrent's file table. Empty = all Normal.
+        file_priorities: Vec<u8>,
         tx: Sender<Result<String, String>>,
     },
     AddMagnet {
@@ -95,7 +97,36 @@ pub enum Cmd {
     SetSessionConfig {
         cfg: SessionConfig,
     },
-    /// Global wire counters (down_total, up_total) from the host limiter.
+    /// Selective download (typebit 0.1.1): set one file's priority.
+    SetFilePriority {
+        hash: String,
+        file: u32,
+        prio: u8,
+        tx: Sender<Result<(), String>>,
+    },
+    /// Current per-file priorities of a torrent as a JSON array.
+    FilePriorities {
+        hash: String,
+        tx: Sender<Option<String>>,
+    },
+    /// Add a tracker URL to a running torrent (0.1.1, no restart needed).
+    AddTracker {
+        hash: String,
+        url: String,
+        tx: Sender<Result<(), String>>,
+    },
+    /// Remove a tracker URL from a running torrent.
+    RemoveTracker {
+        hash: String,
+        url: String,
+        tx: Sender<Result<(), String>>,
+    },
+    /// Current tracker URLs of a torrent as a JSON array.
+    Trackers {
+        hash: String,
+        tx: Sender<Option<String>>,
+    },
+    /// Global wire counters (down_total, up_total) from the host.
     Totals {
         tx: Sender<(u64, u64)>,
     },
@@ -165,9 +196,7 @@ pub fn spawn_engine(
 
 /// The engine thread's main loop.
 fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, events: EventQueue) {
-    let down_limit = Arc::new(AtomicU64::new(0));
-    let up_limit = Arc::new(AtomicU64::new(0));
-    let mut host = NativeHost::new(down_limit.clone(), up_limit.clone(), logs.clone());
+    let mut host = NativeHost::new(logs.clone());
     // Bind TCP now so the actual port (possibly ephemeral) is fixed before
     // the first announce. The engine advertises engine_cfg.listen_port; if
     // binding fell back, we log a warning (see host.rs).
@@ -180,9 +209,7 @@ fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, ev
     while running {
         // 1) Drain commands.
         while let Ok(cmd) = cmd_rx.try_recv() {
-            if let Some(stop) =
-                handle_cmd(&mut engine, &mut meta, cmd, &events, &down_limit, &up_limit)
-            {
+            if let Some(stop) = handle_cmd(&mut engine, &mut meta, cmd, &events) {
                 running = !stop;
                 break;
             }
@@ -204,21 +231,25 @@ fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, ev
         // 4) Serialize events into the shared queue (one object per event).
         let evs = engine.take_events();
         if !evs.is_empty() {
-            // Keep the mirror in sync: metadata arriving for a magnet, and
-            // run anti-leech detection on every peer connection.
+            // Keep the metadata mirror in sync (magnet metadata arriving),
+            // and emit the soft anti-leech detection (t=9) using the
+            // engine's own client fingerprinting. Hard bans (t=10) are
+            // emitted by the engine's built-in anti-leech engine.
             for ev in &evs {
                 if let EngineEvent::MetadataComplete { info_hash } = ev {
                     meta.mark_metadata_ready(&info_hash.to_hex());
                 }
                 if let EngineEvent::PeerConnected { peer_id, addr, .. } = ev {
-                    if let Some(name) = leech::detect_leech(peer_id) {
+                    let client = typebit::leech::fingerprint(peer_id);
+                    if client.class() == typebit::leech::ClientClass::Leech {
+                        let name = client.code_str();
                         let a = addr_string(addr);
                         engine.host.log(
                             typebit::platform::LogLevel::Warn,
                             &format!("anti-leech: {name} ({a}) is a known leeching client"),
                         );
                         if let Ok(mut q) = events.lock() {
-                            q.push_back(anti_leech_json(name, &a));
+                            q.push_back(anti_leech_json(&name, &a));
                         }
                     }
                 }
@@ -246,16 +277,29 @@ fn handle_cmd(
     meta: &mut MetaRegistry,
     cmd: Cmd,
     events: &EventQueue,
-    down_limit: &AtomicU64,
-    up_limit: &AtomicU64,
 ) -> Option<bool> {
     match cmd {
-        Cmd::AddTorrent { data, save_dir, tx } => {
+        Cmd::AddTorrent {
+            data,
+            save_dir,
+            file_priorities,
+            tx,
+        } => {
             let res = engine.add_torrent(&data, &save_dir).map(|h| h.to_hex());
             let res = match res {
                 Ok(hex) => {
                     if let Ok(t) = typebit::metainfo::Torrent::from_bytes(&data) {
                         meta.register(&t);
+                    }
+                    // Selective download (0.1.1): apply per-file priorities
+                    // immediately so skipped files are never requested.
+                    if let Ok(h) = InfoHash::from_hex(&hex) {
+                        for (i, p) in file_priorities.iter().enumerate() {
+                            if *p != 1 {
+                                let _ =
+                                    engine.set_file_priority(&h, i as u32, file_priority_from_u8(*p));
+                            }
+                        }
                     }
                     Ok(hex)
                 }
@@ -436,13 +480,77 @@ fn handle_cmd(
             let _ = tx.send(pid);
         }
         Cmd::SetLimits { down, up } => {
-            down_limit.store(down, Ordering::Relaxed);
-            up_limit.store(up, Ordering::Relaxed);
+            // typebit 0.1.1 has built-in global token-bucket limits.
+            engine.set_global_limits(down, up);
         }
         Cmd::SetSessionConfig { cfg } => {
-            // Applies to torrents added from now on (0.1.0 has no runtime
-            // per-session mutation — see README).
+            // Applies to torrents added from now on.
             engine.cfg.session = cfg;
+        }
+        Cmd::SetFilePriority { hash, file, prio, tx } => {
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => engine
+                    .set_file_priority(&h, file, file_priority_from_u8(prio))
+                    .map_err(|e| e.tag().to_string()),
+                Err(_) => Err("invalid hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
+        Cmd::FilePriorities { hash, tx } => {
+            let v = InfoHash::from_hex(&hash)
+                .ok()
+                .and_then(|h| engine.file_priorities(&h))
+                .map(|ps| {
+                    let mut w = JsonWriter::new();
+                    w.begin_array();
+                    for (i, p) in ps.iter().enumerate() {
+                        if i > 0 {
+                            w.comma();
+                        }
+                        w.u64(p.to_byte() as u64);
+                    }
+                    w.end_array();
+                    w.into_string()
+                });
+            let _ = tx.send(v);
+        }
+        Cmd::AddTracker { hash, url, tx } => {
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => engine
+                    .add_tracker(&h, &url)
+                    .map(|_| ())
+                    .map_err(|e| e.tag().to_string()),
+                Err(_) => Err("invalid hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
+        Cmd::RemoveTracker { hash, url, tx } => {
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => engine
+                    .remove_tracker(&h, &url)
+                    .map(|_| ())
+                    .map_err(|e| e.tag().to_string()),
+                Err(_) => Err("invalid hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
+        Cmd::Trackers { hash, tx } => {
+            let v = InfoHash::from_hex(&hash)
+                .ok()
+                .and_then(|h| engine.trackers(&h))
+                .map(|ts| {
+                    let mut w = JsonWriter::new();
+                    w.begin_array();
+                    for (i, u) in ts.iter().enumerate() {
+                        if i > 0 {
+                            w.comma();
+                        }
+                        w.string(u);
+                    }
+                    w.end_array();
+                    w.into_string()
+                });
+            let _ = tx.send(v);
         }
         Cmd::Totals { tx } => {
             let totals = engine.host.totals();
@@ -456,6 +564,16 @@ fn handle_cmd(
         Cmd::LoadState { data } => {
             if let Ok(st) = typebit::state::SessionState::from_binary(&data) {
                 let now = engine.host.now_ms();
+                // 0.1.1: torrents are re-added first (add_torrent), then
+                // restore_torrent re-applies verified pieces, per-file
+                // priorities, per-task limits and the reputation ledger;
+                // load_state restores the DHT routing table.
+                for t in &st.torrents {
+                    let h = bytes_to_infohash(&t.info_hash);
+                    if let Some(h) = h {
+                        let _ = engine.restore_torrent(&h, t);
+                    }
+                }
                 engine.load_state(&st, now);
             }
         }
@@ -538,6 +656,20 @@ fn event_to_json(ev: &EngineEvent) -> String {
             w.comma();
             w.kv_u64("n", *n as u64);
         }
+        // A peer was banned by the built-in anti-leech engine (0.1.1).
+        EngineEvent::PeerBanned {
+            info_hash,
+            addr,
+            reason,
+        } => {
+            w.kv_u64("t", 10);
+            w.comma();
+            w.kv_string("h", &info_hash.to_hex());
+            w.comma();
+            w.kv_string("a", &addr_string(addr));
+            w.comma();
+            w.kv_string("r", &ban_reason_str(reason));
+        }
         // `EngineEvent` is `#[non_exhaustive]` (forward-compatible enum).
         _ => {}
     }
@@ -549,7 +681,43 @@ fn addr_string(a: &NetAddr) -> String {
     a.to_alloc_string()
 }
 
-/// Anti-leech detection event (t=9): a known leeching client connected.
+/// Stable JSON reason code for a [`typebit::leech::BanReason`].
+fn ban_reason_str(r: &typebit::leech::BanReason) -> String {
+    match r {
+        typebit::leech::BanReason::Corrupt => "corrupt".to_string(),
+        typebit::leech::BanReason::Protocol => "protocol".to_string(),
+        typebit::leech::BanReason::FreeRide => "free-ride".to_string(),
+    }
+}
+
+/// Decode a persisted priority byte (0=Skip, 1=Normal, 2=High); unknown
+/// values degrade to Normal so a corrupt blob can never skip a file.
+fn file_priority_from_u8(b: u8) -> FilePriority {
+    match b {
+        0 => FilePriority::Skip,
+        2 => FilePriority::High,
+        _ => FilePriority::Normal,
+    }
+}
+
+/// Rebuild an `InfoHash` from raw state bytes (20=v1, 32=v2).
+fn bytes_to_infohash(bytes: &[u8]) -> Option<InfoHash> {
+    match bytes.len() {
+        20 => {
+            let mut h = [0u8; 20];
+            h.copy_from_slice(bytes);
+            Some(InfoHash::v1(h))
+        }
+        32 => {
+            let mut h = [0u8; 32];
+            h.copy_from_slice(bytes);
+            Some(InfoHash::v2(h))
+        }
+        _ => None,
+    }
+}
+
+/// Anti-leech soft-detection event (t=9): a known leeching client connected.
 fn anti_leech_json(client: &str, addr: &str) -> String {
     let mut w = JsonWriter::new();
     w.begin_object();
@@ -585,18 +753,77 @@ pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, Session
     let listen_port = num("listen_port", typebit::consts::DEFAULT_PORT as u64) as u16;
     let cache_bytes = num("cache_bytes", typebit::consts::DEFAULT_CACHE_BYTES);
     let dht_enabled = flag("dht_enabled", true);
+    let global_up = num("global_upload_limit_bps", 0);
+    let global_down = num("global_download_limit_bps", 0);
+    let global_max_connections = num("global_max_connections", 512) as usize;
+    let max_connections_per_ip = num("max_connections_per_ip", 8) as u32;
+    let port_mapping = flag("port_mapping", false);
+    let verify_workers = num("verify_workers", 0) as usize;
+    let connect_timeout_ms = num("connect_timeout_ms", 30_000);
+    let proxy = parse_proxy(&root);
 
     let mut session = parse_session_fields(&root, save_dir)?;
     session.save_dir = save_dir.to_string();
+    session.proxy = proxy.clone();
 
     let cfg = EngineConfig {
         listen_port,
         cache_bytes,
         dht_enabled,
+        global_upload_limit_bps: global_up,
+        global_download_limit_bps: global_down,
+        global_max_connections,
+        max_connections_per_ip,
+        port_mapping,
+        verify_workers,
+        proxy,
+        connect_timeout_ms,
         session: session.clone(),
     };
 
     Ok((cfg, session))
+}
+
+/// Parse a SOCKS5 proxy blob: `{"enabled":bool,"host":"..","port":n,
+/// "username":"..","password":".."}` (anonymous when no credentials).
+fn parse_proxy(root: &nextjson::Value) -> Option<ProxyConfig> {
+    use nextjson::Value;
+    let obj = root.get("proxy")?;
+    let enabled = obj.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let host = obj.get("host").and_then(Value::as_str)?;
+    let port = obj.get("port").and_then(Value::as_u64).unwrap_or(9050) as u16;
+    let addr = parse_addr(host, port)?;
+    let username = obj.get("username").and_then(Value::as_str).map(str::to_string);
+    let password = obj.get("password").and_then(Value::as_str).map(str::to_string);
+    Some(ProxyConfig {
+        socks5: addr,
+        username: username.filter(|s| !s.is_empty()),
+        password: password.filter(|s| !s.is_empty()),
+        handshake_timeout_ms: 15_000,
+    })
+}
+
+/// Parse a `host[:port]` string into a [`NetAddr`] (IPv4/IPv6, or a
+/// hostname resolved via the OS). Returns `None` when unresolvable.
+fn parse_addr(host: &str, port: u16) -> Option<NetAddr> {
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        return Some(NetAddr::V4(ip.octets(), port));
+    }
+    if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
+        return Some(NetAddr::V6(ip.octets(), port));
+    }
+    // hostname → first A record
+    let ip = std::net::ToSocketAddrs::to_socket_addrs(&(host.to_string(), port))
+        .ok()?
+        .next()?
+        .ip();
+    match ip {
+        std::net::IpAddr::V4(v4) => Some(NetAddr::V4(v4.octets(), port)),
+        std::net::IpAddr::V6(v6) => Some(NetAddr::V6(v6.octets(), port)),
+    }
 }
 
 /// Parse a session-defaults JSON blob (applies to torrents added afterwards).
@@ -625,12 +852,15 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
     let smart_scheduling = flag("smart_scheduling", true);
     let use_default_trackers = flag("use_default_trackers", true);
 
-    let choke = typebit::swarm::ChokeConfig {
+    // typebit 0.1.1 folded the old ChokeConfig into the anti-leech engine's
+    // LeechConfig (slot management + choke + ban policy in one struct).
+    let leech = typebit::leech::LeechConfig {
         seeding_slots: num("seeding_slots", 8) as u32,
         leeching_slots: num("leeching_slots", 8) as u32,
         optimistic_interval_ms: num("optimistic_interval_ms", 30_000),
         snub_timeout_ms: num("snub_timeout_ms", 60_000),
-        interval_ms: num("choke_interval_ms", 10_000),
+        rechoke_interval_ms: num("choke_interval_ms", 10_000),
+        ..Default::default()
     };
 
     let scheduler = typebit::scheduler::SchedulerConfig {
@@ -656,17 +886,25 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
         .and_then(|s| hex_decode_32(&s))
         .unwrap_or([0u8; 32]);
 
+    let upload_limit_bps = num("upload_limit_bps", 0);
+    let download_limit_bps = num("download_limit_bps", 0);
+
     Ok(SessionConfig {
         save_dir: save_dir.to_string(),
         max_peers,
         request_pipeline,
         endgame_pieces,
         smart_scheduling,
-        choke,
+        leech,
         scheduler,
         node_secret,
         trackers,
         use_default_trackers,
+        upload_limit_bps,
+        download_limit_bps,
+        file_priorities: Vec::new(),
+        proxy: None,
+        webseed: WebSeedConfig::default(),
     })
 }
 

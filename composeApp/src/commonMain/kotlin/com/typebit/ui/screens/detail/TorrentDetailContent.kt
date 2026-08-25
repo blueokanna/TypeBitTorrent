@@ -58,8 +58,8 @@ fun TorrentDetailContent(
         }
         when (tabs[tab]) {
             DetailTab.INFO -> InfoTab(torrent)
-            DetailTab.FILES -> FilesTab(torrent)
-            DetailTab.TRACKERS -> TrackersTab(torrent)
+            DetailTab.FILES -> FilesTab(torrent, store)
+            DetailTab.TRACKERS -> TrackersTab(torrent, store)
             DetailTab.PEERS -> PeersTab(torrent)
             DetailTab.PIECES -> PiecesTab(torrent)
         }

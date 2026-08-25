@@ -18,7 +18,7 @@ Material 3 Android app), and a thin JNI bridge in between.
 └──────────────────────────────┘        └──────────────┬──────────────┘
                                                        │ statically links
                                                 ┌──────▼──────┐
-                                                │ typebit 0.1 │ (AGPL-3.0)
+                                                │ typebit 0.1.1 │ (PolyForm)
                                                 └─────────────┘
 ```
 
@@ -52,7 +52,7 @@ docs/                architecture.md · settings.md
 - Android SDK (for the Android target) + NDK `26.2.11394342` (for the `.so`)
 - Rust stable (1.95+) with the Android targets:
   `rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`
-- The `typebit` checkout (already referenced by path in `native/Cargo.toml`)
+- The `typebit` crate (referenced from crates.io by `native/Cargo.toml`)
 
 ### 1. Native bridge
 
@@ -79,17 +79,29 @@ gradlew.bat :composeApp:assembleDebug
 
 - Add torrents from **.torrent files** (desktop file dialog / Android SAF)
   and from **magnet links** (also `ed2k://`, `thunder://`, `qqdl://` —
-  the engine parses them; only BitTorrent actually downloads in 0.1.0).
+  the engine parses them; only BitTorrent actually downloads).
+- **Selective download** (typebit 0.1.1): pick which files to download in
+  the add dialog and change per-file priority (跳过/普通/高) at runtime in
+  the 文件 tab — skipped files are never requested.
 - Start / pause / resume / delete with persisted resume data (verified-piece
-  bitfields + DHT routing table survive restarts).
+  bitfields, per-file priorities, per-task limits, DHT routing table survive
+  restarts via `restore_torrent`).
+- **Runtime tracker management**: add/remove announce URLs from the Tracker
+  tab with no restart, and they persist across sessions.
 - qBittorrent-shaped UI: state filters, categories, tags, a transfer table
   with progress/ratio/ETA/speeds, and a detail panel with 信息 / 文件 /
   Tracker / Peers / 分块 tabs (piece heat-grid from the real bitfield).
 - A full settings dialog with the same categories as qBittorrent
   (行为 / 下载 / 连接 / 速度 / BitTorrent / WebUI / 高级 / RSS) — see
   `docs/settings.md` for which options are live vs. stored.
-- Global download/upload speed limits enforced **at the transport layer**
-  (a token bucket inside the Rust `Host`), with scheduled alternative limits.
+- Global download/upload speed limits enforced **by the engine's built-in
+  token buckets** (typebit 0.1.1), with scheduled alternative limits.
+- **Anti-leech engine** (typebit 0.1.1): client fingerprinting, per-peer
+  reputation, corrupt-block / protocol-violation accounting, and **hard
+  peer bans** — the status bar counts both detections and bans.
+- **Parallel piece verification** (worker pool), **web seeds** (BEP-19),
+  **SOCKS5 proxy** (outbound-only anonymity) and **UPnP/NAT-PMP** port
+  mapping, all wired from the connection settings.
 - DHT node count, engine log ring, RSS feed reader (real HTTP + XML),
   torrent search (local filter + open-in-browser engines).
 - **Material You theming** (外观 settings): a from-scratch pure-Kotlin
@@ -101,41 +113,30 @@ gradlew.bat :composeApp:assembleDebug
 - **Tracker-list import**: paste an HTTPS URL (e.g. `ngosang/trackerslist`)
   in BitTorrent settings — the app fetches it, parses plain/JSON/HTML and
   appends the announce URLs to your extra-trackers.
-- **Anti-leech detection**: every peer connection is fingerprinted from its
-  peer ID; known leeching clients (Xunlei and its variants) are detected,
-  counted and surfaced in the status bar + engine log.
-- **Performance**: a single combined state refresh per poll tick (one
-  recomposition), bounded event/log queues, keyed lazy lists and a hard
-  minimum window size so the layout never collapses.
+- **Performance**: all engine I/O runs on a dedicated background executor
+  (never the UI thread); each poll tick is a single batched native snapshot
+  regardless of torrent count; bounded event/log queues and keyed lazy lists.
 
 ## Honest limitations (read before you file a bug)
 
-`typebit 0.1.0`'s public API is deliberately narrow, and this app does not
-fake what the engine cannot report:
+`typebit 0.1.1`'s public API is still deliberately narrow, and this app does
+not fake what the engine cannot report:
 
 - **Per-torrent upload bytes/rate are not exposed** by the engine, so the
-  UI shows `—` for them; global wire rates come from the bridge's own
-  counters.
+  UI shows `—` for them; global wire rates come from the bridge's counters.
 - **Peer lists are not exposed** either. The Peers tab shows connection
   counts derived from engine events, not a fabricated table.
-- **Magnet metadata**: once fetched, the engine emits
-  `MetadataComplete` but does not expose the info dict, so magnet torrents
-  show the `dn` name and an unknown file list (progress still works).
-- **Encryption mode, UPnP/NAT-PMP, uTP, LSD** are stored settings with a
-  qBittorrent-shaped UI; the 0.1.0 wire protocol is plaintext and the
-  bridge implements none of these yet.
-- **Per-torrent speed limits and listen-port changes apply on the next
-  engine start** — the 0.1.0 API has no runtime setters for them.
-- **Anti-leech is detection-only**: `typebit 0.1.0`'s `Host` trait exposes
-  no per-peer reject/ban API, so the bridge identifies leeching clients
-  from peer IDs and reports them (status bar + logs) but cannot refuse
-  their connections yet. Connection-level blocking is a roadmap item that
-  needs an engine hook.
+- **Magnet metadata**: once fetched, the engine emits `MetadataComplete`
+  but still exposes no metainfo getter, so the bridge keeps its own
+  add-time metadata mirror (name/files/trackers) for the UI.
+- **Encryption mode, uTP, LSD** are stored settings with a qBittorrent-shaped
+  UI; the 0.1.1 wire protocol is plaintext and the bridge implements none
+  of these yet.
 - The built-in **WebUI server is a roadmap item**; its settings are
   persisted but not served.
 
 The goal of this project is correctness over surface area. Where a feature
-cannot be done honestly with the 0.1.0 engine, it is labeled as such in the
+cannot be done honestly with the 0.1.1 engine, it is labeled as such in the
 UI and in this README rather than simulated.
 
 ## The JNI bridge
@@ -149,14 +150,15 @@ threading model.
 
 ## License
 
-Two layers, two licenses — see `NOTICE.md` for the reasoning:
+This repository (application + bridge) is licensed under **PolyForm
+Perimeter License 1.0.0** — the same license as the `typebit 0.1.1` engine
+it statically links. See `LICENSE` and `NOTICE.md` for details.
 
 | Layer | License |
 | --- | --- |
 | Kotlin application (`composeApp/`) | **PolyForm Perimeter 1.0.0** (see `LICENSE`) |
-| Rust bridge (`native/`) | **AGPL-3.0-or-later** (it statically links the AGPL `typebit` core) |
-
-The `typebit` engine itself is AGPL-3.0-or-later © blueokanna / HyphenTeam.
+| Rust bridge (`native/`) | **PolyForm Perimeter 1.0.0** |
+| `typebit` engine | **PolyForm Perimeter 1.0.0** © blueokanna / HyphenTeam |
 
 ---
 

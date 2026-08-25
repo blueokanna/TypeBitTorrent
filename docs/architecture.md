@@ -18,8 +18,8 @@ the seams and the trade-offs.
 └──────────────────────────┬───────────────────────────────┘
                            │ JNI (one cdylib for both targets)
 ┌──────────────────────────▼───────────────────────────────┐
-│ native/ (Rust, AGPL)                                      │
-│  jni_glue.rs  22 JNI entry points (thin, defensive)       │
+│ native/ (Rust, PolyForm) │
+│  jni_glue.rs  30 JNI entry points (thin, defensive)       │
 │  engine.rs    worker thread · mpsc commands · JSON events │
 │  host.rs       NativeHost — complete typebit::Host        │
 │  meta.rs       add-time metadata mirror                   │
@@ -27,7 +27,7 @@ the seams and the trade-offs.
 └──────────────────────────┬───────────────────────────────┘
                            │ static link
 ┌──────────────────────────▼───────────────────────────────┐
-│ typebit 0.1.0 (Rust, AGPL) — the actual torrent engine    │
+│ typebit 0.1.1 (Rust, PolyForm) — the actual torrent engine │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -63,11 +63,14 @@ A complete `typebit::Host` in `std`:
 - **HTTP(S)** — delegated to `typebit::host_std::StdHost`, whose
   `courierust` client has an in-tree TLS implementation (no system deps).
 - **Disk** — `std::fs` with `set_len` preallocation and `sync_data` flush.
-- **Global speed limits** — a token bucket (`RateLimiter`) inside the host.
-  `tcp_recv` returns `Ok(0)` when the per-tick budget is exhausted, which
-  the engine treats as "no more data this tick"; `tcp_send` accepts a
-  partial prefix and the engine re-queues the rest. This is the only honest
-  place typebit 0.1.0 lets us shape traffic.
+- **Global speed limits** — enforced by the engine's built-in token buckets
+  (`EngineConfig::global_*_limit_bps`, typebit 0.1.1); the host only counts
+  wire bytes for the status bar.
+- **Web seeds** (BEP-19) — `http_get_range` delegates Range requests to the
+  std host, which rejects bodies that are not exactly the requested window.
+- **UPnP/NAT-PMP** — `local_ip` is discovered with the UDP-connect trick;
+  `default_gateway`/`http_post` are best-effort (the mapper degrades
+  gracefully when the platform cannot discover them).
 
 ## The Kotlin store
 
@@ -94,14 +97,14 @@ On startup the app: loads settings → starts the engine → re-adds every
 record → restores the resume blob → starts unpaused torrents → begins
 polling.
 
-## Honest data gaps (from the 0.1.0 API)
+## Honest data gaps (from the 0.1.1 API)
 
 | UI feature | Status | Why |
 | --- | --- | --- |
 | Per-torrent upload bytes / rate | `—` | no engine getter |
 | Peer table | counts only | no engine getter |
-| Magnet file list | unknown until a future engine exposes the info dict | engine emits `MetadataComplete` without payload |
-| Encryption / UPnP / uTP / LSD | stored settings | wire protocol is plaintext in 0.1.0 |
+| Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | engine emits the event without the info dict, so the bridge keeps its own mirror |
+| Encryption / uTP / LSD | stored settings | wire protocol is plaintext in 0.1.1 |
 
 These are documented in the README and marked in the UI; nothing is
 simulated.

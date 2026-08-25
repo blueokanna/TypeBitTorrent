@@ -2,10 +2,11 @@
 
 <https://polyformproject.org/licenses/perimeter/1.0.0>
 
-This license applies to the Kotlin/Compose application source code in this
-repository (the `composeApp` module and root build files). The Rust bridge
-in `native/` is licensed separately under AGPL-3.0-or-later because it
-statically links the AGPL-licensed `typebit` engine — see `NOTICE.md`.
+This license applies to all source code in this repository — the
+Kotlin/Compose application (`composeApp/`), the Rust native bridge
+(`native/`), and the root build files. The bundled engine crate
+(`typebit` 0.1.1) is licensed by blueokanna / HyphenTeam under the same
+PolyForm Perimeter License 1.0.0 — see `NOTICE.md`.
 
 ## Acceptance
 

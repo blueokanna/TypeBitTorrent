@@ -10,12 +10,15 @@
 //! * **HTTP(S)** — delegated to `typebit::host_std::StdHost`, which wraps the
 //!   in-tree `courierust` client (its TLS is built-in, no system deps).
 //! * **Disk** — `std::fs` with `set_len` preallocation and `sync_data` flush.
-//! * **Global speed limits** — enforced here at the transport layer with a
-//!   token bucket; it is the only honest place `typebit 0.1.0` lets us shape
-//!   traffic (see README for the full discussion).
+//! * **Wire counters** — total downloaded/uploaded bytes for the status bar.
+//!
+//! Global speed limits are enforced **by the engine itself** since
+//! `typebit 0.1.1` ships built-in token-bucket rate limiting
+//! (`EngineConfig::global_*_limit_bps`), so the host no longer shapes
+//! traffic — it only counts it.
 //!
 //! The whole struct is owned by the single engine thread; the only shared
-//! state is the `Arc<AtomicU64>` limit knobs and the log ring buffer.
+//! state is the log ring buffer.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -23,7 +26,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{
     Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream, UdpSocket,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -44,84 +46,6 @@ const LOG_CAPACITY: usize = 2048;
 
 /// Shared log ring: `(level, message)` pairs, oldest first.
 pub type LogBuffer = Arc<Mutex<VecDeque<(u8, String)>>>;
-
-/// Token-bucket traffic shaper for global download/upload limits.
-///
-/// `0` in the limit atomics means "unlimited". Limits are expressed in
-/// bytes per second. The bucket refills on every access using wall time, so
-/// it behaves correctly across `tick()` boundaries.
-struct RateLimiter {
-    down_limit: Arc<AtomicU64>,
-    up_limit: Arc<AtomicU64>,
-    down_avail: u64,
-    up_avail: u64,
-    last_ms: u64,
-    down_total: u64,
-    up_total: u64,
-}
-
-impl RateLimiter {
-    fn new(down_limit: Arc<AtomicU64>, up_limit: Arc<AtomicU64>) -> Self {
-        RateLimiter {
-            down_limit,
-            up_limit,
-            down_avail: 0,
-            up_avail: 0,
-            last_ms: 0,
-            down_total: 0,
-            up_total: 0,
-        }
-    }
-
-    fn refill(&mut self, now: u64) {
-        if self.last_ms == 0 {
-            self.last_ms = now;
-            return;
-        }
-        let dt = now.saturating_sub(self.last_ms);
-        self.last_ms = now;
-        let dl = self.down_limit.load(Ordering::Relaxed);
-        let ul = self.up_limit.load(Ordering::Relaxed);
-        Self::refill_one(dl, &mut self.down_avail, dt);
-        Self::refill_one(ul, &mut self.up_avail, dt);
-    }
-
-    fn refill_one(limit: u64, avail: &mut u64, dt_ms: u64) {
-        if limit == 0 {
-            *avail = u64::MAX;
-        } else {
-            // dt in ms, limit in bytes/sec → increment = limit * dt / 1000.
-            let inc = dt_ms.saturating_mul(limit) / 1000;
-            // Allow a 4-second burst so short idle gaps don't stall a peer.
-            let burst_cap = limit.saturating_mul(4);
-            *avail = avail.saturating_add(inc).min(burst_cap);
-        }
-    }
-
-    /// Reserve download budget; returns how many of `want` bytes may be read.
-    fn take_down(&mut self, want: usize, now: u64) -> usize {
-        self.refill(now);
-        if self.down_limit.load(Ordering::Relaxed) == 0 {
-            return want;
-        }
-        let take = (want as u64).min(self.down_avail) as usize;
-        self.down_avail -= take as u64;
-        self.down_total += take as u64;
-        take
-    }
-
-    /// Reserve upload budget; returns how many of `want` bytes may be sent.
-    fn take_up(&mut self, want: usize, now: u64) -> usize {
-        self.refill(now);
-        if self.up_limit.load(Ordering::Relaxed) == 0 {
-            return want;
-        }
-        let take = (want as u64).min(self.up_avail) as usize;
-        self.up_avail -= take as u64;
-        self.up_total += take as u64;
-        take
-    }
-}
 
 /// Connection bookkeeping on the engine thread.
 enum ConnSlot {
@@ -146,12 +70,14 @@ pub struct NativeHost {
     pending_connects: usize,
     files: HashMap<DiskId, std::fs::File>,
     http: typebit::host_std::StdHost,
-    limiter: RateLimiter,
+    /// Cumulative wire bytes (downloaded, uploaded) for the status bar.
+    down_total: u64,
+    up_total: u64,
     logs: LogBuffer,
 }
 
 impl NativeHost {
-    pub fn new(down_limit: Arc<AtomicU64>, up_limit: Arc<AtomicU64>, logs: LogBuffer) -> Self {
+    pub fn new(logs: LogBuffer) -> Self {
         let (established_tx, established_rx) = channel();
         NativeHost {
             listener: None,
@@ -164,7 +90,8 @@ impl NativeHost {
             pending_connects: 0,
             files: HashMap::new(),
             http: typebit::host_std::StdHost::new(),
-            limiter: RateLimiter::new(down_limit, up_limit),
+            down_total: 0,
+            up_total: 0,
             logs,
         }
     }
@@ -276,7 +203,7 @@ impl NativeHost {
 
     /// Global counters for the status bar: (down_total, up_total).
     pub fn totals(&self) -> (u64, u64) {
-        (self.limiter.down_total, self.limiter.up_total)
+        (self.down_total, self.up_total)
     }
 
     fn log_internal(&mut self, level: LogLevel, msg: &str) {
@@ -323,6 +250,29 @@ impl Host for NativeHost {
         self.http.http_get(url, timeout_ms, out)
     }
 
+    /// BEP-19 web seeds: delegate the Range request to the std host (which
+    /// rejects a body that is not exactly the requested window).
+    fn http_get_range(
+        &mut self,
+        url: &str,
+        range_start: u64,
+        range_end: u64,
+        timeout_ms: u64,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        self.http
+            .http_get_range(url, range_start, range_end, timeout_ms, out)
+    }
+
+    /// A LAN address of this host, required by UPnP IGD AddPortMapping.
+    /// Discovered with the classic UDP-connect trick (no packets are sent).
+    fn local_ip(&self) -> Option<NetAddr> {
+        let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+        sock.connect("8.8.8.8:53").ok()?;
+        let local = sock.local_addr().ok()?;
+        Some(sock_to_netaddr(local))
+    }
+
     fn tcp_connect(&mut self, addr: &NetAddr) -> Result<ConnId> {
         if self.pending_connects >= MAX_PENDING_CONNECTS {
             return Err(Error::Full);
@@ -352,33 +302,27 @@ impl Host for NativeHost {
     }
 
     fn tcp_send(&mut self, id: ConnId, data: &[u8]) -> Result<usize> {
-        let now = self.now_ms();
-        let budget = self.limiter.take_up(data.len(), now);
-        if budget == 0 {
-            return Ok(0);
-        }
         let stream = self.conn(id).ok_or(Error::NotFound)?;
         let _ = stream.set_nonblocking(true);
-        match stream.write(&data[..budget]) {
-            Ok(n) => Ok(n),
+        match stream.write(data) {
+            Ok(n) => {
+                self.up_total = self.up_total.saturating_add(n as u64);
+                Ok(n)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(0),
             Err(_) => Err(Error::Io),
         }
     }
 
     fn tcp_recv(&mut self, id: ConnId, buf: &mut [u8]) -> Result<usize> {
-        let now = self.now_ms();
-        let budget = self.limiter.take_down(buf.len(), now);
-        if budget == 0 {
-            // Budget exhausted this tick — signal "no more data" so the
-            // engine moves on; the bucket refills before the next tick.
-            return Ok(0);
-        }
         let stream = self.conn(id).ok_or(Error::NotFound)?;
         let _ = stream.set_nonblocking(true);
-        match stream.read(&mut buf[..budget]) {
+        match stream.read(buf) {
             Ok(0) => Err(Error::Io), // EOF: peer closed; engine drops it.
-            Ok(n) => Ok(n),
+            Ok(n) => {
+                self.down_total = self.down_total.saturating_add(n as u64);
+                Ok(n)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(Error::WouldBlock),
             Err(_) => Err(Error::Io),
         }

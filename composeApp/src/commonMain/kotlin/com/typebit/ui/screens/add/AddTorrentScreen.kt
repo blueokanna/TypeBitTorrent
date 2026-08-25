@@ -229,7 +229,7 @@ fun AddTorrentScreen(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                                "说明：选择结果会记录在种子条目上；typebit 0.1.0 引擎下载全部文件（详见 README）。",
+                                "勾选 = 下载，未勾选 = 跳过；高/低优先级影响分块调度（typebit 0.1.1 支持按文件选择）。",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -295,6 +295,19 @@ fun AddTorrentScreen(
                             val tags =
                                     tagsText.split(',').map { it.trim() }.filter { it.isNotEmpty() }
                             val effSave = saveDir.ifBlank { Platform.defaultDownloadDir() }
+                            // Per-file priorities aligned with the preview's
+                            // file table (0=Skip, 1=Normal, 2=High) — the
+                            // typebit 0.1.1 engine honors them (selective
+                            // download). Unchecked files are skipped.
+                            val filePriorities = preview?.files.orEmpty().map { f ->
+                                val sel = fileSel[f.displayPath] ?: true
+                                val p = priorities[f.displayPath] ?: 0
+                                when {
+                                    !sel || p == 3 -> 0        // unchecked / SKIP
+                                    p == 1 -> 2                // HIGH
+                                    else -> 1                  // NORMAL / LOW
+                                }
+                            }
                             if (pendingBytes != null) {
                                 store.addTorrentFileEx(
                                         pendingBytes!!,
@@ -302,7 +315,8 @@ fun AddTorrentScreen(
                                         effSave,
                                         category,
                                         tags,
-                                        !startNow
+                                        !startNow,
+                                        filePriorities
                                 )
                             } else {
                                 store.addMagnetEx(magnet, effSave, category, tags, !startNow)

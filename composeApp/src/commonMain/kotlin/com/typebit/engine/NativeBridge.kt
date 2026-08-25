@@ -22,8 +22,13 @@ expect fun nativeDestroyEngine(handle: Long)
 /** Parses `.torrent` bytes → metainfo JSON (no engine add); null on error. */
 expect fun nativeParseTorrent(data: ByteArray): String?
 
-/** Adds a `.torrent`; returns the hex infohash or null on error. */
-expect fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String): String?
+/**
+ * Adds a `.torrent`; returns the hex infohash or null on error.
+ * `prioritiesJson` is a JSON array of per-file priority bytes
+ * (`[0,1,2,…]`; 0=Skip 1=Normal 2=High) aligned with the file table.
+ * Empty/`[]` keeps every file at Normal.
+ */
+expect fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 
 /** Adds a magnet URI; returns the hex infohash or null on error. */
 expect fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
@@ -87,6 +92,25 @@ expect fun nativeSetGlobalLimits(handle: Long, downBytesPerSec: Long, upBytesPer
 
 /** Applies session defaults for torrents added from now on. */
 expect fun nativeSetSessionConfig(handle: Long, configJson: String): Int
+
+// ---------------------------------------------------------------------------
+// Selective download + runtime trackers (typebit 0.1.1)
+// ---------------------------------------------------------------------------
+
+/** Sets one file's priority: 0=Skip, 1=Normal, 2=High. 0 = ok, negative = err. */
+expect fun nativeSetFilePriority(handle: Long, hash: String, file: Int, priority: Int): Int
+
+/** Current per-file priorities of a torrent as a JSON array (or null). */
+expect fun nativeFilePriorities(handle: Long, hash: String): String?
+
+/** Adds a tracker URL to a running torrent. 0 = ok, negative = err. */
+expect fun nativeAddTracker(handle: Long, hash: String, url: String): Int
+
+/** Removes a tracker URL from a running torrent. 0 = ok, negative = err. */
+expect fun nativeRemoveTracker(handle: Long, hash: String, url: String): Int
+
+/** Current tracker URLs of a torrent as a JSON array (or null). */
+expect fun nativeTrackers(handle: Long, hash: String): String?
 
 // ---------------------------------------------------------------------------
 // Persistence

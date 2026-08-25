@@ -20,7 +20,7 @@ final class NativeBridgeKt {
 
     static native long nativeCreateEngine(String configJson, String saveDir);
     static native void nativeDestroyEngine(long handle);
-    static native String nativeAddTorrent(long handle, byte[] data, String saveDir);
+    static native String nativeAddTorrent(long handle, byte[] data, String saveDir, String prioritiesJson);
     static native String nativeAddMagnet(long handle, String uri, String saveDir);
     static native int nativeStart(long handle, String hash);
     static native int nativePause(long handle, String hash);
@@ -38,6 +38,11 @@ final class NativeBridgeKt {
     static native String nativeTotals(long handle);
     static native int nativeSetGlobalLimits(long handle, long down, long up);
     static native int nativeSetSessionConfig(long handle, String configJson);
+    static native int nativeSetFilePriority(long handle, String hash, int file, int priority);
+    static native String nativeFilePriorities(long handle, String hash);
+    static native int nativeAddTracker(long handle, String hash, String url);
+    static native int nativeRemoveTracker(long handle, String hash, String url);
+    static native String nativeTrackers(long handle, String hash);
     static native byte[] nativeSaveState(long handle);
     static native int nativeLoadState(long handle, byte[] data);
     static native String nativeTakeEvents(long handle);
@@ -59,7 +64,7 @@ public class SmokeTest {
         check(h != 0, "engine create");
         System.out.println("[1] engine handle = " + h);
 
-        String hash = NativeBridgeKt.nativeAddTorrent(h, torrent, "./smoke-data");
+        String hash = NativeBridgeKt.nativeAddTorrent(h, torrent, "./smoke-data", "[1]");
         if (hash == null) {
             System.out.println("[2] FAILED logs: " + NativeBridgeKt.nativeTakeLogs(h));
         }
@@ -112,6 +117,21 @@ public class SmokeTest {
         String snap = NativeBridgeKt.nativeSnapshot(h);
         check(snap != null && snap.contains("\"torrents\":[") && snap.contains("\"dht\""), "batched snapshot");
         System.out.println("[16b] snapshot = " + snap);
+
+        // typebit 0.1.1: selective download + runtime trackers
+        check(NativeBridgeKt.nativeSetFilePriority(h, hash, 0, 0) == 0, "set file priority");
+        String prio = NativeBridgeKt.nativeFilePriorities(h, hash);
+        check(prio != null && prio.contains("0"), "file priorities -> " + prio);
+        System.out.println("[16c] file priorities = " + prio);
+
+        check(NativeBridgeKt.nativeAddTracker(h, hash, "udp://tracker.example.com:1337") == 0, "add tracker");
+        check(NativeBridgeKt.nativeAddTracker(h, hash, "http://tracker.example.org/announce") == 0, "add tracker 2");
+        String tr = NativeBridgeKt.nativeTrackers(h, hash);
+        check(tr != null && tr.contains("tracker.example.com"), "trackers -> " + tr);
+        System.out.println("[16d] trackers = " + tr);
+        check(NativeBridgeKt.nativeRemoveTracker(h, hash, "http://tracker.example.org/announce") == 0, "remove tracker");
+        System.out.println("[16e] trackers after remove = " + NativeBridgeKt.nativeTrackers(h, hash));
+
 
         byte[] state = NativeBridgeKt.nativeSaveState(h);
         check(state != null && state.length > 0, "save state");

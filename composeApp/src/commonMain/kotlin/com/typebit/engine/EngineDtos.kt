@@ -107,6 +107,7 @@ data class SnapshotTotalsDto(
  * 1=PeerConnected(h,a,p) 2=PieceVerified(h,piece) 3=HashFailure(h,piece)
  * 4=TorrentComplete(h) 5=MetadataComplete(h) 6=MetadataFailed(h)
  * 7=TrackerAnnounced(h,peers) 8=DhtNodeCount(n)
+ * 9=LeechClientSeen(h? no, c=client,a=addr) 10=PeerBanned(h,a,r=reason)
  */
 @Serializable
 data class EngineEventDto(
@@ -117,8 +118,10 @@ data class EngineEventDto(
     val piece: Int? = null,
     val peers: Int? = null,
     val n: Int? = null,
-    /** Anti-leech: detected client name (t=9). */
+    /** Anti-leech: detected client code (t=9) or ban reason (t=10). */
     val c: String? = null,
+    /** Anti-leech ban reason code: corrupt | protocol | free-ride (t=10). */
+    val r: String? = null,
 )
 
 /** A log line drained from the engine. */

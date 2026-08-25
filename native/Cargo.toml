@@ -3,7 +3,7 @@ name = "typebit_native"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
-license = "AGPL-3.0-or-later"
+license-file = "../LICENSE"
 description = "JNI bridge embedding the TypeBit BitTorrent engine for Android and JVM desktop."
 readme = "README.md"
 
@@ -12,8 +12,8 @@ name = "typebit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-typebit = { version = "0.1", features = ["std"] }
-jni = { version = "0.21", default-features = false }
+typebit = { version = "0.1.1", features = ["std"] }
+jni = { version = "0.22.4"}
 getrandom = "0.4"
 nextjson = { version = "0.1", default-features = false }
 

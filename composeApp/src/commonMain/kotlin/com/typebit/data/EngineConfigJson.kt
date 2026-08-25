@@ -18,11 +18,33 @@ object EngineConfigJson {
     fun engineConfig(settings: AppSettings): String {
         val bt = settings.bitTorrent
         val conn = settings.connection
+        val speed = settings.speed
+        val proxy = settings.connection.proxyType
         val port = if (conn.useRandomPort) Platform.findFreePort() else conn.listenPort
         return buildJsonObject {
             put("listen_port", port)
             put("cache_bytes", bt.cacheBytes)
             put("dht_enabled", bt.enableDht)
+            // typebit 0.1.1 built-in token-bucket global limits (bytes/sec).
+            put("global_download_limit_bps", speed.globalDownloadLimitKib * 1024)
+            put("global_upload_limit_bps", speed.globalUploadLimitKib * 1024)
+            put("global_max_connections", conn.maxConnections)
+            put("max_connections_per_ip", 8)
+            put("verify_workers", 0) // auto: one per core minus one, capped 8
+            put("connect_timeout_ms", 30_000)
+            // UPnP/NAT-PMP is now real in the engine (was stored-only).
+            put("port_mapping", bt.enableUpnp || bt.enableNatPmp)
+            // SOCKS5 proxy (outbound-only anonymity mode).
+            put(
+                "proxy",
+                buildJsonObject {
+                    put("enabled", proxy != ProxyType.NONE)
+                    put("host", settings.connection.proxyHost)
+                    put("port", settings.connection.proxyPort)
+                    put("username", if (settings.connection.proxyAuthEnabled) settings.connection.proxyUsername else "")
+                    put("password", if (settings.connection.proxyAuthEnabled) settings.connection.proxyPassword else "")
+                },
+            )
             put("max_peers", bt.maxPeersPerTorrent)
             put("request_pipeline", bt.requestPipeline)
             put("endgame_pieces", bt.endgamePieces)

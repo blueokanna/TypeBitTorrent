@@ -135,7 +135,7 @@ private class FakeEngine : TorrentEngine {
     override fun stop() {}
     override val isRunning: Boolean = false
     override fun parseTorrent(data: ByteArray): TorrentInfoDto? = null
-    override fun addTorrent(data: ByteArray, saveDir: String): String? = null
+    override fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int>): String? = null
     override fun addMagnet(uri: String, saveDir: String): String? = null
     override fun start(hash: String): Boolean = false
     override fun pause(hash: String) {}
@@ -153,6 +153,11 @@ private class FakeEngine : TorrentEngine {
     override fun totals(): Pair<Long, Long> = 0L to 0L
     override fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long) {}
     override fun setSessionConfig(configJson: String) {}
+    override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean = false
+    override fun filePriorities(hash: String): List<Int>? = null
+    override fun addTracker(hash: String, url: String): Boolean = false
+    override fun removeTracker(hash: String, url: String): Boolean = false
+    override fun trackers(hash: String): List<String>? = null
     override fun saveState(): ByteArray? = null
     override fun loadState(data: ByteArray) {}
     override fun takeEvents(): List<EngineEventDto> = emptyList()

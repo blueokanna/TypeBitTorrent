@@ -109,6 +109,8 @@ data class Torrent(
     val tags: List<String>,
     /** Verified-piece bitfield (MSB-first), hex-encoded; empty when unknown. */
     val haveBitsHex: String = "",
+    /** Per-file priorities (0=Skip, 1=Normal, 2=High); empty = all Normal. */
+    val filePriorities: List<Int> = emptyList(),
 ) {
     val remainingBytes: Long get() = (sizeBytes - downloadedBytes).coerceAtLeast(0L)
 
@@ -159,4 +161,8 @@ data class TorrentRecord(
     val paused: Boolean = false,
     val category: String = "",
     val tags: List<String> = emptyList(),
+    /** Per-file priorities (0=Skip, 1=Normal, 2=High); empty = all Normal. */
+    val filePriorities: List<Int> = emptyList(),
+    /** Extra tracker URLs added at runtime (persisted across restarts). */
+    val trackers: List<String> = emptyList(),
 )

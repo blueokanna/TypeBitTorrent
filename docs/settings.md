@@ -2,7 +2,7 @@
 
 The settings dialog mirrors qBittorrent's category layout. This page states,
 per option, whether it is **live** (actually drives the engine/bridge),
-**stored** (persisted and shown, but not wired to the 0.1.0 engine), or
+**stored** (persisted and shown, but not wired to the 0.1.1 engine), or
 **restart** (takes effect at the next engine start).
 
 ## 行为 (Behavior)
@@ -65,8 +65,9 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | --- | --- |
 | DHT | **live at engine start** |
 | PEX | **live** (engine enables PEX by default; the toggle is stored) |
-| LSD / UPnP / NAT-PMP | stored |
-| 加密模式 | stored (plaintext wire in 0.1.0) |
+| LSD | stored |
+| UPnP / NAT-PMP | **live at engine start** (typebit 0.1.1 port mapping) |
+| 加密模式 | stored (plaintext wire in 0.1.1) |
 | 每种子最大 Peers | **live for new torrents** |
 | 请求流水线 / Endgame | **live for new torrents** |
 | 智能分块调度 + 调度器权重 | **live for new torrents** |
@@ -77,14 +78,14 @@ per option, whether it is **live** (actually drives the engine/bridge),
 
 ## WebUI
 
-All options are **stored** — the WebUI server is a roadmap item (0.1.0).
+All options are **stored** — the WebUI server is a roadmap item.
 
 ## 高级 (Advanced)
 
 `diskCacheBytes` and `saveResumeDataIntervalSec` are **live at engine
 start** / for the poll loop respectively. The remaining options (uTP mode,
 socket backlog, tracker retry policy, peer resolution, …) are **stored**
-for qBittorrent familiarity; the 0.1.0 engine does not expose setters for
+for qBittorrent familiarity; the 0.1.1 engine does not expose setters for
 them.
 
 ## RSS
@@ -95,6 +96,6 @@ XML parser. `smartEpisodeFilter` and the auto-download reporter are stored.
 ## How to read this
 
 "live for new torrents" means the value is pushed to the engine's
-`SessionConfig` and applies to torrents added afterwards — the 0.1.0 API
-has no runtime per-session setters, so changing them does not affect
-already-running torrents.
+`SessionConfig` and applies to torrents added afterwards. Tracker URLs and
+per-file priorities ARE runtime-settable in typebit 0.1.1 (add/remove
+without restart, selective download), so the detail tabs apply them live.

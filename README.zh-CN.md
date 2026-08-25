@@ -17,7 +17,7 @@ Android 应用），中间隔着一层极薄的 JNI 桥。
 └──────────────────────────────┘        └──────────────┬──────────────┘
                                                        │ 静态链接
                                                 ┌──────▼──────┐
-                                                │ typebit 0.1 │ (AGPL-3.0)
+                                                │ typebit 0.1.1 │ (PolyForm)
                                                 └─────────────┘
 ```
 
@@ -77,17 +77,25 @@ gradlew.bat :composeApp:assembleDebug
 
 - 通过 **.torrent 文件**（桌面文件对话框 / Android SAF）与**磁力链接**
   添加种子（也支持 `ed2k://`、`thunder://`、`qqdl://`——引擎会解析，
-  但 0.1.0 真正下载的只有 BitTorrent）。
-- 开始 / 暂停 / 继续 / 删除，且恢复数据持久化（已校验分块位图 + DHT
-  路由表，重启后不丢进度）。
+  但真正下载的只有 BitTorrent）。
+- **按文件选择性下载**（typebit 0.1.1）：添加对话框里勾选要下载的文件，
+  详情「文件」标签可随时改优先级（跳过/普通/高），被跳过的文件永不请求。
+- 开始 / 暂停 / 继续 / 删除，且恢复数据持久化（已校验分块位图、文件
+  优先级、每任务限速、DHT 路由表，重启后通过 `restore_torrent` 恢复）。
+- **运行时 Tracker 管理**：详情「Tracker」标签可直接增删 announce URL，
+  无需重启，并跨会话持久化。
 - qBittorrent 式界面：状态筛选、分类、标签、传输表格（进度/分享率/
   剩余时间/速度），详情面板含 信息 / 文件 / Tracker / Peers / 分块
   五个标签（分块热力图取自真实位图）。
 - 完整设置对话框，分类与 qBittorrent 一致
   （行为 / 下载 / 连接 / 速度 / BitTorrent / WebUI / 高级 / RSS），
   哪些选项是真实生效、哪些仅存储，见 `docs/settings.md`。
-- 全局下载/上传限速，**在传输层执行**（Rust `Host` 内的令牌桶），支持
-  定时切换备用限速。
+- 全局下载/上传限速，由 **typebit 0.1.1 内置令牌桶**执行，支持定时切换
+  备用限速。
+- **反吸血引擎**（typebit 0.1.1）：客户端指纹识别、每 peer 信誉、坏块/
+  协议违规记账，以及**硬性封禁**——状态栏同时统计「检测」与「封禁」。
+- **并行分块校验**（工作线程池）、**Web Seed**（BEP-19）、**SOCKS5 代理**
+  （纯出站匿名）与 **UPnP/NAT-PMP 端口映射**，均已从连接设置接入。
 - DHT 节点数、引擎日志环形缓冲、RSS 阅读器（真实 HTTP + XML 解析）、
   种子搜索（本机过滤 + 外站浏览器搜索）。
 - **Material You 主题系统**（外观设置）：从零手写的纯 Kotlin
@@ -99,22 +107,21 @@ gradlew.bat :composeApp:assembleDebug
 
 ## 诚实的限制（报 bug 前请先读）
 
-`typebit 0.1.0` 的公开 API 刻意收得很窄，本应用不会伪造引擎报告不了
+`typebit 0.1.1` 的公开 API 刻意收得很窄，本应用不会伪造引擎报告不了
 的东西：
 
 - **引擎不暴露每种子的上传字节/速率**，UI 显示 `—`；全局线速来自桥接
   层自己的计数器。
 - **Peer 列表同样不暴露**。Peers 标签页显示的是由引擎事件推导出的
   连接数，不是编造的表格。
-- **磁力元数据**：引擎取到元数据后会发 `MetadataComplete`，但不暴露
-  info 字典，所以磁力种子只显示 `dn` 名称、文件列表未知（进度照常）。
-- **加密模式、UPnP/NAT-PMP、uTP、LSD** 是带 qBittorrent 外观的存储项；
-  0.1.0 的 wire 协议是明文，桥接层目前一个都没实现。
-- **每种子限速与监听端口改动在下次启动引擎时生效**——0.1.0 API 没有
-  运行时 setter。
+- **磁力元数据**：引擎取到元数据后会发 `MetadataComplete`，但仍不暴露
+  info 字典，所以桥接层保留自己的添加时元数据镜像（名称/文件/tracker）
+  供 UI 使用。
+- **加密模式、uTP、LSD** 是带 qBittorrent 外观的存储项；0.1.1 的 wire
+  协议是明文，桥接层目前一个都没实现。
 - 内置 **WebUI 服务是路线图项目**；其设置会持久化但暂不提供服务。
 
-本项目的原则是「正确优先于功能面积」。凡是用 0.1.0 引擎无法诚实实现的
+本项目的原则是「正确优先于功能面积」。凡是用 0.1.1 引擎无法诚实实现的
 功能，都会在 UI 和本 README 里明确标注，而不是模拟出来。
 
 ## JNI 桥
@@ -126,14 +133,14 @@ gradlew.bat :composeApp:assembleDebug
 
 ## 许可证
 
-两层代码、两份许可证，理由见 `NOTICE.md`：
+本仓库（应用 + 桥）统一采用 **PolyForm Perimeter License 1.0.0**——与它
+静态链接的 `typebit 0.1.1` 引擎同款许可证。详见 `LICENSE` 与 `NOTICE.md`。
 
 | 层 | 许可证 |
 | --- | --- |
 | Kotlin 应用（`composeApp/`） | **PolyForm Perimeter 1.0.0**（见 `LICENSE`） |
-| Rust 桥（`native/`） | **AGPL-3.0-or-later**（静态链接了 AGPL 的 `typebit` 核心） |
-
-`typebit` 引擎本身是 AGPL-3.0-or-later，© blueokanna / HyphenTeam。
+| Rust 桥（`native/`） | **PolyForm Perimeter 1.0.0** |
+| `typebit` 引擎 | **PolyForm Perimeter 1.0.0**，© blueokanna / HyphenTeam |
 
 ---
 
