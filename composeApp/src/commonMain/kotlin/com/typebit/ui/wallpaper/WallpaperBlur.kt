@@ -36,12 +36,13 @@ fun blurWallpaper(src: ImageBitmap, radiusPx: Float): ImageBitmap {
 }
 
 /**
- * Working edge length for the background draw bitmap. A blurred, dimmed
- * background needs far fewer pixels than the raw image — drawing a small
- * bitmap every frame (scroll, route transitions) is what keeps the UI
- * smooth on low-end Android devices.
+ * Working edge length for the background draw bitmap. Raised to 1440 so the
+ * blurred, dimmed background stays crisp on modern screens (a 640px source
+ * looked soft/pixelated on hi-DPI displays). 1440px ≈ 4.7 MiB, blurred once
+ * off the UI thread and cached — drawing it each frame is still one static
+ * GPU blit, so low-end Android devices stay smooth.
  */
-private const val MAX_BG_EDGE = 640
+private const val MAX_BG_EDGE = 1440
 
 /**
  * Full pipeline for the app background: downscale to a cheap draw size, then

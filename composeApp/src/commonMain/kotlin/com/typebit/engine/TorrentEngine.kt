@@ -46,6 +46,9 @@ interface TorrentEngine {
 
     fun remove(hash: String): Boolean
 
+    /** Renames one file of a torrent; false when the name is invalid. */
+    fun renameFile(hash: String, file: Int, name: String): Boolean
+
     // -- selective download + runtime trackers (typebit 0.1.1) --------------
 
     /** Sets one file's priority: 0=Skip, 1=Normal, 2=High. */
@@ -62,6 +65,9 @@ interface TorrentEngine {
 
     /** Current tracker URLs of a torrent, or null when unknown. */
     fun trackers(hash: String): List<String>?
+
+    /** Live peer snapshot of a torrent (empty when none connected). */
+    fun peers(hash: String): List<PeerDto>
 
     // -- queries ------------------------------------------------------------
 
@@ -157,6 +163,9 @@ class NativeTorrentEngine : TorrentEngine {
 
     override fun remove(hash: String): Boolean = requireEngine().let { nativeRemove(it, hash) == 0 }
 
+    override fun renameFile(hash: String, file: Int, name: String): Boolean =
+        requireEngine().let { nativeRenameFile(it, hash, file, name) == 0 }
+
     override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean =
         requireEngine().let { nativeSetFilePriority(it, hash, file, priority) == 0 }
 
@@ -178,6 +187,13 @@ class NativeTorrentEngine : TorrentEngine {
         return runCatching {
             BRIDGE_JSON.decodeFromString<List<String>>(json)
         }.getOrNull()
+    }
+
+    override fun peers(hash: String): List<PeerDto> {
+        val json = requireEngine().let { nativePeers(it, hash) }
+        return runCatching {
+            BRIDGE_JSON.decodeFromString<List<PeerDto>>(json)
+        }.getOrDefault(emptyList())
     }
 
     override fun progress(hash: String): Double = requireEngine().let { nativeProgress(it, hash) }

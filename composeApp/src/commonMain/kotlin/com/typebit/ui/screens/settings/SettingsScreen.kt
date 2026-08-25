@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -172,15 +175,11 @@ fun SettingsScreen(
                 }
             }
         } else {
-            // Mobile: simple category switcher row + scrollable section.
+            // Mobile: a horizontally scrollable MD3 chip bar switches the
+            // category (cleaner than a bare dropdown), then the scrollable
+            // section below renders the active category's cards.
             Column(Modifier.fillMaxSize().padding(padding)) {
-                SettingDropdown(
-                    label = "分类",
-                    options = categories.toList(),
-                    selected = categories[category],
-                    onSelect = { category = categories.indexOf(it).coerceAtLeast(0) },
-                    labelOf = { it.label },
-                )
+                MobileCategoryBar(categories, category) { category = it }
                 SettingsScaffold {
                     AnimatedContent(
                         targetState = categories[category],
@@ -194,6 +193,42 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Material 3 category switcher for narrow screens: leading-icon filter
+ * chips in a horizontal scroll row (no wrap, no overflow).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MobileCategoryBar(
+    categories: List<SettingsCategory>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        categories.forEachIndexed { i, c ->
+            FilterChip(
+                selected = selected == i,
+                onClick = { onSelect(i) },
+                label = { Text(c.label) },
+                leadingIcon = {
+                    Icon(
+                        categoryIcon(c),
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+                shape = MaterialTheme.shapes.large,
+            )
         }
     }
 }

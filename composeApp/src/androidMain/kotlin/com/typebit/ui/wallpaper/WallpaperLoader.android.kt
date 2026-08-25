@@ -5,18 +5,25 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 
-/** Working resolution cap — blur + redraw stay cheap on 4K wallpapers. */
-private const val MAX_W = 1920
-private const val MAX_H = 1080
+/**
+ * HD loading cap: keep the wallpaper sharp (no quality loss on 4K source)
+ * while staying inside a ~25 MiB decoded-memory budget (2500×2500×4 B).
+ * Larger sources are sample-reduced to fit; anything ≤ the budget decodes
+ * at full resolution.
+ */
+private const val MAX_EDGE = 2500
 
 actual fun loadWallpaperBitmap(path: String?): ImageBitmap? {
     if (path.isNullOrBlank()) return null
     return runCatching {
         val bytes = File(path).readBytes()
-        // Decode bounds first, then sample down to the working resolution.
+        // Decode bounds first, then sample down only when needed.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        val full = BitmapFactory.Options().apply { inSampleSize = computeSampleSize(bounds.outWidth, bounds.outHeight) }
+        val full =
+            BitmapFactory.Options().apply {
+                inSampleSize = computeSampleSize(bounds.outWidth, bounds.outHeight)
+            }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, full)?.asImageBitmap()
     }.getOrNull()
 }
@@ -24,6 +31,6 @@ actual fun loadWallpaperBitmap(path: String?): ImageBitmap? {
 private fun computeSampleSize(w: Int, h: Int): Int {
     if (w <= 0 || h <= 0) return 1
     var s = 1
-    while (w / (s * 2) >= MAX_W || h / (s * 2) >= MAX_H) s *= 2
+    while (maxOf(w, h) / (s * 2) >= MAX_EDGE) s *= 2
     return s.coerceAtLeast(1)
 }

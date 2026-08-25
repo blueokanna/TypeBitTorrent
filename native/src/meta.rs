@@ -34,6 +34,13 @@ pub struct TorrentMeta {
     pub announce_list: Vec<Vec<String>>,
     pub web_seeds: Vec<String>,
     pub files: Vec<FileMeta>,
+    /// Save directory the torrent was added with (needed to compute the
+    /// final file paths when the staging `.part` files are promoted).
+    pub save_dir: String,
+    /// Per-file user renames: file index (into `files`) → new relative path.
+    /// The engine keeps writing to the original staged path; the rename
+    /// only affects the final promotion and the UI display.
+    pub renames: Vec<(u32, String)>,
     /// True once the engine delivered the metadata (magnet flow).
     pub metadata_ready: bool,
 }
@@ -103,6 +110,8 @@ impl TorrentMeta {
                 .map(|u| String::from_utf8_lossy(u).into_owned())
                 .collect(),
             files,
+            save_dir: String::new(),
+            renames: Vec::new(),
             metadata_ready: true,
         }
     }
@@ -123,6 +132,8 @@ impl TorrentMeta {
             announce_list: Vec::new(),
             web_seeds: Vec::new(),
             files: Vec::new(),
+            save_dir: String::new(),
+            renames: Vec::new(),
             metadata_ready: false,
         }
     }
@@ -203,11 +214,29 @@ impl TorrentMeta {
             w.end_array();
             w.comma();
             w.kv_u64("length", f.length);
+            w.comma();
+            w.key("renamed");
+            match self.renames.iter().find(|(idx, _)| *idx == i as u32) {
+                Some((_, name)) => w.string(name),
+                None => w.null(),
+            }
             w.end_object();
         }
         w.end_array();
         w.end_object();
         w.into_string()
+    }
+
+    /// Effective display path of a file (rename or original).
+    pub fn display_path(&self, index: usize) -> String {
+        let Some(f) = self.files.get(index) else {
+            return String::new();
+        };
+        self.renames
+            .iter()
+            .find(|(idx, _)| *idx == index as u32)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| f.path.join("/"))
     }
 }
 
@@ -230,6 +259,54 @@ impl MetaRegistry {
     pub fn register_magnet(&mut self, hash: &str, name: &str) {
         self.by_hash
             .insert(hash.to_string(), TorrentMeta::from_magnet(hash, name));
+    }
+
+    /// Record the save directory the torrent was added with, so the bridge
+    /// can compute final file paths when promoting staged `.part` files.
+    pub fn set_save_dir(&mut self, hash: &str, dir: &str) {
+        if let Some(m) = self.by_hash.get_mut(hash) {
+            m.save_dir = dir.to_string();
+        }
+    }
+
+    /// Rename one file (by index) of a torrent. The new name may be a bare
+    /// file name or a relative path; it must be non-empty and must not
+    /// escape the save directory (`..` / absolute / drive roots are
+    /// rejected). Returns the effective display path on success.
+    pub fn rename_file(
+        &mut self,
+        hash: &str,
+        index: u32,
+        name: &str,
+    ) -> Result<String, &'static str> {
+        let m = self.by_hash.get_mut(hash).ok_or("no such torrent")?;
+        if index as usize >= m.files.len() {
+            return Err("file index out of range");
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("name is empty");
+        }
+        // Path-safety: allow one flat segment or a relative subpath, but
+        // never an absolute path or one that climbs above the save dir.
+        let segs: Vec<&str> = name.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+        if segs.iter().any(|s| *s == ".." || *s == ".") || segs.iter().any(|s| s.contains(':')) {
+            return Err("invalid path");
+        }
+        let clean = segs.join("/");
+        // Replace or append the rename entry (keyed by file index).
+        if let Some(entry) = m.renames.iter_mut().find(|(idx, _)| *idx == index) {
+            entry.1 = clean.clone();
+        } else {
+            m.renames.push((index, clean.clone()));
+        }
+        Ok(clean)
+    }
+
+    /// Effective display path of a file (rename or original), for the UI.
+    pub fn file_display_path(&self, hash: &str, index: usize) -> Option<String> {
+        let m = self.by_hash.get(hash)?;
+        Some(m.display_path(index))
     }
 
     pub fn mark_metadata_ready(&mut self, hash: &str) {

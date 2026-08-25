@@ -12,8 +12,8 @@ name = "typebit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-typebit = { version = "0.1.1", features = ["std"] }
-jni = { version = "0.22.4"}
+typebit = { version = "0.1.3", path = "../../TypeBit", features = ["std"] }
+jni = { version = "0.22.4" }
 getrandom = "0.4"
 nextjson = { version = "0.1", default-features = false }
 

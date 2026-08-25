@@ -6,6 +6,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -21,11 +23,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -44,31 +51,34 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.typebit.model.Torrent
+import com.typebit.ui.components.HorizontalTableScrollbar
 import com.typebit.ui.components.StatusBadge
 import com.typebit.ui.components.TorrentProgressBar
 import com.typebit.ui.theme.TypeBitThemeColors
 import com.typebit.ui.util.Format
 
-private val W_NAME = 420.dp
-private val W_SIZE = 90.dp
-private val W_PROGRESS = 160.dp
-private val W_STATUS = 92.dp
-private val W_SEEDS = 54.dp
-private val W_PEERS = 54.dp
-private val W_DOWN = 96.dp
-private val W_UP = 96.dp
-private val W_ETA = 76.dp
-private val W_RATIO = 60.dp
-
-/** Sortable column identity, mirroring qBittorrent's transfer table. */
-private enum class SortKey { NAME, SIZE, PROGRESS, STATUS, SEEDS, PEERS, DOWN, UP, ETA, RATIO }
+/** Column identity + display metadata (label, width, alignment). */
+private enum class SortKey(val label: String, val width: Dp, val alignEnd: Boolean) {
+    NAME("名称", 420.dp, false),
+    SIZE("大小", 90.dp, false),
+    PROGRESS("进度", 160.dp, false),
+    STATUS("状态", 92.dp, false),
+    SEEDS("种子", 54.dp, true),
+    PEERS("Tracker 下载者", 72.dp, true),
+    DOWN("↓ 速度", 96.dp, true),
+    UP("↑ 速度", 96.dp, true),
+    ETA("剩余", 76.dp, true),
+    RATIO("分享率", 60.dp, true),
+}
 
 private data class SortState(val key: SortKey, val desc: Boolean = false)
 
 /**
  * MD3-Expressive desktop transfer table: a large-radius surface card with a
  * hover/selection color animation, springy row appearance and click-to-sort
- * headers — the qBittorrent columns, presented the Material way.
+ * headers. The table scrolls HORIZONTALLY when the window is too narrow
+ * (columns are never clipped), and RIGHT-CLICKING a column header opens a
+ * menu to hide / restore columns.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -78,6 +88,10 @@ fun TorrentTable(
     onSelect: (String) -> Unit,
 ) {
     var sort by remember { mutableStateOf(SortState(SortKey.NAME)) }
+    var hidden by remember { mutableStateOf(setOf<SortKey>()) }
+    val visible = remember(hidden) { SortKey.entries.filter { it !in hidden } }
+    val totalWidth = remember(visible) { visible.fold(0.dp) { acc, k -> acc + k.width } }
+
     val sorted = remember(torrents, sort) {
         val desc = sort.desc
         val list = torrents.sortedWith(
@@ -97,6 +111,12 @@ fun TorrentTable(
         if (desc) list.reversed() else list
     }
 
+    val toggleHidden: (SortKey) -> Unit = { key ->
+        hidden = if (key in hidden) hidden - key else hidden + key
+    }
+
+    val hState = rememberScrollState()
+
     Card(
         modifier = Modifier.fillMaxSize().padding(12.dp),
         shape = MaterialTheme.shapes.extraLarge,
@@ -104,78 +124,118 @@ fun TorrentTable(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
     ) {
-        Column(Modifier.fillMaxSize().padding(8.dp)) {
-            // Header row
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.medium)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SortHeader("名称", W_NAME, SortKey.NAME, sort) { sort = it }
-                SortHeader("大小", W_SIZE, SortKey.SIZE, sort) { sort = it }
-                SortHeader("进度", W_PROGRESS, SortKey.PROGRESS, sort) { sort = it }
-                SortHeader("状态", W_STATUS, SortKey.STATUS, sort) { sort = it }
-                SortHeader("种子", W_SEEDS, SortKey.SEEDS, sort, alignEnd = true) { sort = it }
-                SortHeader("下载者", W_PEERS, SortKey.PEERS, sort, alignEnd = true) { sort = it }
-                SortHeader("↓ 速度", W_DOWN, SortKey.DOWN, sort, alignEnd = true) { sort = it }
-                SortHeader("↑ 速度", W_UP, SortKey.UP, sort, alignEnd = true) { sort = it }
-                SortHeader("剩余", W_ETA, SortKey.ETA, sort, alignEnd = true) { sort = it }
-                SortHeader("分享率", W_RATIO, SortKey.RATIO, sort, alignEnd = true) { sort = it }
-            }
-            Spacer(Modifier.height(4.dp))
-            LazyColumn(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(sorted, key = { it.hash }) { t ->
-                    TorrentRow(
-                        torrent = t,
-                        selected = t.hash == selectedHash,
-                        onClick = { onSelect(t.hash) },
-                    )
+        Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .horizontalScroll(hState),
+        ) {
+            Column(Modifier.width(totalWidth)) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .padding(horizontal = 8.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    visible.forEach { key ->
+                        SortHeader(
+                            key = key,
+                            sort = sort,
+                            hidden = hidden,
+                            onSort = { sort = it },
+                            onToggleHidden = toggleHidden,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(sorted, key = { it.hash }) { t ->
+                        TorrentRow(
+                            torrent = t,
+                            selected = t.hash == selectedHash,
+                            onClick = { onSelect(t.hash) },
+                            visible = visible,
+                        )
+                    }
                 }
             }
+        }
+        // A visible horizontal scrollbar on desktop (drag or shift+wheel).
+        HorizontalTableScrollbar(
+            hState = hState,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        )
         }
     }
 }
 
-/** Clickable column header with a sort-direction indicator. */
+/** Clickable column header with a sort indicator and a right-click menu. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SortHeader(
-    title: String,
-    width: Dp,
     key: SortKey,
     sort: SortState,
-    alignEnd: Boolean = false,
+    hidden: Set<SortKey>,
     onSort: (SortState) -> Unit,
+    onToggleHidden: (SortKey) -> Unit,
 ) {
+    var menu by remember { mutableStateOf(false) }
     val active = sort.key == key
-    Row(
-        Modifier
-            .width(width)
-            .clip(MaterialTheme.shapes.medium)
-            .clickable {
-                onSort(if (active) SortState(key, !sort.desc) else SortState(key))
-            }
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = if (alignEnd) TextAlign.End else TextAlign.Start,
-        )
-        if (active) {
-            Spacer(Modifier.width(2.dp))
-            Icon(
-                if (sort.desc) Icons.Filled.ArrowUpward else Icons.Filled.ArrowDownward,
-                contentDescription = null,
-                modifier = Modifier.width(12.dp).height(12.dp),
-                tint = MaterialTheme.colorScheme.primary,
+    Box {
+        Row(
+            Modifier
+                .width(key.width)
+                .clip(MaterialTheme.shapes.medium)
+                .combinedClickable(
+                    onClick = {
+                        onSort(if (active) SortState(key, !sort.desc) else SortState(key))
+                    },
+                    onLongClick = { menu = true },
+                )
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (key.alignEnd) Arrangement.End else Arrangement.Start,
+        ) {
+            Text(
+                key.label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                color = if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = if (key.alignEnd) TextAlign.End else TextAlign.Start,
+                maxLines = 1,
             )
+            if (active) {
+                Spacer(Modifier.width(2.dp))
+                Icon(
+                    if (sort.desc) Icons.Filled.ArrowUpward else Icons.Filled.ArrowDownward,
+                    contentDescription = null,
+                    modifier = Modifier.width(12.dp).height(12.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            SortKey.entries.forEach { k ->
+                DropdownMenuItem(
+                    text = { Text(k.label, maxLines = 1) },
+                    leadingIcon = {
+                        Icon(
+                            if (k !in hidden) Icons.Filled.Check else Icons.Filled.VisibilityOff,
+                            contentDescription = null,
+                            modifier = Modifier.width(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = { onToggleHidden(k) },
+                )
+            }
         }
     }
 }
@@ -185,6 +245,7 @@ private fun TorrentRow(
     torrent: Torrent,
     selected: Boolean,
     onClick: () -> Unit,
+    visible: List<SortKey>,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -207,42 +268,66 @@ private fun TorrentRow(
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Name + inline progress
-        Column(Modifier.width(W_NAME)) {
-            Text(
-                torrent.name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(6.dp))
-            TorrentProgressBar(progress = torrent.progress.toFloat(), status = torrent.status)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "${Format.percent(torrent.progress)} · ${torrent.havePieces}/${torrent.pieceCount} 分块",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        visible.forEach { key ->
+            when (key) {
+                SortKey.NAME -> NameCell(torrent, key.width)
+                SortKey.SIZE -> Cell(Format.bytes(torrent.sizeBytes), key.width)
+                SortKey.PROGRESS -> PercentCell(torrent, key.width)
+                SortKey.STATUS -> StatusCell(torrent, key.width)
+                SortKey.SEEDS -> Cell(Format.count(torrent.seeds), key.width, alignEnd = true)
+                SortKey.PEERS -> Cell(Format.count(torrent.peers), key.width, alignEnd = true)
+                SortKey.DOWN -> Cell(
+                    Format.speed(torrent.downSpeed), key.width, alignEnd = true,
+                    color = TypeBitThemeColors.status.download,
+                )
+                SortKey.UP -> Cell(
+                    Format.speed(torrent.upSpeed), key.width, alignEnd = true,
+                    color = TypeBitThemeColors.status.seed,
+                )
+                SortKey.ETA -> Cell(Format.eta(torrent.etaSeconds), key.width, alignEnd = true)
+                SortKey.RATIO -> Cell(Format.ratio(torrent.ratio), key.width, alignEnd = true)
+            }
         }
-        Cell(Format.bytes(torrent.sizeBytes), W_SIZE)
-        Box(Modifier.width(W_PROGRESS), contentAlignment = Alignment.CenterStart) {
-            Text(
-                Format.percent(torrent.progress),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-        Box(Modifier.width(W_STATUS), contentAlignment = Alignment.CenterStart) {
-            StatusBadge(torrent.status)
-        }
-        Cell(Format.count(torrent.seeds), W_SEEDS, alignEnd = true)
-        Cell(Format.count(torrent.peers), W_PEERS, alignEnd = true)
-        Cell(Format.speed(torrent.downSpeed), W_DOWN, alignEnd = true, color = TypeBitThemeColors.status.download)
-        Cell(Format.speed(torrent.upSpeed), W_UP, alignEnd = true, color = TypeBitThemeColors.status.seed)
-        Cell(Format.eta(torrent.etaSeconds), W_ETA, alignEnd = true)
-        Cell(Format.ratio(torrent.ratio), W_RATIO, alignEnd = true)
+    }
+}
+
+@Composable
+private fun NameCell(torrent: Torrent, width: Dp) {
+    Column(Modifier.width(width)) {
+        Text(
+            torrent.name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(6.dp))
+        TorrentProgressBar(progress = torrent.progress.toFloat(), status = torrent.status)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${Format.percent(torrent.progress)} · ${torrent.havePieces}/${torrent.pieceCount} 分块",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun PercentCell(torrent: Torrent, width: Dp) {
+    Box(Modifier.width(width), contentAlignment = Alignment.CenterStart) {
+        Text(
+            Format.percent(torrent.progress),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun StatusCell(torrent: Torrent, width: Dp) {
+    Box(Modifier.width(width), contentAlignment = Alignment.CenterStart) {
+        StatusBadge(torrent.status)
     }
 }
 

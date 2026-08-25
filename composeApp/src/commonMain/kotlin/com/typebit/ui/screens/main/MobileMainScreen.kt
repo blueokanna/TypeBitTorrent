@@ -1,3 +1,7 @@
+@file:Suppress("OVERLOAD_RESOLUTION_AMBIGUITY")
+// OverloadResolutionAmbiguity is an IDE false positive from Kotlin Multiplatform
+// expect/actual resolution (PlatformBackHandler); both targets compile cleanly.
+
 package com.typebit.ui.screens.main
 
 import androidx.compose.foundation.clickable
@@ -12,16 +16,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -38,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.typebit.app.Route
@@ -74,16 +85,42 @@ fun MobileMainScreen(
         detailHash = null
     }
 
+    var gridMode by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("TypeBitTorrent", style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            "下载 ${Format.speed(state.globalDownRate)} · 上传 ${Format.speed(state.globalUpRate)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // Live status row: DHT nodes + active trackers + wire
+                        // speeds, refreshed every poll tick. 8.dp below the
+                        // title, 12.dp gaps keep 下载 / 上传 visually
+                        // separated.
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            StatusPill("DHT ${state.dhtNodes}")
+                            StatusPill("Tracker ${state.trackerCount}")
+                            Text(
+                                "↓ ${Format.speed(state.globalDownRate)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                "↑ ${Format.speed(state.globalUpRate)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { gridMode = !gridMode }) {
+                        Icon(
+                            if (gridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                            contentDescription = if (gridMode) "列表视图" else "网格视图",
                         )
                     }
                 },
@@ -131,6 +168,18 @@ fun MobileMainScreen(
                     title = "暂无种子",
                     subtitle = "点击底部「添加」导入 .torrent 或磁力链接",
                 )
+            } else if (gridMode) {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(168.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(state.torrents, key = { it.hash }) { t ->
+                        TorrentCard(torrent = t, onClick = { detailHash = t.hash }, grid = true)
+                    }
+                }
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(state.torrents, key = { it.hash }) { t ->
@@ -142,10 +191,28 @@ fun MobileMainScreen(
     }
 }
 
+/** A small rounded status pill (DHT / Tracker counts). */
 @Composable
-private fun TorrentCard(torrent: Torrent, onClick: () -> Unit) {
+private fun StatusPill(text: String) {
+    androidx.compose.material3.Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun TorrentCard(torrent: Torrent, onClick: () -> Unit, grid: Boolean = false) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (grid) Modifier else Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+            .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(Modifier.padding(12.dp)) {

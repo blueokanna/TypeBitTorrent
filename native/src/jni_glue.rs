@@ -227,11 +227,13 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeStart(
         };
         let hash = jstr(env, &hash);
         let (tx, rx) = channel();
-        Ok(match h.request(Cmd::Start { hash, tx }, rx, REPLY_TIMEOUT) {
-            Some(Ok(())) => 0,
-            Some(Err(_)) => -1,
-            None => -2,
-        })
+        Ok(
+            match h.request(Cmd::Start { hash, tx }, rx, REPLY_TIMEOUT) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
     })
 }
 
@@ -285,11 +287,51 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRemove(
         };
         let hash = jstr(env, &hash);
         let (tx, rx) = channel();
-        Ok(match h.request(Cmd::Remove { hash, tx }, rx, REPLY_TIMEOUT) {
-            Some(Ok(())) => 0,
-            Some(Err(_)) => -1,
-            None => -2,
-        })
+        Ok(
+            match h.request(Cmd::Remove { hash, tx }, rx, REPLY_TIMEOUT) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
+    })
+}
+
+/// Rename one file of a running torrent (0 = ok, -1 = invalid rename,
+/// -2 = timeout, -4 = engine missing).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRenameFile(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+    file: jint,
+    name: JString,
+) -> jint {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(-4),
+        };
+        let hash = jstr(env, &hash);
+        let name = jstr(env, &name);
+        let (tx, rx) = channel();
+        Ok(
+            match h.request(
+                Cmd::RenameFile {
+                    hash,
+                    file: file as u32,
+                    name,
+                    tx,
+                },
+                rx,
+                REPLY_TIMEOUT,
+            ) {
+                Some(Ok(_)) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
     })
 }
 
@@ -368,10 +410,12 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentInfo(
         };
         let hash = jstr(env, &hash);
         let (tx, rx) = channel();
-        Ok(match h.request(Cmd::TorrentInfo { hash, tx }, rx, REPLY_TIMEOUT) {
-            Some(Some(json)) => new_jstring(env, &json),
-            _ => std::ptr::null_mut(),
-        })
+        Ok(
+            match h.request(Cmd::TorrentInfo { hash, tx }, rx, REPLY_TIMEOUT) {
+                Some(Some(json)) => new_jstring(env, &json),
+                _ => std::ptr::null_mut(),
+            },
+        )
     })
 }
 
@@ -390,6 +434,28 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentState
         let (tx, rx) = channel();
         let json = h
             .request(Cmd::TorrentStates { tx }, rx, REPLY_TIMEOUT)
+            .unwrap_or_else(|| "[]".to_string());
+        Ok(new_jstring(env, &json))
+    })
+}
+
+/// Live peer snapshot of a torrent as a JSON array.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativePeers(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+) -> jstring {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(new_jstring(env, "[]")),
+        };
+        let hash = jstr(env, &hash);
+        let (tx, rx) = channel();
+        let json = h
+            .request(Cmd::Peers { hash, tx }, rx, REPLY_TIMEOUT)
             .unwrap_or_else(|| "[]".to_string());
         Ok(new_jstring(env, &json))
     })
@@ -566,20 +632,22 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeSetFilePrior
             _ => 1u8,
         };
         let (tx, rx) = channel();
-        Ok(match h.request(
-            Cmd::SetFilePriority {
-                hash,
-                file: file.max(0) as u32,
-                prio,
-                tx,
+        Ok(
+            match h.request(
+                Cmd::SetFilePriority {
+                    hash,
+                    file: file.max(0) as u32,
+                    prio,
+                    tx,
+                },
+                rx,
+                REPLY_TIMEOUT,
+            ) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
             },
-            rx,
-            REPLY_TIMEOUT,
-        ) {
-            Some(Ok(())) => 0,
-            Some(Err(_)) => -1,
-            None => -2,
-        })
+        )
     })
 }
 
@@ -598,10 +666,12 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeFilePrioriti
         };
         let hash = jstr(env, &hash);
         let (tx, rx) = channel();
-        Ok(match h.request(Cmd::FilePriorities { hash, tx }, rx, REPLY_TIMEOUT) {
-            Some(Some(json)) => new_jstring(env, &json),
-            _ => std::ptr::null_mut(),
-        })
+        Ok(
+            match h.request(Cmd::FilePriorities { hash, tx }, rx, REPLY_TIMEOUT) {
+                Some(Some(json)) => new_jstring(env, &json),
+                _ => std::ptr::null_mut(),
+            },
+        )
     })
 }
 
@@ -622,15 +692,13 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddTracker(
         let hash = jstr(env, &hash);
         let url = jstr(env, &url);
         let (tx, rx) = channel();
-        Ok(match h.request(
-            Cmd::AddTracker { hash, url, tx },
-            rx,
-            REPLY_TIMEOUT,
-        ) {
-            Some(Ok(())) => 0,
-            Some(Err(_)) => -1,
-            None => -2,
-        })
+        Ok(
+            match h.request(Cmd::AddTracker { hash, url, tx }, rx, REPLY_TIMEOUT) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
     })
 }
 
@@ -651,15 +719,13 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRemoveTracke
         let hash = jstr(env, &hash);
         let url = jstr(env, &url);
         let (tx, rx) = channel();
-        Ok(match h.request(
-            Cmd::RemoveTracker { hash, url, tx },
-            rx,
-            REPLY_TIMEOUT,
-        ) {
-            Some(Ok(())) => 0,
-            Some(Err(_)) => -1,
-            None => -2,
-        })
+        Ok(
+            match h.request(Cmd::RemoveTracker { hash, url, tx }, rx, REPLY_TIMEOUT) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
     })
 }
 
@@ -678,10 +744,12 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTrackers(
         };
         let hash = jstr(env, &hash);
         let (tx, rx) = channel();
-        Ok(match h.request(Cmd::Trackers { hash, tx }, rx, REPLY_TIMEOUT) {
-            Some(Some(json)) => new_jstring(env, &json),
-            _ => std::ptr::null_mut(),
-        })
+        Ok(
+            match h.request(Cmd::Trackers { hash, tx }, rx, REPLY_TIMEOUT) {
+                Some(Some(json)) => new_jstring(env, &json),
+                _ => std::ptr::null_mut(),
+            },
+        )
     })
 }
 

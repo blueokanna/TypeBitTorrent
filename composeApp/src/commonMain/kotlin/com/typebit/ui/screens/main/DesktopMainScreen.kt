@@ -25,8 +25,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AllInbox
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -38,6 +41,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PauseCircle
@@ -81,10 +85,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.typebit.app.Route
 import com.typebit.model.TorrentFilter
+import com.typebit.model.TorrentStatus
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
 import com.typebit.ui.components.SpeedPair
+import com.typebit.ui.components.TorrentGrid
 import com.typebit.ui.screens.detail.DetailPanel
 import com.typebit.ui.util.Format
 
@@ -101,6 +107,7 @@ fun DesktopMainScreen(
     store: AppStore,
     onRoute: (Route) -> Unit,
 ) {
+    var gridMode by remember { mutableStateOf(false) }
     PermanentNavigationDrawer(
         drawerContent = {
             Sidebar(state = state, store = store)
@@ -108,7 +115,13 @@ fun DesktopMainScreen(
         modifier = Modifier.fillMaxHeight(),
     ) {
         Column(Modifier.fillMaxSize()) {
-            AppTopBar(state = state, store = store, onRoute = onRoute)
+            AppTopBar(
+                state = state,
+                store = store,
+                onRoute = onRoute,
+                gridMode = gridMode,
+                onToggleGrid = { gridMode = !gridMode },
+            )
 
             // Content switches between empty state and the table card.
             AnimatedContent(
@@ -128,6 +141,12 @@ fun DesktopMainScreen(
                                 Text("添加种子")
                             }
                         },
+                    )
+                } else if (gridMode) {
+                    TorrentGrid(
+                        torrents = state.filteredTorrents,
+                        onSelect = store::select,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 } else {
                     TorrentTable(
@@ -213,29 +232,36 @@ private fun Sidebar(state: AppState, store: AppStore) {
             }
         }
 
-        GroupLabel("筛选")
-        TorrentFilter.entries.forEach { filter ->
-            val count = state.torrents.count { it.matchesFilter(filter) }
-            NavigationDrawerItem(
-                label = { Text("${filter.labelRes}") },
-                selected = state.filter == filter,
-                onClick = { store.setFilter(filter) },
-                icon = { Icon(filterIcon(filter), contentDescription = null) },
-                badge = { CountBadge(count) },
-                colors = NavigationDrawerItemDefaults.colors(
-                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                ),
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-            )
-        }
+        // Filters + categories share ONE scroll region so the 13 filter
+        // entries never push the bottom status card (or categories) off a
+        // short window — the whole nav area scrolls instead.
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            GroupLabel("筛选")
+            TorrentFilter.entries.forEach { filter ->
+                val count = state.torrents.count { it.matchesFilter(filter) }
+                NavigationDrawerItem(
+                    label = { Text("${filter.labelRes}") },
+                    selected = state.filter == filter,
+                    onClick = { store.setFilter(filter) },
+                    icon = { Icon(filterIcon(filter), contentDescription = null) },
+                    badge = { CountBadge(count) },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
 
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-        GroupLabel("分类")
-        LazyColumn(Modifier.weight(1f)) {
-            items(state.categories, key = { it }) { cat ->
+            GroupLabel("分类")
+            state.categories.forEach { cat ->
                 val count = if (cat == "未分类") {
                     state.torrents.count { it.category.isBlank() || it.category == "未分类" }
                 } else {
@@ -335,6 +361,8 @@ private fun AppTopBar(
     state: AppState,
     store: AppStore,
     onRoute: (Route) -> Unit,
+    gridMode: Boolean,
+    onToggleGrid: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -392,11 +420,15 @@ private fun AppTopBar(
                     )
                 }
                 FilledTonalIconButton(onClick = {
-                state.torrents.filter { it.status.name != "SEEDING" && it.status.name != "PAUSED" }
-                    .forEach { store.start(it.hash) }
-            }) {
-                Icon(Icons.Default.PlayArrow, contentDescription = "全部开始")
-            }
+                    // “全部开始” resumes paused torrents too — the old filter
+                    // excluded PAUSED, so after 全部暂停 the play button could
+                    // never bring them back. start() is idempotent for running
+                    // torrents, so we only skip already-seeding ones.
+                    state.torrents.filter { it.status != TorrentStatus.SEEDING }
+                        .forEach { store.start(it.hash) }
+                }) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = "全部开始")
+                }
             FilledTonalIconButton(onClick = {
                 state.torrents.forEach { store.pause(it.hash) }
             }) {
@@ -412,6 +444,12 @@ private fun AppTopBar(
             }
             IconButton(onClick = { onRoute(Route.SETTINGS) }) {
                 Icon(Icons.Default.Settings, contentDescription = "设置")
+            }
+            IconButton(onClick = onToggleGrid) {
+                Icon(
+                    if (gridMode) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                    contentDescription = if (gridMode) "列表视图" else "网格视图",
+                )
             }
             Spacer(Modifier.width(4.dp))
             FilledIconButton(onClick = { onRoute(Route.ADD) }) {

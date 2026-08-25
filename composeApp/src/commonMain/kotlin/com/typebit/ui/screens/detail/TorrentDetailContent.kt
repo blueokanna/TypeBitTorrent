@@ -60,7 +60,7 @@ fun TorrentDetailContent(
             DetailTab.INFO -> InfoTab(torrent)
             DetailTab.FILES -> FilesTab(torrent, store)
             DetailTab.TRACKERS -> TrackersTab(torrent, store)
-            DetailTab.PEERS -> PeersTab(torrent)
+            DetailTab.PEERS -> PeersTab(torrent, store)
             DetailTab.PIECES -> PiecesTab(torrent)
         }
     }

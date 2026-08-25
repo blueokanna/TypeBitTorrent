@@ -19,7 +19,7 @@ use typebit::{EngineConfig, EngineEvent, Host, InfoHash};
 
 use crate::host::{LogBuffer, NativeHost};
 use crate::json::JsonWriter;
-use crate::meta::MetaRegistry;
+use crate::meta::{FileMeta, MetaRegistry, TorrentMeta};
 
 /// Engine tick cadence (ms). Chosen to balance CPU and UI responsiveness.
 pub const TICK_MS: u64 = 100;
@@ -55,6 +55,15 @@ pub enum Cmd {
     Remove {
         hash: String,
         tx: Sender<Result<(), String>>,
+    },
+    /// Rename one file of a running torrent (index into its file table).
+    /// The engine keeps writing to the original staged path; the new name
+    /// only affects the final promotion and the UI display.
+    RenameFile {
+        hash: String,
+        file: u32,
+        name: String,
+        tx: Sender<Result<String, String>>,
     },
     Progress {
         hash: String,
@@ -125,6 +134,11 @@ pub enum Cmd {
     Trackers {
         hash: String,
         tx: Sender<Option<String>>,
+    },
+    /// Live peer snapshot of a torrent as a JSON array.
+    Peers {
+        hash: String,
+        tx: Sender<String>,
     },
     /// Global wire counters (down_total, up_total) from the host.
     Totals {
@@ -239,6 +253,12 @@ fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, ev
                 if let EngineEvent::MetadataComplete { info_hash } = ev {
                     meta.mark_metadata_ready(&info_hash.to_hex());
                 }
+                // Every piece of the torrent has been hash-verified: promote
+                // its staged (.part) files to their final names so the user
+                // only ever sees a complete file.
+                if let EngineEvent::TorrentComplete { info_hash } = ev {
+                    finalize_torrent_files(&mut engine.host, &meta, &info_hash.to_hex());
+                }
                 if let EngineEvent::PeerConnected { peer_id, addr, .. } = ev {
                     let client = typebit::leech::fingerprint(peer_id);
                     if client.class() == typebit::leech::ClientClass::Leech {
@@ -290,14 +310,18 @@ fn handle_cmd(
                 Ok(hex) => {
                     if let Ok(t) = typebit::metainfo::Torrent::from_bytes(&data) {
                         meta.register(&t);
+                        meta.set_save_dir(&hex, &save_dir);
                     }
                     // Selective download (0.1.1): apply per-file priorities
                     // immediately so skipped files are never requested.
                     if let Ok(h) = InfoHash::from_hex(&hex) {
                         for (i, p) in file_priorities.iter().enumerate() {
                             if *p != 1 {
-                                let _ =
-                                    engine.set_file_priority(&h, i as u32, file_priority_from_u8(*p));
+                                let _ = engine.set_file_priority(
+                                    &h,
+                                    i as u32,
+                                    file_priority_from_u8(*p),
+                                );
                             }
                         }
                     }
@@ -320,6 +344,7 @@ fn handle_cmd(
                         .and_then(|m| m.name)
                         .unwrap_or_else(|| "magnet".to_string());
                     meta.register_magnet(&hex, &name);
+                    meta.set_save_dir(&hex, &save_dir);
                     Ok(hex)
                 }
                 Err(e) => {
@@ -352,8 +377,28 @@ fn handle_cmd(
                 Ok(h) => engine.remove_torrent(&h).map_err(|e| e.tag().to_string()),
                 Err(_) => Err("invalid hash".to_string()),
             };
+            // A cancelled download must not leave incomplete data behind:
+            // drop the staged (.part) files of this torrent.
+            delete_staged_files(&mut engine.host, &meta, &hash);
             meta.remove(&hash);
             let _ = tx.send(res);
+        }
+        Cmd::RenameFile {
+            hash,
+            file,
+            name,
+            tx,
+        } => {
+            let res = meta
+                .rename_file(&hash, file, name.trim())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        }
+        Cmd::Peers { hash, tx } => {
+            let json = InfoHash::from_hex(&hash)
+                .map(|h| peers_to_json(engine.peer_snapshot(&h)))
+                .unwrap_or_else(|_| "[]".to_string());
+            let _ = tx.send(json);
         }
         Cmd::Progress { hash, tx } => {
             let v = InfoHash::from_hex(&hash)
@@ -402,10 +447,13 @@ fn handle_cmd(
             // per-session queries are cheap in-process lookups (no JNI).
             let st = engine.save_state();
             let dht = engine.dht().map(|d| d.table().size()).unwrap_or(0);
+            let trackers = engine.active_trackers();
             let (d_total, u_total) = engine.host.totals();
             let mut w = JsonWriter::new();
             w.begin_object();
             w.kv_u64("dht", dht as u64);
+            w.comma();
+            w.kv_u64("trackers", trackers as u64);
             w.comma();
             w.key("totals");
             w.begin_object();
@@ -487,7 +535,12 @@ fn handle_cmd(
             // Applies to torrents added from now on.
             engine.cfg.session = cfg;
         }
-        Cmd::SetFilePriority { hash, file, prio, tx } => {
+        Cmd::SetFilePriority {
+            hash,
+            file,
+            prio,
+            tx,
+        } => {
             let res = match InfoHash::from_hex(&hash) {
                 Ok(h) => engine
                     .set_file_priority(&h, file, file_priority_from_u8(prio))
@@ -670,11 +723,115 @@ fn event_to_json(ev: &EngineEvent) -> String {
             w.comma();
             w.kv_string("r", &ban_reason_str(reason));
         }
+        EngineEvent::Error { code, detail } => {
+            w.kv_u64("t", 11);
+            w.comma();
+            w.kv_u64("code", *code as u64);
+            w.comma();
+            w.kv_string("detail", detail);
+        }
         // `EngineEvent` is `#[non_exhaustive]` (forward-compatible enum).
         _ => {}
     }
     w.end_object();
     w.into_string()
+}
+
+/// Resolve a file's effective relative path: the user rename (if any) wins,
+/// otherwise the torrent's original path.
+fn effective_relative_path(m: &TorrentMeta, index: usize, f: &FileMeta) -> String {
+    m.renames
+        .iter()
+        .find(|(idx, _)| *idx == index as u32)
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| f.path.join("/"))
+}
+
+/// Serialize a live peer snapshot to a JSON array for the Peers tab.
+fn peers_to_json(peers: Vec<typebit::session::PeerSnapshot>) -> String {
+    let mut w = JsonWriter::new();
+    w.begin_array();
+    for (i, p) in peers.iter().enumerate() {
+        if i > 0 {
+            w.comma();
+        }
+        w.begin_object();
+        w.kv_string("addr", &p.addr);
+        w.comma();
+        w.kv_string("client", &p.client);
+        w.comma();
+        w.kv_u64("phase", p.phase as u64);
+        w.comma();
+        w.kv_bool("seed", p.is_seed);
+        w.comma();
+        w.kv_u64("down", p.down_rate as u64);
+        w.comma();
+        w.kv_u64("up", p.up_rate as u64);
+        w.comma();
+        w.kv_u64("inflight", p.in_flight as u64);
+        w.end_object();
+    }
+    w.end_array();
+    w.into_string()
+}
+
+/// Promote a completed torrent's staged (`.part`) files to their final
+/// names. `TorrentComplete` only fires once every selected piece has been
+/// hash-verified, so the promoted files are complete and safe to expose.
+/// User renames are honoured here: the engine wrote `<original>.part` all
+/// along, and the final name becomes the renamed one.
+fn finalize_torrent_files(host: &mut NativeHost, meta: &MetaRegistry, hash: &str) {
+    let Some(m) = meta.get(hash) else {
+        return;
+    };
+    if m.files.is_empty() || m.save_dir.is_empty() {
+        return;
+    }
+    let mut finalized = 0usize;
+    for (i, f) in m.files.iter().enumerate() {
+        let rel = effective_relative_path(m, i, f);
+        let mut p = String::from(&m.save_dir);
+        if !p.ends_with('/') && !p.ends_with('\\') {
+            p.push('/');
+        }
+        p.push_str(&rel);
+        host.finalize_file(&p);
+        finalized += 1;
+    }
+    host.log(
+        typebit::platform::LogLevel::Info,
+        &format!("finalized {finalized} file(s) for {hash}"),
+    );
+}
+
+/// Delete the staged (`.part`) files of a torrent — used when a torrent is
+/// removed so a cancelled download leaves no incomplete data on disk.
+fn delete_staged_files(host: &mut NativeHost, meta: &MetaRegistry, hash: &str) {
+    let Some(m) = meta.get(hash) else {
+        return;
+    };
+    if m.files.is_empty() || m.save_dir.is_empty() {
+        return;
+    }
+    let mut removed = 0usize;
+    for (i, f) in m.files.iter().enumerate() {
+        let rel = effective_relative_path(m, i, f);
+        let mut p = String::from(&m.save_dir);
+        if !p.ends_with('/') && !p.ends_with('\\') {
+            p.push('/');
+        }
+        p.push_str(&rel);
+        let stage = format!("{p}.part");
+        if std::path::Path::new(&stage).exists() && std::fs::remove_file(&stage).is_ok() {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        host.log(
+            typebit::platform::LogLevel::Info,
+            &format!("removed {removed} staged file(s) for {hash}"),
+        );
+    }
 }
 
 fn addr_string(a: &NetAddr) -> String {
@@ -796,8 +953,14 @@ fn parse_proxy(root: &nextjson::Value) -> Option<ProxyConfig> {
     let host = obj.get("host").and_then(Value::as_str)?;
     let port = obj.get("port").and_then(Value::as_u64).unwrap_or(9050) as u16;
     let addr = parse_addr(host, port)?;
-    let username = obj.get("username").and_then(Value::as_str).map(str::to_string);
-    let password = obj.get("password").and_then(Value::as_str).map(str::to_string);
+    let username = obj
+        .get("username")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let password = obj
+        .get("password")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     Some(ProxyConfig {
         socks5: addr,
         username: username.filter(|s| !s.is_empty()),
@@ -851,6 +1014,7 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
     let endgame_pieces = num("endgame_pieces", 32) as u32;
     let smart_scheduling = flag("smart_scheduling", true);
     let use_default_trackers = flag("use_default_trackers", true);
+    let listen_port = num("listen_port", typebit::consts::DEFAULT_PORT as u64) as u16;
 
     // typebit 0.1.1 folded the old ChokeConfig into the anti-leech engine's
     // LeechConfig (slot management + choke + ban policy in one struct).
@@ -900,6 +1064,7 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
         node_secret,
         trackers,
         use_default_trackers,
+        listen_port,
         upload_limit_bps,
         download_limit_bps,
         file_priorities: Vec::new(),
@@ -917,4 +1082,64 @@ fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
         out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meta::TorrentMeta;
+    use std::fs;
+
+    /// A tiny torrent metainfo with a single file, used to exercise the
+    /// staging→finalize promotion path without a real download.
+    fn single_file_meta(dir: &str) -> TorrentMeta {
+        let mut m = TorrentMeta::from_magnet("aabbccddeeff00112233445566778899aabbccdd", "x.bin");
+        m.save_dir = dir.to_string();
+        m.files.push(crate::meta::FileMeta {
+            path: vec!["x.bin".to_string()],
+            length: 4,
+        });
+        m
+    }
+
+    /// A download writes `<final>.part` (never the final name); after
+    /// `finalize_file` the file appears under the final name and the staging
+    /// copy is gone. Resume re-opens the staging file.
+    #[test]
+    fn disk_staging_and_finalize() {
+        let dir = std::env::temp_dir().join(format!("typebit_native_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let final_path = dir.join("x.bin");
+        let stage = dir.join("x.bin.part");
+
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let mut host = NativeHost::new(logs);
+
+        // Fresh download: opens the .part staging file.
+        let id = host.disk_open(final_path.to_str().unwrap()).unwrap();
+        host.disk_write(id, 0, b"abcd").unwrap();
+        host.disk_flush(id).unwrap();
+        host.disk_close(id);
+        assert!(
+            !final_path.exists(),
+            "final file must not exist mid-download"
+        );
+        assert!(stage.exists(), "staging file must exist mid-download");
+
+        // Resume: opening again must pick the staging file (data intact).
+        let id2 = host.disk_open(final_path.to_str().unwrap()).unwrap();
+        let mut buf = [0u8; 4];
+        host.disk_read(id2, 0, &mut buf).unwrap();
+        host.disk_close(id2);
+        assert_eq!(&buf, b"abcd", "resume must read the staged data");
+
+        // Completion: promote the staged file to the final name.
+        host.finalize_file(final_path.to_str().unwrap());
+        assert!(final_path.exists(), "final file must exist after finalize");
+        assert!(!stage.exists(), "staging file must be gone after finalize");
+        assert_eq!(fs::read(&final_path).unwrap(), b"abcd");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

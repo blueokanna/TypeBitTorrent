@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.typebit.model.Torrent
+import com.typebit.model.TorrentStatus
 import com.typebit.platform.formatDateTime
 import com.typebit.ui.components.LabelValueRow
 import com.typebit.ui.util.Format
@@ -48,6 +49,10 @@ fun InfoTab(torrent: Torrent, modifier: Modifier = Modifier) {
         SectionTitle("常规")
         LabelValueRow("名称", torrent.name)
         LabelValueRow("保存路径", torrent.saveDir)
+        if (torrent.status != TorrentStatus.SEEDING) {
+            // 下载未完成：引擎写入 <name>.part，全部校验通过后才重命名为最终名。
+            LabelValueRow("暂存方式", "未完成，文件暂存为 .part，校验通过后自动重命名")
+        }
         LabelValueRow("总大小", Format.bytesDetailed(torrent.sizeBytes))
         LabelValueRow("剩余大小", Format.bytes(torrent.remainingBytes))
         LabelValueRow("信息哈希", torrent.hash)

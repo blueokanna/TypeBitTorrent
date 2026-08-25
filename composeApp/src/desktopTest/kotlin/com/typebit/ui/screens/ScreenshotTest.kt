@@ -12,6 +12,7 @@ import com.typebit.data.TorrentRepository
 import com.typebit.engine.EngineEventDto
 import com.typebit.engine.EngineSnapshotDto
 import com.typebit.engine.LogEntryDto
+import com.typebit.engine.PeerDto
 import com.typebit.engine.TorrentEngine
 import com.typebit.engine.TorrentInfoDto
 import com.typebit.engine.TorrentStateDto
@@ -141,6 +142,7 @@ private class FakeEngine : TorrentEngine {
     override fun pause(hash: String) {}
     override fun resume(hash: String) {}
     override fun remove(hash: String): Boolean = false
+    override fun renameFile(hash: String, file: Int, name: String): Boolean = false
     override fun progress(hash: String): Double = 0.0
     override fun downloaded(hash: String): Long = 0L
     override fun isComplete(hash: String): Boolean = false
@@ -158,6 +160,7 @@ private class FakeEngine : TorrentEngine {
     override fun addTracker(hash: String, url: String): Boolean = false
     override fun removeTracker(hash: String, url: String): Boolean = false
     override fun trackers(hash: String): List<String>? = null
+    override fun peers(hash: String): List<PeerDto> = emptyList()
     override fun saveState(): ByteArray? = null
     override fun loadState(data: ByteArray) {}
     override fun takeEvents(): List<EngineEventDto> = emptyList()

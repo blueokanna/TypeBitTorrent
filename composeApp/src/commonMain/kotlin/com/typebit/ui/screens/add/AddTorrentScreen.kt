@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -107,6 +108,12 @@ fun AddTorrentScreen(
     }
 
     val canAdd = pendingBytes != null || magnet.isNotBlank()
+
+    // After a successful add, leave the dialog and return to the main list.
+    // No "已添加" pause step — adding should feel one-shot on both platforms.
+    LaunchedEffect(added) {
+        if (added) onBack()
+    }
 
     Scaffold(
             topBar = {
@@ -332,14 +339,6 @@ fun AddTorrentScreen(
                 }
                 OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("取消") }
             }
-
-            if (added) {
-                Text(
-                        "已添加！返回列表查看。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                )
-            }
             Spacer(Modifier.height(16.dp))
         }
     }
@@ -384,8 +383,7 @@ private fun FilePickRow(
             )
         }
         Spacer(Modifier.width(8.dp))
-        com.typebit.ui.screens.settings.SettingDropdown(
-                label = "",
+        com.typebit.ui.screens.settings.CompactDropdown(
                 options = FilePriority.entries.toList(),
                 selected = FilePriority.entries.first { it.value == priority },
                 onSelect = { onPriority(it.value) },

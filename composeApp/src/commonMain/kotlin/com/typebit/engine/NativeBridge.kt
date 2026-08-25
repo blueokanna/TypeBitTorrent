@@ -45,6 +45,13 @@ expect fun nativeResume(handle: Long, hash: String): Int
 /** Removes a torrent. 0 = ok, negative = error. */
 expect fun nativeRemove(handle: Long, hash: String): Int
 
+/**
+ * Renames one file of a torrent (index into its file table). The engine
+ * keeps writing to the original staged path; the rename affects the final
+ * promotion and the UI display. 0 = ok, negative = invalid name/error.
+ */
+expect fun nativeRenameFile(handle: Long, hash: String, file: Int, name: String): Int
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -63,6 +70,9 @@ expect fun nativeTorrentInfo(handle: Long, hash: String): String?
 
 /** All torrents' persisted state as a JSON array. */
 expect fun nativeTorrentStates(handle: Long): String
+
+/** Live peer snapshot of a torrent as a JSON array. */
+expect fun nativePeers(handle: Long, hash: String): String
 
 /**
  * One batched UI snapshot: `{"dht":n,"torrents":[{"h","p","d","c","paused",

@@ -16,57 +16,95 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.typebit.engine.PeerDto
 import com.typebit.model.Torrent
+import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
 import com.typebit.ui.util.Format
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
- * Peers tab.
- *
- * Honesty note: `typebit 0.1.0` does not expose per-peer details through the
- * engine API, so this tab shows the connection count we track from engine
- * events and states plainly — it does not invent a peer table.
+ * Peers tab — shows the LIVE peer swarm straight from the engine (address,
+ * fingerprint, phase, rates), refreshed every 2 s. No fabricated rows.
  */
 @Composable
-fun PeersTab(torrent: Torrent, modifier: Modifier = Modifier) {
+fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
+    var peers by remember(torrent.hash) { mutableStateOf<List<PeerDto>>(emptyList()) }
+    LaunchedEffect(torrent.hash) {
+        while (true) {
+            peers = withContext(Dispatchers.Default) { store.peers(torrent.hash) }
+            delay(2_000)
+        }
+    }
+
     Column(modifier.fillMaxSize().padding(16.dp)) {
         Text(
-            "当前连接：${torrent.peers}",
+            "当前连接：${peers.size}",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.width(0.dp))
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        if (torrent.peers == 0) {
+        if (peers.isEmpty()) {
             EmptyState(
                 title = "暂无连接的 Peers",
-                subtitle = "连接建立后会在此显示（由 PeerConnected 事件统计）",
+                subtitle = "tracker / DHT 发现 peer 并完成握手后会显示在这里",
             )
         } else {
             LazyColumn {
-                items((1..torrent.peers.coerceAtMost(64)).toList()) { i ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Default.Person,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Peer #$i",
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text("连接中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                items(peers, key = { it.addr }) { p ->
+                    PeerRow(p)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PeerRow(peer: PeerDto) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Person,
+            contentDescription = null,
+            tint = if (peer.phase == 2) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                peer.addr,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${peer.client} · ${Format.speed(peer.down)} ↓ / ${Format.speed(peer.up)} ↑",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            peer.phaseLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = when (peer.phase) {
+                2 -> MaterialTheme.colorScheme.primary
+                0, 1 -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> MaterialTheme.colorScheme.error
+            },
+        )
     }
 }

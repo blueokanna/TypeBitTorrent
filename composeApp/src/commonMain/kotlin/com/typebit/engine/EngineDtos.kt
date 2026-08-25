@@ -13,8 +13,13 @@ import kotlinx.serialization.Serializable
 data class FileDto(
     val path: List<String> = emptyList(),
     val length: Long = 0L,
+    /** User rename (relative path) — null when the original name is kept. */
+    val renamed: String? = null,
 ) {
     val displayPath: String get() = path.joinToString("/")
+
+    /** Name shown to the user: the rename wins over the original path. */
+    val effectivePath: String get() = renamed ?: displayPath
 }
 
 /** The full mirrored metainfo for one torrent (null for unresolved magnets). */
@@ -83,16 +88,28 @@ data class TorrentSnapshotDto(
     val meta: Boolean = false,
 )
 
-/** One batched engine snapshot: global counters + per-torrent rows. */
+/** A live peer entry (from the engine swarm, not fabricated). */
 @Serializable
-data class EngineSnapshotDto(
-    /** DHT routing-table size. */
-    val dht: Int = 0,
-    /** Cumulative wire bytes: (downloaded, uploaded). */
-    val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
-    val torrents: List<TorrentSnapshotDto> = emptyList(),
+data class PeerDto(
+    val addr: String = "",
+    val client: String = "",
+    /** 0=Connecting 1=Handshake 2=Ready 3=Closed. */
+    val phase: Int = 0,
+    val seed: Boolean = false,
+    /** Smoothed download rate (bytes/s). */
+    val down: Long = 0L,
+    /** Smoothed upload rate (bytes/s). */
+    val up: Long = 0L,
+    /** Outstanding request blocks. */
+    val inflight: Int = 0,
 ) {
-    val totalsPair: Pair<Long, Long> get() = totals.d to totals.u
+    val phaseLabel: String
+        get() = when (phase) {
+            0 -> "连接中"
+            1 -> "握手中"
+            2 -> if (seed) "已连接 (做种)" else "已连接"
+            else -> "已断开"
+        }
 }
 
 /** Global wire counters embedded in a snapshot. */
@@ -103,11 +120,28 @@ data class SnapshotTotalsDto(
 )
 
 /**
+ * One batched snapshot for the whole UI poll tick (see `Cmd::Snapshot`).
+ */
+@Serializable
+data class EngineSnapshotDto(
+    /** DHT routing-table size (live). */
+    val dht: Int = 0,
+    /** Trackers currently active (not failed) across all torrents (live). */
+    val trackers: Int = 0,
+    /** Cumulative wire bytes: (downloaded, uploaded). */
+    val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
+    val torrents: List<TorrentSnapshotDto> = emptyList(),
+) {
+    val totalsPair: Pair<Long, Long> get() = totals.d to totals.u
+}
+
+/**
  * One engine event. `t` selects the variant:
  * 1=PeerConnected(h,a,p) 2=PieceVerified(h,piece) 3=HashFailure(h,piece)
  * 4=TorrentComplete(h) 5=MetadataComplete(h) 6=MetadataFailed(h)
  * 7=TrackerAnnounced(h,peers) 8=DhtNodeCount(n)
  * 9=LeechClientSeen(h? no, c=client,a=addr) 10=PeerBanned(h,a,r=reason)
+ * 11=EngineError(code,detail)  (typebit 0.1.3: non-fatal degradation notice)
  */
 @Serializable
 data class EngineEventDto(
@@ -122,6 +156,10 @@ data class EngineEventDto(
     val c: String? = null,
     /** Anti-leech ban reason code: corrupt | protocol | free-ride (t=10). */
     val r: String? = null,
+    /** Engine-level degradation notice (t=11): 0=udp_open_failed, 1=dht_no_seeds. */
+    val code: Int? = null,
+    /** Engine-level degradation notice (t=11): stable tag, e.g. "udp_open_failed". */
+    val detail: String? = null,
 )
 
 /** A log line drained from the engine. */

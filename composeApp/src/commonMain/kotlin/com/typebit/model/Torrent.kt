@@ -46,8 +46,13 @@ enum class TorrentFilter(val labelRes: String) {
 data class FileEntry(
     val path: List<String>,
     val length: Long,
+    /** User rename (relative path) — null when the original name is kept. */
+    val renamed: String? = null,
 ) {
     val displayPath: String get() = path.joinToString("/")
+
+    /** Name shown to the user: the rename wins over the original path. */
+    val effectivePath: String get() = renamed ?: displayPath
 }
 
 /** A tracker (announce URL) and its last known state. */
@@ -165,4 +170,6 @@ data class TorrentRecord(
     val filePriorities: List<Int> = emptyList(),
     /** Extra tracker URLs added at runtime (persisted across restarts). */
     val trackers: List<String> = emptyList(),
+    /** Per-file renames: file index → new relative path (persisted). */
+    val renames: Map<Int, String> = emptyMap(),
 )

@@ -224,6 +224,52 @@ impl NativeHost {
     }
 }
 
+impl NativeHost {
+    /// Map an engine file path to its staging path. The engine always writes
+    /// through `<final>.part` so a half-downloaded file is never visible
+    /// under its final name; only after every piece has been hash-verified
+    /// (`TorrentComplete`) does the bridge promote it with
+    /// [`Self::finalize_file`].
+    fn stage_path(path: &str) -> String {
+        format!("{path}.part")
+    }
+
+    /// Resolve the real on-disk path for an engine file:
+    ///   1. an in-progress staging file (`<final>.part`) — resume continues there;
+    ///   2. a completed file (`<final>`) left by a previous run — seed from it;
+    ///   3. otherwise a fresh staging file is created.
+    fn resolve_disk_path(final_path: &str) -> String {
+        let stage = Self::stage_path(final_path);
+        if std::path::Path::new(&stage).exists() {
+            stage
+        } else if std::path::Path::new(final_path).exists() {
+            final_path.to_string()
+        } else {
+            stage
+        }
+    }
+
+    /// Promote a fully-verified staging file (`<final>.part`) to its final
+    /// name. Called by the bridge on `TorrentComplete`, when every piece of
+    /// that torrent has been hash-checked. No-op and idempotent when the
+    /// staging file is absent (e.g. a file the user skipped). Windows note:
+    /// Rust opens files with `FILE_SHARE_DELETE`, so renaming an open
+    /// (seeding) file is allowed.
+    pub fn finalize_file(&mut self, final_path: &str) {
+        let stage = Self::stage_path(final_path);
+        if !std::path::Path::new(&stage).exists() {
+            return;
+        }
+        match std::fs::rename(&stage, final_path) {
+            Ok(()) => self.log_internal(LogLevel::Info, &format!("finalized {final_path}")),
+            Err(e) => self.log_internal(
+                LogLevel::Warn,
+                &format!("finalize {final_path} failed: {e}"),
+            ),
+        }
+    }
+}
+
 impl Host for NativeHost {
     fn now_ms(&self) -> u64 {
         SystemTime::now()
@@ -271,6 +317,20 @@ impl Host for NativeHost {
         sock.connect("8.8.8.8:53").ok()?;
         let local = sock.local_addr().ok()?;
         Some(sock_to_netaddr(local))
+    }
+
+    /// Resolve a hostname to an IP endpoint — used by the engine to
+    /// bootstrap the DHT from the BEP-5 router hostnames
+    /// (`router.bittorrent.com` & co.). Delegates to the std host's OS
+    /// resolver; `None` when DNS fails, which leaves the DHT dormant while
+    /// HTTP/UDP trackers keep working (typebit treats it as a soft failure
+    /// and emits an `EngineEvent::Error` instead of failing the torrent).
+    fn resolve_host(&self, host: &str, port: u16) -> Option<NetAddr> {
+        self.http.resolve_host(host, port)
+    }
+
+    fn resolve_host_all(&self, host: &str, port: u16) -> std::vec::Vec<NetAddr> {
+        self.http.resolve_host_all(host, port)
     }
 
     fn tcp_connect(&mut self, addr: &NetAddr) -> Result<ConnId> {
@@ -386,6 +446,47 @@ impl Host for NativeHost {
         }
     }
 
+    /// Send to a multicast group with a wide-enough TTL (LSD, BEP-14).
+    fn udp_multicast_send(&mut self, addr: &NetAddr, data: &[u8]) -> Result<()> {
+        let Some(sock) = self.udp.as_ref() else {
+            return Err(Error::NotSupported);
+        };
+        if matches!(*addr, NetAddr::V4(..)) {
+            let _ = sock.set_multicast_ttl_v4(16);
+            let _ = sock.set_multicast_loop_v4(true);
+        }
+        let target = netaddr_to_sockaddr(*addr).ok_or(Error::InvalidInput)?;
+        match sock.send_to(data, target) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            Err(_) => Err(Error::Io),
+        }
+    }
+
+    /// Join a multicast group on the bound UDP socket so LAN datagrams to
+    /// the group (LSD announces, SSDP responses) reach `udp_recv`.
+    fn udp_join_multicast(&mut self, addr: NetAddr) -> Result<()> {
+        let Some(sock) = self.udp.as_ref() else {
+            return Err(Error::NotSupported);
+        };
+        match addr {
+            NetAddr::V4(ip, _) => {
+                let group = std::net::Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]);
+                match sock.join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED) {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(Error::Io),
+                }
+            }
+            NetAddr::V6(ip, _) => {
+                let group = std::net::Ipv6Addr::from(ip);
+                match sock.join_multicast_v6(&group, 0) {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(Error::Io),
+                }
+            }
+        }
+    }
+
     fn udp_recv(&mut self, buf: &mut [u8]) -> Result<(NetAddr, usize)> {
         let Some(sock) = self.udp.as_ref() else {
             return Err(Error::NotSupported);
@@ -401,12 +502,23 @@ impl Host for NativeHost {
         if self.files.len() >= MAX_OPEN_FILES {
             return Err(Error::Full);
         }
+        let actual = Self::resolve_disk_path(path);
+        // Multi-file torrents carry subdirectories that may not exist yet.
+        if let Some(parent) = std::path::Path::new(&actual).parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(path)
+            .open(&actual)
             .map_err(|_| Error::Io)?;
+        self.log_internal(
+            LogLevel::Debug,
+            &format!("disk_open {actual} (final={path})"),
+        );
         let id = self.next_disk;
         self.next_disk = self.next_disk.wrapping_add(1);
         self.files.insert(id, file);

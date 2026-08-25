@@ -79,6 +79,7 @@ class AppStore(
     // JNI boundary when the value that matters actually changed.
     private var lastAppliedLimits: Pair<Long, Long>? = null
     private var lastAppliedSessionConfig: String? = null
+    private var lastAppliedExtraTrackers: Set<String> = emptySet()
     private var settingsSaveJob: Job? = null
 
     /** Runs [block] on the engine executor (off the UI thread, serialized). */
@@ -417,7 +418,27 @@ class AppStore(
             engine.setSessionConfig(cfg)
             lastAppliedSessionConfig = cfg
         }
-        // 3) Persist, coalesced: a slider drag / keystroke storm becomes a
+        // 3) Newly imported extra trackers → add to ALL running torrents
+        //    right away (the engine only reads the session config for
+        //    torrents added afterwards, so a tracker-list import must be
+        //    pushed to existing sessions explicitly).
+        val trackersNow = settings.bitTorrent.extraTrackers.lineSequence()
+            .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        if (trackersNow != lastAppliedExtraTrackers) {
+            val added = trackersNow - lastAppliedExtraTrackers
+            if (added.isNotEmpty()) {
+                for (rec in records) {
+                    for (url in added) engine.addTracker(rec.hash, url)
+                }
+                // Refresh the mirrors so the Tracker tab shows the new URLs.
+                for (rec in records) {
+                    engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
+                }
+                refreshStats()
+            }
+            lastAppliedExtraTrackers = trackersNow
+        }
+        // 4) Persist, coalesced: a slider drag / keystroke storm becomes a
         //    single write after the input settles (plus the final save in
         //    [stop]).
         settingsSaveJob?.cancel()
@@ -495,6 +516,7 @@ class AppStore(
             var dht = s.dhtNodes
             var leechCount = s.antiLeechCount
             var leechClients = s.antiLeechClients
+            var engineNotice: String? = null
             val antiLeechOn = s.settings.bitTorrent.antiLeechEnabled
 
             val peerAbs = HashMap<String, Int>()
@@ -534,6 +556,18 @@ class AppStore(
                             leechClients = (leechClients + label).takeLast(20)
                         }
                     }
+                    11 -> {
+                        // typebit 0.1.3: non-fatal engine failure degraded
+                        // operation — surface the real reason instead of a
+                        // silent "0 B/s" (DHT/UDP trackers off, or DHT
+                        // dormant because no router hostname resolved).
+                        val msg = when (ev.code) {
+                            0 -> "引擎：UDP 端口无法打开，DHT 与 UDP tracker 已停用（HTTP tracker 仍可用）"
+                            1 -> "引擎：DHT 引导失败，无法解析引导路由器（DHT 休眠，tracker 不受影响）"
+                            else -> "引擎：${ev.detail ?: "未知错误"}"
+                        }
+                        engineNotice = msg
+                    }
                 }
             }
 
@@ -544,6 +578,7 @@ class AppStore(
                     dhtNodes = dht,
                     antiLeechCount = leechCount,
                     antiLeechClients = leechClients,
+                    lastError = engineNotice ?: s.lastError,
                 )
             }
 
@@ -566,6 +601,7 @@ class AppStore(
                 torrents = torrents,
                 antiLeechCount = leechCount,
                 antiLeechClients = leechClients,
+                lastError = engineNotice ?: s.lastError,
             )
         }
     }
@@ -588,13 +624,16 @@ class AppStore(
         lastGlobalPoll = now
 
         // Metadata arrived for a magnet → refresh the full mirror once, and
-        // apply the persisted per-file priorities now that files are known.
+        // apply the persisted per-file priorities + renames now that files
+        // are known (their indices only exist after the file table arrives).
         for (row in snap.torrents) {
             if (row.meta && infoCache[row.h]?.metadata_ready != true) {
                 engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
                 val rec = records.firstOrNull { it.hash == row.h }
-                if (rec != null && rec.kind == "MAGNET" && rec.filePriorities.isNotEmpty()) {
-                    applyPriorities(row.h, rec.filePriorities)
+                if (rec != null && rec.kind == "MAGNET") {
+                    if (rec.filePriorities.isNotEmpty()) applyPriorities(row.h, rec.filePriorities)
+                    if (rec.renames.isNotEmpty()) applyRenames(row.h, rec.renames)
+                    engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
                 }
             }
         }
@@ -611,6 +650,7 @@ class AppStore(
                 totalDownloaded = totals.first,
                 totalUploaded = totals.second,
                 dhtNodes = snap.dht,
+                trackerCount = snap.trackers,
             )
         }
     }
@@ -665,7 +705,8 @@ class AppStore(
             comment = info?.comment,
             kind = info?.kind ?: rec.kind,
             trackers = buildTrackers(info, rec, base),
-            files = base?.files ?: info?.files.orEmpty().map { com.typebit.model.FileEntry(it.path, it.length) },
+            files = base?.files
+                ?: info?.files.orEmpty().map { com.typebit.model.FileEntry(it.path, it.length, it.renamed) },
             seeds = base?.seeds ?: 0,
             peers = base?.peers ?: 0,
             downSpeed = downRate,
@@ -715,12 +756,50 @@ class AppStore(
         if (rec.kind != "MAGNET" && rec.filePriorities.isNotEmpty()) {
             applyPriorities(hash, rec.filePriorities)
         }
+        // File renames are app-level data: re-apply them so the staged path
+        // bookkeeping and the final promotion keep working after a restart.
+        if (rec.renames.isNotEmpty()) {
+            applyRenames(hash, rec.renames)
+        }
+        // Refresh the mirror so renamed names show immediately.
+        engine.torrentInfo(hash)?.let { infoCache[hash] = it }
+    }
+
+    /** Re-applies persisted per-file renames to an engine torrent. */
+    private fun applyRenames(hash: String, renames: Map<Int, String>) {
+        for ((index, name) in renames) {
+            engine.renameFile(hash, index, name)
+        }
     }
 
     /** Applies per-file priorities to an engine torrent (index-aligned). */
     private fun applyPriorities(hash: String, priorities: List<Int>) {
         for ((index, p) in priorities.withIndex()) {
             if (p != 1) engine.setFilePriority(hash, index, p)
+        }
+    }
+
+    /**
+     * Renames one file of a torrent. The engine keeps writing to the
+     * original staged path and promotes the renamed name on completion;
+     * the new name is persisted on the record so it survives restarts.
+     */
+    /** Live peer list for the Peers tab (best-effort, from the engine). */
+    fun peers(hash: String): List<com.typebit.engine.PeerDto> =
+        if (engine.isRunning) engine.peers(hash) else emptyList()
+
+    fun renameFile(hash: String, file: Int, name: String) = onEngine {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return@onEngine
+        if (engine.renameFile(hash, file, trimmed)) {
+            engine.torrentInfo(hash)?.let { infoCache[hash] = it }
+            records = records.map { r ->
+                if (r.hash == hash) r.copy(renames = r.renames + (file to trimmed)) else r
+            }
+            persistRecords()
+            refreshStats()
+        } else {
+            _state.update { it.copy(lastError = "重命名失败：名称无效（不能含 .. 或绝对路径）") }
         }
     }
 
