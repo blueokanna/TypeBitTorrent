@@ -211,84 +211,125 @@ pub fn spawn_engine(
 /// The engine thread's main loop.
 fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, events: EventQueue) {
     let mut host = NativeHost::new(logs.clone());
-    // Bind TCP now so the actual port (possibly ephemeral) is fixed before
-    // the first announce. The engine advertises engine_cfg.listen_port; if
-    // binding fell back, we log a warning (see host.rs).
     host.bind_tcp(engine_cfg.listen_port);
 
     let mut engine = Engine::new(host, engine_cfg);
     let mut meta = MetaRegistry::new();
     let mut running = true;
+    let mut consecutive_panics = 0u32;
 
     while running {
-        // 1) Drain commands.
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            if let Some(stop) = handle_cmd(&mut engine, &mut meta, cmd, &events) {
-                running = !stop;
-                break;
+        let iteration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut stop = false;
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                if let Some(s) = handle_cmd(&mut engine, &mut meta, cmd, &events) {
+                    stop = !s;
+                    break;
+                }
+            }
+            if stop {
+                running = false;
+                return;
+            }
+
+            let accepted = engine.host.accept_pending();
+            engine.host.drain_established();
+            for (conn, addr) in accepted {
+                engine.on_inbound_connection(conn, addr);
+            }
+
+            let _ = engine.tick();
+
+            let evs = engine.take_events();
+            if !evs.is_empty() {
+                for ev in &evs {
+                    if let EngineEvent::MetadataComplete { info_hash } = ev {
+                        let h = info_hash.to_hex();
+                        // Magnets start with an empty placeholder in the
+                        // mirror. Once the engine has the metainfo, replace
+                        // it with the full file table so the Files tab and
+                        // the staged-file cleanup both see the real files.
+                        if let Some(t) = engine.metainfo(&info_hash) {
+                            meta.register_ready(t, &h);
+                        } else {
+                            meta.mark_metadata_ready(&h);
+                        }
+                    }
+                    if let EngineEvent::TorrentComplete { info_hash } = ev {
+                        finalize_torrent_files(&mut engine.host, &meta, &info_hash.to_hex());
+                    }
+                    if let EngineEvent::PeerConnected { peer_id, addr, .. } = ev {
+                        let client = typebit::leech::fingerprint(peer_id);
+                        if client.class() == typebit::leech::ClientClass::Leech {
+                            let name = client.code_str();
+                            let a = addr_string(addr);
+                            engine.host.log(
+                                typebit::platform::LogLevel::Warn,
+                                &format!("anti-leech: {name} ({a}) is a known leeching client"),
+                            );
+                            if let Ok(mut q) = events.lock() {
+                                q.push_back(anti_leech_json(&name, &a));
+                            }
+                        }
+                    }
+                }
+                if let Ok(mut q) = events.lock() {
+                    for ev in &evs {
+                        q.push_back(event_to_json(ev));
+                    }
+                    // Bounded queue: drop oldest on overflow.
+                    while q.len() > 2048 {
+                        q.pop_front();
+                    }
+                }
+            }
+        }));
+
+        match iteration {
+            Ok(()) => consecutive_panics = 0,
+            Err(payload) => {
+                consecutive_panics = consecutive_panics.saturating_add(1);
+                let msg = panic_message(payload.as_ref());
+                if let Ok(mut q) = logs.lock() {
+                    q.push_back((
+                        3, // LogLevel::Error
+                        format!("engine panic recovered (x{consecutive_panics}): {msg}"),
+                    ));
+                }
+                // Surface it to the UI so the freeze is never "silent".
+                if let Ok(mut q) = events.lock() {
+                    q.push_back(format!(
+                        r#"{{"t":11,"code":2,"detail":"engine panic recovered: {msg}"}}"#
+                    ));
+                }
+                // A panic storm means the engine state is unsalvageable: stop
+                // loudly instead of busy-looping forever.
+                if consecutive_panics >= 10 {
+                    if let Ok(mut q) = logs.lock() {
+                        q.push_back((3, String::from("engine: repeated panics, shutting down")));
+                    }
+                    running = false;
+                }
             }
         }
         if !running {
             break;
         }
-
-        // 2) Inbound accepts + completed outbound connects.
-        let accepted = engine.host.accept_pending();
-        engine.host.drain_established();
-        for (conn, addr) in accepted {
-            engine.on_inbound_connection(conn, addr);
-        }
-
-        // 3) Advance the whole engine.
-        let _ = engine.tick();
-
-        // 4) Serialize events into the shared queue (one object per event).
-        let evs = engine.take_events();
-        if !evs.is_empty() {
-            // Keep the metadata mirror in sync (magnet metadata arriving),
-            // and emit the soft anti-leech detection (t=9) using the
-            // engine's own client fingerprinting. Hard bans (t=10) are
-            // emitted by the engine's built-in anti-leech engine.
-            for ev in &evs {
-                if let EngineEvent::MetadataComplete { info_hash } = ev {
-                    meta.mark_metadata_ready(&info_hash.to_hex());
-                }
-                // Every piece of the torrent has been hash-verified: promote
-                // its staged (.part) files to their final names so the user
-                // only ever sees a complete file.
-                if let EngineEvent::TorrentComplete { info_hash } = ev {
-                    finalize_torrent_files(&mut engine.host, &meta, &info_hash.to_hex());
-                }
-                if let EngineEvent::PeerConnected { peer_id, addr, .. } = ev {
-                    let client = typebit::leech::fingerprint(peer_id);
-                    if client.class() == typebit::leech::ClientClass::Leech {
-                        let name = client.code_str();
-                        let a = addr_string(addr);
-                        engine.host.log(
-                            typebit::platform::LogLevel::Warn,
-                            &format!("anti-leech: {name} ({a}) is a known leeching client"),
-                        );
-                        if let Ok(mut q) = events.lock() {
-                            q.push_back(anti_leech_json(&name, &a));
-                        }
-                    }
-                }
-            }
-            if let Ok(mut q) = events.lock() {
-                for ev in &evs {
-                    q.push_back(event_to_json(ev));
-                }
-                // Bounded queue: drop oldest on overflow.
-                while q.len() > 2048 {
-                    q.pop_front();
-                }
-            }
-        }
-
         std::thread::sleep(Duration::from_millis(TICK_MS));
     }
 
     engine.host.shutdown();
+}
+
+/// Best-effort human-readable panic payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    String::from("unknown panic")
 }
 
 /// Handle one command. Returns `Some(true)` when the loop must stop.
@@ -374,12 +415,23 @@ fn handle_cmd(
         }
         Cmd::Remove { hash, tx } => {
             let res = match InfoHash::from_hex(&hash) {
-                Ok(h) => engine.remove_torrent(&h).map_err(|e| e.tag().to_string()),
+                Ok(h) => {
+                    // Capture the engine's actual file paths BEFORE removing
+                    // — these are the true paths the engine wrote (each
+                    // staged as `<path>.part`), valid for file torrents and
+                    // magnets whose metadata arrived. A cancelled download
+                    // must not leave incomplete data behind, so the staged
+                    // files are dropped afterwards.
+                    let engine_paths: Vec<String> = engine
+                        .metainfo(&h)
+                        .map(|t| t.files.iter().map(|f| f.display_path()).collect())
+                        .unwrap_or_default();
+                    let r = engine.remove_torrent(&h).map_err(|e| e.tag().to_string());
+                    delete_staged_files(&mut engine.host, &meta, &hash, &engine_paths);
+                    r
+                }
                 Err(_) => Err("invalid hash".to_string()),
             };
-            // A cancelled download must not leave incomplete data behind:
-            // drop the staged (.part) files of this torrent.
-            delete_staged_files(&mut engine.host, &meta, &hash);
             meta.remove(&hash);
             let _ = tx.send(res);
         }
@@ -619,6 +671,11 @@ fn handle_cmd(
             let _ = tx.send(totals);
         }
         Cmd::SaveState { tx } => {
+            // Flush dirty pieces to disk first so the persisted `have`
+            // bitfield only claims data that is truly on stable storage
+            // (a crash between cache-write and flush must NOT "restore"
+            // pieces whose bytes are missing from the .part files).
+            engine.flush_cache();
             let st = engine.save_state();
             let bytes = st.to_binary().ok();
             let _ = tx.send(bytes);
@@ -633,7 +690,17 @@ fn handle_cmd(
                 for t in &st.torrents {
                     let h = bytes_to_infohash(&t.info_hash);
                     if let Some(h) = h {
-                        let _ = engine.restore_torrent(&h, t);
+                        if let Err(e) = engine.restore_torrent(&h, t) {
+                            engine.host.log(
+                                typebit::platform::LogLevel::Warn,
+                                &format!(
+                                    "restore_torrent {} failed: {} ({} pieces have)",
+                                    h.to_hex(),
+                                    e.tag(),
+                                    t.have.len()
+                                ),
+                            );
+                        }
                     }
                 }
                 engine.load_state(&st, now);
@@ -835,21 +902,48 @@ fn finalize_torrent_files(host: &mut NativeHost, meta: &MetaRegistry, hash: &str
 
 /// Delete the staged (`.part`) files of a torrent — used when a torrent is
 /// removed so a cancelled download leaves no incomplete data on disk.
-fn delete_staged_files(host: &mut NativeHost, meta: &MetaRegistry, hash: &str) {
-    let Some(m) = meta.get(hash) else {
-        return;
-    };
-    if m.files.is_empty() || m.save_dir.is_empty() {
+///
+/// The engine ALWAYS writes through the *original metainfo path* + `.part`
+/// (renames only affect the final promotion on completion), so deletion must
+/// target the original paths — never the renamed ones. Two sources feed those
+/// paths:
+///   * `engine_paths` — the engine's own metainfo (authoritative; covers
+///     magnets once their metadata arrived);
+///   * the bridge mirror (`meta`) — registered for file torrents at add time.
+fn delete_staged_files(
+    host: &mut NativeHost,
+    meta: &MetaRegistry,
+    hash: &str,
+    engine_paths: &[String],
+) {
+    let save_dir = meta
+        .get(hash)
+        .map(|m| m.save_dir.clone())
+        .unwrap_or_default();
+    if save_dir.is_empty() {
         return;
     }
-    let mut removed = 0usize;
-    for (i, f) in m.files.iter().enumerate() {
-        let rel = effective_relative_path(m, i, f);
-        let mut p = String::from(&m.save_dir);
-        if !p.ends_with('/') && !p.ends_with('\\') {
-            p.push('/');
+    let mut base = String::from(&save_dir);
+    if !base.ends_with('/') && !base.ends_with('\\') {
+        base.push('/');
+    }
+    let mut targets: Vec<String> = Vec::new();
+    for rel in engine_paths {
+        let p = format!("{base}{rel}");
+        if !targets.contains(&p) {
+            targets.push(p);
         }
-        p.push_str(&rel);
+    }
+    if let Some(m) = meta.get(hash) {
+        for f in &m.files {
+            let p = format!("{base}{}", f.path.join("/"));
+            if !targets.contains(&p) {
+                targets.push(p);
+            }
+        }
+    }
+    let mut removed = 0usize;
+    for p in &targets {
         let stage = format!("{p}.part");
         if std::path::Path::new(&stage).exists() && std::fs::remove_file(&stage).is_ok() {
             removed += 1;

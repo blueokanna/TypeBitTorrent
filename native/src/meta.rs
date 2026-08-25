@@ -261,6 +261,19 @@ impl MetaRegistry {
             .insert(hash.to_string(), TorrentMeta::from_magnet(hash, name));
     }
 
+    /// Replace a magnet placeholder with the full metainfo once the engine
+    /// reports the metadata arrived (file torrents register at add time).
+    /// Preserves the save directory and any per-file renames from the
+    /// placeholder so staged-path bookkeeping keeps working.
+    pub fn register_ready(&mut self, t: &Torrent, hash: &str) {
+        let mut m = TorrentMeta::from_torrent(t);
+        if let Some(old) = self.by_hash.get(hash) {
+            m.save_dir = old.save_dir.clone();
+            m.renames = old.renames.clone();
+        }
+        self.by_hash.insert(hash.to_string(), m);
+    }
+
     /// Record the save directory the torrent was added with, so the bridge
     /// can compute final file paths when promoting staged `.part` files.
     pub fn set_save_dir(&mut self, hash: &str, dir: &str) {

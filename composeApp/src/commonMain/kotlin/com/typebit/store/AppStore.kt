@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.toLocalDateTime
@@ -59,6 +60,18 @@ class AppStore(
         CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
     private var engineScope: CoroutineScope = newEngineScope()
+
+    // Dedicated single-thread executor for the (non-critical) Peers view. It
+    // is deliberately SEPARATE from [engineScope]: a slow `nativePeers`
+    // round-trip must never stall the poll loop or any download action.
+    // Serializing Peers traffic on its own `limitedParallelism(1)`
+    // dispatcher prevents blocking-thread pile-up while guaranteeing the
+    // Peers tab can never freeze the rest of the app — even if the engine
+    // is momentarily busy, only the Peers view lags, never the download.
+    private var peersScope: CoroutineScope = newPeersScope()
+
+    private fun newPeersScope(): CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
     // Persisted app-level records (engine cannot carry category/tags/source).
     // Only touched from [engineScope] — never from the UI thread.
@@ -95,6 +108,7 @@ class AppStore(
     fun start() {
         if (_state.value.engineRunning) return
         if (!engineScope.isActive) engineScope = newEngineScope()
+        if (!peersScope.isActive) peersScope = newPeersScope()
         onEngine { boot() }
     }
 
@@ -153,6 +167,7 @@ class AppStore(
     fun stop() {
         pollJob?.cancel()
         engineScope.cancel()
+        peersScope.cancel()
         runBlocking {
             withTimeoutOrNull(5_000) {
                 settingsSaveJob?.cancel()
@@ -577,13 +592,10 @@ class AppStore(
                         }
                     }
                     11 -> {
-                        // typebit 0.1.3: non-fatal engine failure degraded
-                        // operation — surface the real reason instead of a
-                        // silent "0 B/s" (DHT/UDP trackers off, or DHT
-                        // dormant because no router hostname resolved).
                         val msg = when (ev.code) {
                             0 -> "引擎：UDP 端口无法打开，DHT 与 UDP tracker 已停用（HTTP tracker 仍可用）"
                             1 -> "引擎：DHT 引导失败，无法解析引导路由器（DHT 休眠，tracker 不受影响）"
+                            2 -> "引擎：内部错误已自动恢复（下载不受影响）"
                             else -> "引擎：${ev.detail ?: "未知错误"}"
                         }
                         engineNotice = msg
@@ -806,9 +818,19 @@ class AppStore(
      * original staged path and promotes the renamed name on completion;
      * the new name is persisted on the record so it survives restarts.
      */
-    /** Live peer list for the Peers tab (best-effort, from the engine). */
-    fun peers(hash: String): List<com.typebit.engine.PeerDto> =
-        if (engine.isRunning) engine.peers(hash) else emptyList()
+    /**
+     * Live peer list for the Peers tab (best-effort, from the engine).
+     *
+     * Runs on a dedicated single-thread executor ([peersScope]) so a slow
+     * reply can NEVER block the poll loop or a download action on
+     * [engineScope]. The native worker serializes commands internally, so
+     * concurrent queries from both scopes are safe (the JNI handle is a
+     * shared, `Send + Sync` reference).
+     */
+    suspend fun peers(hash: String): List<com.typebit.engine.PeerDto> =
+        withContext(peersScope.coroutineContext) {
+            if (engine.isRunning) engine.peers(hash) else emptyList()
+        }
 
     fun renameFile(hash: String, file: Int, name: String) = onEngine {
         val trimmed = name.trim()

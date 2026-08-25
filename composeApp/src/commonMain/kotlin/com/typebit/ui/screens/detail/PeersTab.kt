@@ -30,9 +30,7 @@ import com.typebit.model.Torrent
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
 import com.typebit.ui.util.Format
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 
 /**
  * Peers tab — shows the LIVE peer swarm straight from the engine (address,
@@ -43,7 +41,7 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     var peers by remember(torrent.hash) { mutableStateOf<List<PeerDto>>(emptyList()) }
     LaunchedEffect(torrent.hash) {
         while (true) {
-            peers = withContext(Dispatchers.Default) { store.peers(torrent.hash) }
+            peers = store.peers(torrent.hash)
             delay(2_000)
         }
     }
@@ -63,7 +61,10 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             )
         } else {
             LazyColumn {
-                items(peers, key = { it.addr }) { p ->
+                // No `key` on purpose: the engine may briefly hold two
+                // connections from the same endpoint (rapid reconnect), and
+                // a duplicate LazyColumn key would crash the composition.
+                items(peers) { p ->
                     PeerRow(p)
                 }
             }

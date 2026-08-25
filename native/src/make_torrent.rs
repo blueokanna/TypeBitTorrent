@@ -45,10 +45,7 @@ pub struct FileSpec {
 
 /// Stream-read a file into `cb` in bounded chunks (1 MiB), returning the
 /// byte count.
-fn read_file_chunks(
-    path: &PathBuf,
-    mut cb: impl FnMut(&[u8]),
-) -> Result<u64, String> {
+fn read_file_chunks(path: &PathBuf, mut cb: impl FnMut(&[u8])) -> Result<u64, String> {
     let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut chunk = vec![0u8; 1024 * 1024];
     let mut total = 0u64;
@@ -88,17 +85,21 @@ pub fn create_torrent_v1(
         if f.rel_path.is_empty() {
             return Err("empty relative path".into());
         }
-        if f.rel_path.iter().any(|c| c.is_empty() || c == "." || c == "..") {
-            return Err(format!("invalid path component in {}", f.abs_path.display()));
+        if f.rel_path
+            .iter()
+            .any(|c| c.is_empty() || c == "." || c == "..")
+        {
+            return Err(format!(
+                "invalid path component in {}",
+                f.abs_path.display()
+            ));
         }
-        let md = std::fs::metadata(&f.abs_path)
-            .map_err(|e| format!("{}: {e}", f.abs_path.display()))?;
+        let md =
+            std::fs::metadata(&f.abs_path).map_err(|e| format!("{}: {e}", f.abs_path.display()))?;
         if !md.is_file() {
             return Err(format!("not a file: {}", f.abs_path.display()));
         }
-        total = total
-            .checked_add(md.len())
-            .ok_or("total size overflow")?;
+        total = total.checked_add(md.len()).ok_or("total size overflow")?;
         sizes.push(md.len());
     }
     if total == 0 {
@@ -173,12 +174,10 @@ pub fn create_torrent_v1(
     root.push((b"created by", bytes(b"TypeBitTorrent".to_vec())));
     root.push((
         b"creation date",
-        int(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-        ),
+        int(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)),
     ));
     Ok(typebit::bencode::encode_to_vec(&dict(root)))
 }
@@ -224,7 +223,7 @@ mod tests {
         assert_eq!(t.total_size, 70 * 1024);
         assert_eq!(t.files.len(), 2);
         assert_eq!(t.piece_count(), 3); // 70 KiB / 32 KiB → 3 pieces
-        // Piece 1 spans the two files: hashing must match a concatenation.
+                                        // Piece 1 spans the two files: hashing must match a concatenation.
         let mut joined = vec![0xABu8; 40 * 1024];
         joined.extend_from_slice(&vec![0xCDu8; 30 * 1024]);
         let expect = Sha1::digest(&joined[32 * 1024..64 * 1024]);
@@ -232,4 +231,3 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
-

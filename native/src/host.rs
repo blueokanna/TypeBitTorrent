@@ -76,6 +76,18 @@ struct HttpWorkerHandle {
     done_rx: Receiver<(u64, Result<Vec<u8>>)>,
 }
 
+/// One queued DNS resolution job for the async resolver.
+struct ResolveJob {
+    host: String,
+    port: u16,
+}
+
+/// Handle to the shared async DNS resolver thread.
+struct ResolveWorkerHandle {
+    jobs_tx: Sender<ResolveJob>,
+    done_rx: Receiver<(String, u16, Option<NetAddr>)>,
+}
+
 /// The complete std-backed host.
 pub struct NativeHost {
     listener: Option<TcpListener>,
@@ -91,6 +103,9 @@ pub struct NativeHost {
     /// Async HTTP worker (lazily spawned); lets the engine submit tracker
     /// announces and web-seed fetches without ever blocking on HTTP.
     http_worker: Option<HttpWorkerHandle>,
+    /// Async DNS resolver (lazily spawned); lets the engine bootstrap the
+    /// DHT from the BEP-5 router hostnames without blocking on DNS.
+    resolve_worker: Option<ResolveWorkerHandle>,
     /// Completed HTTP jobs not yet handed to the engine.
     http_pending_results: VecDeque<(u64, Result<Vec<u8>>)>,
     /// Monotonic job id allocator (1-based).
@@ -116,6 +131,7 @@ impl NativeHost {
             files: HashMap::new(),
             http: typebit::host_std::StdHost::new(),
             http_worker: None,
+            resolve_worker: None,
             http_pending_results: VecDeque::new(),
             next_http_job: 0,
             down_total: 0,
@@ -371,6 +387,34 @@ impl NativeHost {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+
+    /// Lazily spawn the shared async DNS resolver thread (one per host).
+    fn ensure_resolve_worker(&mut self) {
+        if self.resolve_worker.is_some() {
+            return;
+        }
+        let (jobs_tx, jobs_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        std::thread::Builder::new()
+            .name("typebit-resolver".to_string())
+            .spawn(move || resolve_worker_loop(jobs_rx, done_tx))
+            .ok();
+        self.resolve_worker = Some(ResolveWorkerHandle { jobs_tx, done_rx });
+    }
+}
+
+/// The async DNS resolver thread: resolves hostnames on its own thread so
+/// a slow/broken resolver can never stall the engine loop.
+fn resolve_worker_loop(
+    jobs_rx: Receiver<ResolveJob>,
+    done_tx: Sender<(String, u16, Option<NetAddr>)>,
+) {
+    while let Ok(job) = jobs_rx.recv() {
+        let resolved = typebit::host_std::StdHost::new().resolve_host(&job.host, job.port);
+        if done_tx.send((job.host, job.port, resolved)).is_err() {
+            break;
+        }
+    }
 }
 
 /// The async HTTP worker thread: receives jobs, executes each on a capped inner thread (so one hung
@@ -413,7 +457,10 @@ fn http_job_execute(
             if resp.status.as_u16() != 200 {
                 return Err(Error::Tracker);
             }
-            resp.body.collect().map(|b| b.to_vec()).map_err(|_| Error::Io)
+            resp.body
+                .collect()
+                .map(|b| b.to_vec())
+                .map_err(|_| Error::Io)
         }
         Some((start, end)) => {
             use courierust::courierust_body::Body;
@@ -431,7 +478,10 @@ fn http_job_execute(
             if status != 200 && status != 206 {
                 return Err(Error::Tracker);
             }
-            resp.body.collect().map(|b| b.to_vec()).map_err(|_| Error::Io)
+            resp.body
+                .collect()
+                .map(|b| b.to_vec())
+                .map_err(|_| Error::Io)
         }
     }
 }
@@ -526,6 +576,32 @@ impl Host for NativeHost {
 
     fn resolve_host_all(&self, host: &str, port: u16) -> std::vec::Vec<NetAddr> {
         self.http.resolve_host_all(host, port)
+    }
+
+    fn resolve_host_async(&mut self, host: &str, port: u16) -> bool {
+        self.ensure_resolve_worker();
+        let h = match self.resolve_worker.as_ref() {
+            Some(h) => h,
+            None => return false,
+        };
+        h.jobs_tx
+            .send(ResolveJob {
+                host: host.to_string(),
+                port,
+            })
+            .is_ok()
+    }
+
+    fn take_resolved_hosts(&mut self) -> std::vec::Vec<(String, u16, NetAddr)> {
+        let mut out = Vec::new();
+        if let Some(h) = self.resolve_worker.as_ref() {
+            while let Ok((host, port, addr)) = h.done_rx.try_recv() {
+                if let Some(a) = addr {
+                    out.push((host, port, a));
+                }
+            }
+        }
+        out
     }
 
     fn tcp_connect(&mut self, addr: &NetAddr) -> Result<ConnId> {

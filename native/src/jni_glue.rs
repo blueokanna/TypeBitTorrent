@@ -36,14 +36,18 @@ fn with_env<T: Default>(
 
 /// Interpret the opaque handle. `0` is always invalid.
 ///
-/// Safe on purpose: the handle is produced only by `nativeCreateEngine` via
-/// `Box::into_raw` and destroyed exactly once by `nativeDestroyEngine`, so
-/// the returned reference is valid for the duration of the call.
-fn handle_from(h: jlong) -> Option<&'static mut EngineHandle> {
+/// The handle is produced only by `nativeCreateEngine` via `Box::into_raw`
+/// and destroyed exactly once by `nativeDestroyEngine`, so the returned
+/// SHARED reference is valid for the duration of the call. A shared (not
+/// exclusive) reference is required: multiple JVM threads (the serialized
+/// engine executor and the dedicated Peers polling thread) call JNI
+/// functions concurrently, and `EngineHandle` is `Send + Sync` (mpsc
+/// sender + mutex-guarded queues), so concurrent `&self` use is sound.
+fn handle_from(h: jlong) -> Option<&'static EngineHandle> {
     if h == 0 {
         return None;
     }
-    Some(unsafe { &mut *(h as *mut EngineHandle) })
+    Some(unsafe { &*(h as *const EngineHandle) })
 }
 
 fn jstr(env: &mut Env, s: &JString) -> String {
@@ -130,8 +134,8 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeParseTorrent
 /// Parse a JSON array of files for `nativeMakeTorrent`: `[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]}, …]`.
 fn parse_make_files(json: &str) -> Result<Vec<crate::make_torrent::FileSpec>, String> {
     use nextjson::Value;
-    let v: Value = nextjson::nextdecode(json.as_bytes())
-        .map_err(|e| format!("bad files json: {e}"))?;
+    let v: Value =
+        nextjson::nextdecode(json.as_bytes()).map_err(|e| format!("bad files json: {e}"))?;
     let arr = v.as_array().ok_or("files must be a JSON array")?;
     let mut out = Vec::with_capacity(arr.len());
     for e in arr {
@@ -197,7 +201,11 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrent(
         match crate::make_torrent::create_torrent_v1(
             &specs,
             piece_length as u32,
-            if name.trim().is_empty() { "torrent" } else { name.trim() },
+            if name.trim().is_empty() {
+                "torrent"
+            } else {
+                name.trim()
+            },
             opt_str(&announce),
             opt_str(&comment),
         ) {
