@@ -5,7 +5,6 @@ import com.typebit.platform.Platform
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** Persists the user's RSS feed subscriptions. */
 class RssRepository(
     private val json: Json = Json { prettyPrint = true; ignoreUnknownKeys = true },
 ) {
