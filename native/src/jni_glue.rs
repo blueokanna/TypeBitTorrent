@@ -78,6 +78,7 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeCreateEngine
     config_json: JString,
     save_dir: JString,
 ) -> jlong {
+    crate::android_log::log("nativeCreateEngine called");
     with_env(unowned, |env| {
         let cfg = jstr(env, &config_json);
         let dir = jstr(env, &save_dir);
@@ -98,6 +99,7 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeDestroyEngin
     _class: JClass,
     handle: jlong,
 ) {
+    crate::android_log::log("nativeDestroyEngine called");
     if handle == 0 {
         return;
     }

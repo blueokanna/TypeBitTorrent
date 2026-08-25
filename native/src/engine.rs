@@ -7,9 +7,13 @@
 //! JSON and pushed into a shared queue that Kotlin polls.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
+
+use crate::android_log::log as alog;
 
 use typebit::engine::Engine;
 use typebit::platform::NetAddr;
@@ -160,6 +164,12 @@ pub struct EngineHandle {
     cmd_tx: Sender<Cmd>,
     pub events: EventQueue,
     pub logs: LogBuffer,
+    /// Set by [`EngineHandle::shutdown`]; the worker checks it every tick so
+    /// teardown works even if the command queue is momentarily wedged.
+    stop_flag: Arc<AtomicBool>,
+    /// The worker thread, joined on shutdown so a destroyed handle is
+    /// guaranteed to leave NO orphan engine writing to the same files/ports.
+    join: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl EngineHandle {
@@ -176,12 +186,34 @@ impl EngineHandle {
         rx.recv_timeout(timeout).ok()
     }
 
+    /// Stop the engine worker and WAIT until its thread has actually
+    /// exited. Both the stop flag (checked every tick) and the `Shutdown`
+    /// command are used; the join makes the destroy path unconditional, so
+    /// a subsequent `spawn_engine` can never run two engines at once
+    /// (two engines would bind the same ports and write the same `.part`
+    /// files, corrupting downloads).
     pub fn shutdown(&self) {
+        alog("EngineHandle::shutdown() called");
+        self.stop_flag.store(true, Ordering::Relaxed);
         let (tx, rx) = channel();
-        self.send(Cmd::Shutdown { tx });
+        let _ = self.cmd_tx.send(Cmd::Shutdown { tx });
         let _ = rx.recv_timeout(Duration::from_secs(2));
+        if let Some(jh) = self.join.lock().ok().and_then(|mut g| g.take()) {
+            let _ = jh.join();
+            alog("EngineHandle::shutdown(): worker joined");
+        }
     }
 }
+
+/// Single-instance guard: exactly ONE engine worker per process. A second
+/// `spawn_engine` (from a leaked store after a slow teardown) must be
+/// refused — two engines would bind the same ports and write the same
+/// `.part` files, corrupting downloads. The guard is released when the
+/// worker thread exits.
+static ENGINE_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// Diagnostic: monotonically increasing spawn sequence for logcat tracing.
+static ENGINE_SPAWN_SEQ: AtomicU32 = AtomicU32::new(0);
 
 /// Spawn the engine worker thread. `config_json` is the JSON blob produced by
 /// the Kotlin side (see `parse_config`). Returns a handle or a string error.
@@ -190,48 +222,100 @@ pub fn spawn_engine(
     save_dir: &str,
     logs: LogBuffer,
 ) -> Result<EngineHandle, String> {
-    let (cfg, _session_cfg) = parse_config(config_json, save_dir)?;
+    let seq = ENGINE_SPAWN_SEQ.fetch_add(1, Ordering::Relaxed);
+    alog(&format!(
+        "spawn_engine #{seq} entering (live={})",
+        ENGINE_LIVE.load(Ordering::SeqCst)
+    ));
+    if ENGINE_LIVE
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        alog(&format!("spawn_engine #{seq} REFUSED (already running)"));
+        return Err("an engine is already running in this process".to_string());
+    }
+    let (cfg, _session_cfg) = match parse_config(config_json, save_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            ENGINE_LIVE.store(false, Ordering::SeqCst);
+            alog(&format!("spawn_engine #{seq} config error: {e}"));
+            return Err(e);
+        }
+    };
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
     let events: EventQueue = Arc::new(Mutex::new(VecDeque::new()));
     let events_worker = events.clone();
     let logs_worker = logs.clone();
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let flag_worker = stop_flag.clone();
 
-    std::thread::Builder::new()
+    let jh = match std::thread::Builder::new()
         .name("typebit-engine".to_string())
-        .spawn(move || run_loop(cfg, logs_worker, cmd_rx, events_worker))
-        .map_err(|e| format!("failed to spawn engine thread: {e}"))?;
+        .spawn(move || {
+            run_loop(cfg, logs_worker, cmd_rx, events_worker, flag_worker);
+            ENGINE_LIVE.store(false, Ordering::SeqCst);
+            alog(&format!(
+                "spawn_engine #{seq}: worker exited, guard released"
+            ));
+        }) {
+        Ok(jh) => jh,
+        Err(e) => {
+            ENGINE_LIVE.store(false, Ordering::SeqCst);
+            alog(&format!("spawn_engine #{seq} thread spawn failed: {e}"));
+            return Err(format!("failed to spawn engine thread: {e}"));
+        }
+    };
+    alog(&format!("spawn_engine #{seq} OK"));
 
     Ok(EngineHandle {
         cmd_tx,
         events,
         logs,
+        stop_flag,
+        join: Mutex::new(Some(jh)),
     })
 }
 
 /// The engine thread's main loop.
-fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, events: EventQueue) {
+fn run_loop(
+    engine_cfg: EngineConfig,
+    logs: LogBuffer,
+    cmd_rx: Receiver<Cmd>,
+    events: EventQueue,
+    stop_flag: Arc<AtomicBool>,
+) {
     let mut host = NativeHost::new(logs.clone());
     host.bind_tcp(engine_cfg.listen_port);
 
     let mut engine = Engine::new(host, engine_cfg);
     let mut meta = MetaRegistry::new();
-    let mut running = true;
-    let mut consecutive_panics = 0u32;
+    let running = true;
+    alog("run_loop: started");
 
     while running {
-        let iteration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut stop = false;
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                if let Some(s) = handle_cmd(&mut engine, &mut meta, cmd, &events) {
-                    stop = !s;
+        if stop_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let mut stop = false;
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handle_cmd(&mut engine, &mut meta, cmd, &events)
+            }));
+            match handled {
+                Ok(Some(true)) => {
+                    stop = true;
                     break;
                 }
+                Ok(_) => {}
+                Err(payload) => log_panic(&logs, &events, payload.as_ref()),
             }
-            if stop {
-                running = false;
-                return;
-            }
+        }
+        if stop {
+            break;
+        }
 
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let accepted = engine.host.accept_pending();
             engine.host.drain_established();
             for (conn, addr) in accepted {
@@ -245,10 +329,6 @@ fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, ev
                 for ev in &evs {
                     if let EngineEvent::MetadataComplete { info_hash } = ev {
                         let h = info_hash.to_hex();
-                        // Magnets start with an empty placeholder in the
-                        // mirror. Once the engine has the metainfo, replace
-                        // it with the full file table so the Files tab and
-                        // the staged-file cleanup both see the real files.
                         if let Some(t) = engine.metainfo(&info_hash) {
                             meta.register_ready(t, &h);
                         } else {
@@ -283,42 +363,39 @@ fn run_loop(engine_cfg: EngineConfig, logs: LogBuffer, cmd_rx: Receiver<Cmd>, ev
                     }
                 }
             }
-        }));
+        }))
+        .unwrap_or_else(|payload| {
+            log_panic(&logs, &events, payload.as_ref());
+        });
 
-        match iteration {
-            Ok(()) => consecutive_panics = 0,
-            Err(payload) => {
-                consecutive_panics = consecutive_panics.saturating_add(1);
-                let msg = panic_message(payload.as_ref());
-                if let Ok(mut q) = logs.lock() {
-                    q.push_back((
-                        3, // LogLevel::Error
-                        format!("engine panic recovered (x{consecutive_panics}): {msg}"),
-                    ));
-                }
-                // Surface it to the UI so the freeze is never "silent".
-                if let Ok(mut q) = events.lock() {
-                    q.push_back(format!(
-                        r#"{{"t":11,"code":2,"detail":"engine panic recovered: {msg}"}}"#
-                    ));
-                }
-                // A panic storm means the engine state is unsalvageable: stop
-                // loudly instead of busy-looping forever.
-                if consecutive_panics >= 10 {
-                    if let Ok(mut q) = logs.lock() {
-                        q.push_back((3, String::from("engine: repeated panics, shutting down")));
-                    }
-                    running = false;
-                }
-            }
-        }
-        if !running {
-            break;
-        }
         std::thread::sleep(Duration::from_millis(TICK_MS));
     }
 
+    alog("run_loop: exiting");
     engine.host.shutdown();
+}
+
+/// Record a recovered panic: one log line plus one UI event, so a crash is
+/// never silent. The message is JSON-escaped so it can always be parsed by
+/// the Kotlin event consumer, and it is also printed to logcat so adb can
+/// see it even if the UI never surfaces it.
+fn log_panic(logs: &LogBuffer, events: &EventQueue, payload: &(dyn std::any::Any + Send)) {
+    let msg = panic_message(payload);
+    alog(&format!("engine PANIC recovered: {msg}"));
+    if let Ok(mut q) = logs.lock() {
+        q.push_back((3, format!("engine panic recovered: {msg}")));
+    }
+    if let Ok(mut q) = events.lock() {
+        let mut w = JsonWriter::new();
+        w.begin_object();
+        w.kv_u64("t", 11);
+        w.comma();
+        w.kv_u64("code", 2);
+        w.comma();
+        w.kv_string("detail", &format!("engine panic recovered: {msg}"));
+        w.end_object();
+        q.push_back(w.into_string());
+    }
 }
 
 /// Best-effort human-readable panic payload.
@@ -353,8 +430,6 @@ fn handle_cmd(
                         meta.register(&t);
                         meta.set_save_dir(&hex, &save_dir);
                     }
-                    // Selective download (0.1.1): apply per-file priorities
-                    // immediately so skipped files are never requested.
                     if let Ok(h) = InfoHash::from_hex(&hex) {
                         for (i, p) in file_priorities.iter().enumerate() {
                             if *p != 1 {
@@ -416,12 +491,6 @@ fn handle_cmd(
         Cmd::Remove { hash, tx } => {
             let res = match InfoHash::from_hex(&hash) {
                 Ok(h) => {
-                    // Capture the engine's actual file paths BEFORE removing
-                    // — these are the true paths the engine wrote (each
-                    // staged as `<path>.part`), valid for file torrents and
-                    // magnets whose metadata arrived. A cancelled download
-                    // must not leave incomplete data behind, so the staged
-                    // files are dropped afterwards.
                     let engine_paths: Vec<String> = engine
                         .metainfo(&h)
                         .map(|t| t.files.iter().map(|f| f.display_path()).collect())
@@ -494,9 +563,6 @@ fn handle_cmd(
             let _ = tx.send(w.into_string());
         }
         Cmd::Snapshot { tx } => {
-            // One batched response for the whole UI poll tick. Iterating the
-            // saved state keeps the paused/have data authoritative, while the
-            // per-session queries are cheap in-process lookups (no JNI).
             let st = engine.save_state();
             let dht = engine.dht().map(|d| d.table().size()).unwrap_or(0);
             let trackers = engine.active_trackers();
@@ -589,11 +655,9 @@ fn handle_cmd(
             let _ = tx.send(pid);
         }
         Cmd::SetLimits { down, up } => {
-            // typebit 0.1.1 has built-in global token-bucket limits.
             engine.set_global_limits(down, up);
         }
         Cmd::SetSessionConfig { cfg } => {
-            // Applies to torrents added from now on.
             engine.cfg.session = cfg;
         }
         Cmd::SetFilePriority {
@@ -671,10 +735,6 @@ fn handle_cmd(
             let _ = tx.send(totals);
         }
         Cmd::SaveState { tx } => {
-            // Flush dirty pieces to disk first so the persisted `have`
-            // bitfield only claims data that is truly on stable storage
-            // (a crash between cache-write and flush must NOT "restore"
-            // pieces whose bytes are missing from the .part files).
             engine.flush_cache();
             let st = engine.save_state();
             let bytes = st.to_binary().ok();
@@ -683,10 +743,6 @@ fn handle_cmd(
         Cmd::LoadState { data } => {
             if let Ok(st) = typebit::state::SessionState::from_binary(&data) {
                 let now = engine.host.now_ms();
-                // 0.1.1: torrents are re-added first (add_torrent), then
-                // restore_torrent re-applies verified pieces, per-file
-                // priorities, per-task limits and the reputation ledger;
-                // load_state restores the DHT routing table.
                 for t in &st.torrents {
                     let h = bytes_to_infohash(&t.info_hash);
                     if let Some(h) = h {
@@ -711,7 +767,6 @@ fn handle_cmd(
             return Some(true);
         }
     }
-    // MetadataComplete events flip the `metadata_ready` flag on the mirror.
     let _ = events;
     None
 }
@@ -1139,8 +1194,6 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
     let use_default_trackers = flag("use_default_trackers", true);
     let listen_port = num("listen_port", typebit::consts::DEFAULT_PORT as u64) as u16;
 
-    // typebit 0.1.1 folded the old ChokeConfig into the anti-leech engine's
-    // LeechConfig (slot management + choke + ban policy in one struct).
     let leech = typebit::leech::LeechConfig {
         seeding_slots: num("seeding_slots", 8) as u32,
         leeching_slots: num("leeching_slots", 8) as u32,
@@ -1212,6 +1265,14 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Serializes tests that spawn the REAL engine worker: the process-wide
+    /// singleton guard (`ENGINE_LIVE`) only allows one engine at a time, and
+    /// the default test runner runs tests in parallel threads.
+    fn engine_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// A download writes `<final>.part` (never the final name); after
     /// `finalize_file` the file appears under the final name and the staging
     /// copy is gone. Resume re-opens the staging file.
@@ -1250,6 +1311,114 @@ mod tests {
         assert!(!stage.exists(), "staging file must be gone after finalize");
         assert_eq!(fs::read(&final_path).unwrap(), b"abcd");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The engine worker must be a strict singleton and `shutdown` must
+    /// REALLY terminate the thread (releasing the singleton guard) — a
+    /// leaked worker would race a second engine on the same port and the
+    /// same staged files, silently corrupting downloads.
+    #[test]
+    fn engine_lifecycle_singleton_and_shutdown() {
+        let _guard = engine_test_lock();
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let h1 = spawn_engine("{}", ".", logs.clone()).expect("first engine spawns");
+
+        // A second engine must be refused while the first is alive.
+        match spawn_engine("{}", ".", logs.clone()) {
+            Ok(_) => panic!("second engine must be refused"),
+            Err(e) => {
+                assert!(e.contains("already running"), "unexpected error: {e}")
+            }
+        }
+
+        // Shutdown must terminate the worker (join) and release the guard.
+        h1.shutdown();
+
+        // The guard is released, so a fresh engine can start again.
+        let h2 = spawn_engine("{}", ".", logs.clone()).expect("engine restarts after shutdown");
+        h2.shutdown();
+    }
+
+    /// Removing a torrent MUST delete its staged (`.part`) files — a
+    /// cancelled download must never leave incomplete data behind. This runs
+    /// the real engine worker and the real `Cmd::AddTorrent` / `Cmd::Start` /
+    /// `Cmd::Remove` flow, so it also exercises the engine-path capture and
+    /// the staged-path computation end to end.
+    #[test]
+    fn remove_deletes_staged_files() {
+        let _guard = engine_test_lock();
+        let dir = std::env::temp_dir().join(format!("typebit_remove_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // A small single-file payload → torrent whose staged file will be
+        // `<dir>/payload.bin.part`.
+        let payload = dir.join("payload.bin");
+        fs::write(&payload, vec![0x42u8; 300_000]).unwrap();
+        let torrent = crate::make_torrent::create_torrent_v1(
+            &[crate::make_torrent::FileSpec {
+                abs_path: payload.clone(),
+                rel_path: vec!["payload.bin".to_string()],
+            }],
+            64 * 1024,
+            "payload",
+            None,
+            None,
+        )
+        .expect("create torrent");
+
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let engine = spawn_engine("{}", dir.to_str().unwrap(), logs.clone()).expect("spawn");
+
+        // Add the torrent (engine registers the mirror + save dir).
+        let (tx, rx) = channel();
+        let added: Option<Result<String, String>> = engine.request(
+            Cmd::AddTorrent {
+                data: torrent,
+                save_dir: dir.to_str().unwrap().to_string(),
+                file_priorities: Vec::new(),
+                tx,
+            },
+            rx,
+            Duration::from_secs(10),
+        );
+        let hash = added.expect("add timed out").expect("add failed");
+        let (tx2, rx2) = channel();
+        let start_res: Option<Result<(), String>> = engine.request(
+            Cmd::Start {
+                hash: hash.clone(),
+                tx: tx2,
+            },
+            rx2,
+            Duration::from_secs(10),
+        );
+        assert!(start_res.expect("start timed out").is_ok(), "start failed");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let stage = dir.join("payload.part");
+        assert!(stage.exists(), "staged file should exist after start");
+
+        let (tx3, rx3) = channel();
+        let removed: Option<Result<(), String>> =
+            engine.request(Cmd::Remove { hash, tx: tx3 }, rx3, Duration::from_secs(10));
+        assert!(removed.expect("remove timed out").is_ok(), "remove failed");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !stage.exists(),
+            "staged file must be deleted when the torrent is removed"
+        );
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".part"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no .part files may remain after removal: {leftovers:?}"
+        );
+
+        engine.shutdown();
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -617,11 +617,25 @@ impl Host for NativeHost {
         let tx = self.established_tx.clone();
         self.pending_connects += 1;
         self.conns.insert(id, ConnSlot::Connecting);
-        std::thread::spawn(move || {
-            let res = TcpStream::connect_timeout(&target, CONNECT_TIMEOUT);
-            let _ = tx.send((id, res));
-        });
-        Ok(id)
+        // `Builder::spawn` (not `thread::spawn`) so a failed spawn returns an
+        // error instead of panicking the engine thread; a bounded
+        // MAX_PENDING_CONNECTS keeps the connect-thread count sane on mobile.
+        match std::thread::Builder::new()
+            .name("typebit-conn".to_string())
+            .spawn(move || {
+                let res = TcpStream::connect_timeout(&target, CONNECT_TIMEOUT);
+                let _ = tx.send((id, res));
+            }) {
+            Ok(_) => Ok(id),
+            Err(e) => {
+                // Could not even spawn the connector thread: treat as full so
+                // the engine re-discovers the peer later.
+                self.pending_connects = self.pending_connects.saturating_sub(1);
+                self.conns.remove(&id);
+                crate::android_log::log(&format!("tcp_connect: spawn failed: {e}"));
+                Err(Error::Full)
+            }
+        }
     }
 
     fn tcp_connect_done(&mut self, id: ConnId) -> Result<()> {

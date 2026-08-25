@@ -1,0 +1,170 @@
+# TypeBitTorrent — CI/CD
+#
+# Builds the Android APK (4 ABIs) and the Windows desktop distribution on
+# GitHub-hosted Windows runners, then uploads them as workflow artifacts.
+#
+# The Rust engine lives in a SEPARATE public repository (`blueokanna/TypeBit`)
+# and is referenced by the native crate as a PATH dependency
+# (`native/Cargo.toml` → `typebit = { path = "../../TypeBit" }`), so this
+# workflow checks both repositories out as siblings before building.
+#
+# Triggers: push to `main`, pull requests against `main`, or manual dispatch.
+
+name: Build TypeBitTorrent
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK + Windows distribution
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      # ---------------------------------------------------------------- checkouts
+      - name: Checkout TypeBitTorrent
+        uses: actions/checkout@v4
+        with:
+          path: TypeBitTorrent
+
+      # The engine must sit NEXT TO this repo so `native/Cargo.toml`'s
+      # `path = "../../TypeBit"` resolves: TypeBitTorrent/native → ../../TypeBit.
+      - name: Checkout TypeBit (Rust engine)
+        uses: actions/checkout@v4
+        with:
+          repository: blueokanna/TypeBit
+          ref: main
+          path: TypeBit
+
+      # ------------------------------------------------------------------ toolchain
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle (caching)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK 26.2.11394342
+        shell: pwsh
+        run: |
+          echo "y" | sdkmanager --install "ndk;26.2.11394342"
+          if (-not (Test-Path "$env:ANDROID_HOME/ndk/26.2.11394342")) {
+            throw "NDK not found under $env:ANDROID_HOME/ndk/26.2.11394342"
+          }
+
+      - name: Set up Rust (with Android targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-linux-android,
+            armv7-linux-androideabi,
+            x86_64-linux-android,
+            i686-linux-android
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: TypeBit, TypeBitTorrent/native
+
+      # ------------------------------------------------------------------ native libs
+      # build-desktop.ps1 → cargo build --release → copies typebit_native.dll
+      # into composeApp/src/desktopMain/resources/native/.
+      - name: Build Windows desktop native DLL
+        shell: pwsh
+        working-directory: TypeBitTorrent
+        run: powershell -ExecutionPolicy Bypass -File scripts/build-desktop.ps1
+
+      # build-android.ps1 regenerates native/.cargo/config.toml with THIS
+      # runner's NDK path (the committed one holds a local dev path), then
+      # cross-compiles all 4 ABIs into composeApp/src/androidMain/jniLibs.
+      - name: Build Android native libs (4 ABIs)
+        shell: pwsh
+        working-directory: TypeBitTorrent
+        run: |
+          $env:ANDROID_NDK_HOME = "$env:ANDROID_HOME/ndk/26.2.11394342"
+          if (-not (Test-Path $env:ANDROID_NDK_HOME)) {
+            throw "ANDROID_NDK_HOME missing: $env:ANDROID_NDK_HOME"
+          }
+          powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1
+          $abis = @("arm64-v8a","armeabi-v7a","x86_64","x86")
+          foreach ($abi in $abis) {
+            $so = "composeApp/src/androidMain/jniLibs/$abi/libtypebit_native.so"
+            if (-not (Test-Path $so)) { throw "missing $so" }
+          }
+
+      # ------------------------------------------------------------------ tests
+      - name: Run TypeBit engine tests
+        shell: pwsh
+        working-directory: TypeBit
+        run: cargo test --lib
+
+      - name: Run native bridge tests
+        shell: pwsh
+        working-directory: TypeBitTorrent/native
+        run: cargo test
+
+      # ------------------------------------------------------------------ Android APK
+      - name: Build Android APK (debug)
+        shell: pwsh
+        working-directory: TypeBitTorrent
+        run: .\gradlew.bat :composeApp:assembleDebug
+
+      # ------------------------------------------------------------------ Windows desktop
+      - name: Build Windows portable distribution
+        shell: pwsh
+        working-directory: TypeBitTorrent
+        run: .\gradlew.bat :composeApp:createDistributable
+
+      # Installers (EXE/MSI) are best-effort: they download WiX and use
+      # jpackage, which can be flaky on hosted runners. The portable
+      # distribution above is the guaranteed Windows deliverable.
+      - name: Build Windows installers (EXE/MSI)
+        shell: pwsh
+        working-directory: TypeBitTorrent
+        continue-on-error: true
+        run: .\gradlew.bat :composeApp:packageDistributionForCurrentOS
+
+      # ------------------------------------------------------------------ artifacts
+      - name: Package Windows portable zip
+        shell: pwsh
+        run: |
+          $src = "TypeBitTorrent/composeApp/build/compose/binaries/main/app/TypeBitTorrent"
+          if (-not (Test-Path $src)) { throw "portable distribution missing: $src" }
+          Compress-Archive -Path $src -DestinationPath "TypeBitTorrent-windows-portable.zip"
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TypeBitTorrent-Android-APK
+          path: TypeBitTorrent/composeApp/build/outputs/apk/debug/composeApp-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Windows portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: TypeBitTorrent-Windows-Portable
+          path: TypeBitTorrent-windows-portable.zip
+          if-no-files-found: error
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: TypeBitTorrent-Windows-Installers
+          path: |
+            TypeBitTorrent/composeApp/build/compose/binaries/main/exe/*.exe
+            TypeBitTorrent/composeApp/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: warn

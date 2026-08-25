@@ -36,28 +36,27 @@ import kotlinx.datetime.toLocalDateTime
 /**
  * The single source of truth for the UI.
  *
- * Unidirectional data flow: UI → action → (engine + persistence) → [state].
- * The engine runs on its own Rust thread; the store owns a poll loop that
- * drains events, refreshes stats and periodically persists resume data.
+ * Unidirectional data flow: UI → action → (engine + persistence) → [state]. The engine runs on its
+ * own Rust thread; the store owns a poll loop that drains events, refreshes stats and periodically
+ * persists resume data.
  *
- * Performance contract: every engine call is a blocking JNI round-trip, so
- * ALL of it runs on a private single-threaded background executor
- * ([engineScope]) — never on the UI thread. Doing it on the main thread was
- * the source of the settings jank and the unresponsive pause/resume buttons
- * (a blocked JNI reply froze the click handler; the state only caught up
- * after navigating away and back). `limitedParallelism(1)` also serializes
- * actions against the poll loop, so the state bookkeeping is race-free.
+ * Performance contract: every engine call is a blocking JNI round-trip, so ALL of it runs on a
+ * private single-threaded background executor ([engineScope]) — never on the UI thread. Doing it on
+ * the main thread was the source of the settings jank and the unresponsive pause/resume buttons (a
+ * blocked JNI reply froze the click handler; the state only caught up after navigating away and
+ * back). `limitedParallelism(1)` also serializes actions against the poll loop, so the state
+ * bookkeeping is race-free.
  */
 class AppStore(
-    private val engine: TorrentEngine,
-    private val settingsRepo: SettingsRepository,
-    private val torrentRepo: TorrentRepository,
+        private val engine: TorrentEngine,
+        private val settingsRepo: SettingsRepository,
+        private val torrentRepo: TorrentRepository,
 ) {
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
     private fun newEngineScope(): CoroutineScope =
-        CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+            CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
     private var engineScope: CoroutineScope = newEngineScope()
 
@@ -71,7 +70,7 @@ class AppStore(
     private var peersScope: CoroutineScope = newPeersScope()
 
     private fun newPeersScope(): CoroutineScope =
-        CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+            CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
     // Persisted app-level records (engine cannot carry category/tags/source).
     // Only touched from [engineScope] — never from the UI thread.
@@ -114,8 +113,7 @@ class AppStore(
 
     private suspend fun boot() {
         val settings = settingsRepo.load()
-        val saveDir = settings.downloads.defaultSavePath
-            .ifBlank { Platform.defaultDownloadDir() }
+        val saveDir = settings.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }
         val started = engine.start(EngineConfigJson.engineConfig(settings), saveDir)
         if (!started) {
             _state.update { it.copy(lastError = "引擎启动失败：原生库未加载") }
@@ -143,11 +141,11 @@ class AppStore(
 
         _state.update {
             it.copy(
-                settings = settings,
-                engineRunning = true,
-                peerId = engine.peerId(),
-                categories = buildCategories(),
-                tags = buildTags(),
+                    settings = settings,
+                    engineRunning = true,
+                    peerId = engine.peerId(),
+                    categories = buildCategories(),
+                    tags = buildTags(),
             )
         }
         refreshStats()
@@ -155,14 +153,17 @@ class AppStore(
         pollJob = onEngineJob { pollLoop() }
     }
 
-    private fun onEngineJob(block: suspend () -> Unit): Job =
-        engineScope.launch { block() }
+    private fun onEngineJob(block: suspend () -> Unit): Job = engineScope.launch { block() }
 
     /**
-     * Stops the engine and flushes persistence. Runs the shutdown work on
-     * the engine executor but waits for it with a bounded timeout so the
-     * data survives process exit (the executor's threads are daemons on the
-     * JVM, so a pure fire-and-forget shutdown could be cut off mid-write).
+     * Stops the engine and flushes persistence. Runs the shutdown work on the engine executor but
+     * waits for it with a bounded timeout so the data survives process exit (the executor's threads
+     * are daemons on the JVM, so a pure fire-and-forget shutdown could be cut off mid-write).
+     *
+     * Persistence is best-effort and is NEVER allowed to skip the engine teardown: `engine.stop()`
+     * (native destroy) is outside the timeout. If it were skipped, the engine worker thread would
+     * leak and the next store start would spawn a SECOND engine — two engines racing on the same
+     * port and the same `.part` files silently corrupts downloads.
      */
     fun stop() {
         pollJob?.cancel()
@@ -173,8 +174,8 @@ class AppStore(
                 settingsSaveJob?.cancel()
                 settingsRepo.save(_state.value.settings)
                 persistResume()
-                engine.stop()
             }
+            engine.stop()
         }
         _state.update { it.copy(engineRunning = false) }
     }
@@ -184,73 +185,76 @@ class AppStore(
     // ------------------------------------------------------------------
 
     /**
-     * Parses `.torrent` bytes without adding — add-dialog preview.
-     * Blocking JNI parse; callers should run it off the UI thread.
+     * Parses `.torrent` bytes without adding — add-dialog preview. Blocking JNI parse; callers
+     * should run it off the UI thread.
      */
     fun parseTorrentFile(bytes: ByteArray): com.typebit.engine.TorrentInfoDto? =
-        engine.parseTorrent(bytes)
+            engine.parseTorrent(bytes)
 
     /**
-     * Creates a v1 `.torrent` from local files (blocking — call off the UI
-     * thread). `files` is `(absolutePath, fileName)` pairs; `pieceLength`
-     * must be a supported power of two (16 KiB .. 256 MiB).
+     * Creates a v1 `.torrent` from local files (blocking — call off the UI thread). `files` is
+     * `(absolutePath, fileName)` pairs; `pieceLength` must be a supported power of two (16 KiB ..
+     * 256 MiB).
      */
     fun makeTorrent(
-        files: List<Pair<String, String>>,
-        pieceLength: Int,
-        name: String,
-        announce: String?,
-        comment: String?,
+            files: List<Pair<String, String>>,
+            pieceLength: Int,
+            name: String,
+            announce: String?,
+            comment: String?,
     ): ByteArray? =
-        engine.makeTorrent(
-            files = files.map { it.first to listOf(it.second) },
-            pieceLength = pieceLength,
-            name = name,
-            announce = announce,
-            comment = comment,
-        )
+            engine.makeTorrent(
+                    files = files.map { it.first to listOf(it.second) },
+                    pieceLength = pieceLength,
+                    name = name,
+                    announce = announce,
+                    comment = comment,
+            )
 
     fun addTorrentFile(bytes: ByteArray, fileName: String) {
         val s = _state.value.settings
         addTorrentFileEx(
-            bytes = bytes,
-            fileName = fileName,
-            saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
-            category = "",
-            tags = emptyList(),
-            paused = s.downloads.addTorrentsInPause,
-            filePriorities = emptyList(),
+                bytes = bytes,
+                fileName = fileName,
+                saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
+                category = "",
+                tags = emptyList(),
+                paused = s.downloads.addTorrentsInPause,
+                filePriorities = emptyList(),
         )
     }
 
     /** Adds a `.torrent` with the add-dialog options applied. */
     fun addTorrentFileEx(
-        bytes: ByteArray,
-        fileName: String,
-        saveDir: String,
-        category: String,
-        tags: List<String>,
-        paused: Boolean,
-        filePriorities: List<Int> = emptyList(),
+            bytes: ByteArray,
+            fileName: String,
+            saveDir: String,
+            category: String,
+            tags: List<String>,
+            paused: Boolean,
+            filePriorities: List<Int> = emptyList(),
     ) = onEngine {
-        val hash = engine.addTorrent(bytes, saveDir, filePriorities) ?: run {
-            _state.update { it.copy(lastError = "无法解析种子文件：$fileName") }
-            return@onEngine
-        }
+        val hash =
+                engine.addTorrent(bytes, saveDir, filePriorities)
+                        ?: run {
+                            _state.update { it.copy(lastError = "无法解析种子文件：$fileName") }
+                            return@onEngine
+                        }
         val info = engine.torrentInfo(hash)
         if (info != null) infoCache[hash] = info
-        val record = TorrentRecord(
-            hash = hash,
-            name = info?.name ?: fileName.removeSuffix(".torrent"),
-            kind = "FILE",
-            saveDir = saveDir,
-            data = B64.encode(bytes),
-            addedAt = System.currentTimeMillis(),
-            paused = paused,
-            category = category,
-            tags = tags,
-            filePriorities = filePriorities,
-        )
+        val record =
+                TorrentRecord(
+                        hash = hash,
+                        name = info?.name ?: fileName.removeSuffix(".torrent"),
+                        kind = "FILE",
+                        saveDir = saveDir,
+                        data = B64.encode(bytes),
+                        addedAt = System.currentTimeMillis(),
+                        paused = paused,
+                        category = category,
+                        tags = tags,
+                        filePriorities = filePriorities,
+                )
         records = records + record
         persistRecords()
         if (!record.paused) engine.start(hash)
@@ -260,44 +264,47 @@ class AppStore(
     fun addMagnet(uri: String) {
         val s = _state.value.settings
         addMagnetEx(
-            uri = uri,
-            saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
-            category = "",
-            tags = emptyList(),
-            paused = s.downloads.addTorrentsInPause,
-            filePriorities = emptyList(),
+                uri = uri,
+                saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
+                category = "",
+                tags = emptyList(),
+                paused = s.downloads.addTorrentsInPause,
+                filePriorities = emptyList(),
         )
     }
 
     /** Adds a magnet with the add-dialog options applied. */
     fun addMagnetEx(
-        uri: String,
-        saveDir: String,
-        category: String,
-        tags: List<String>,
-        paused: Boolean,
-        filePriorities: List<Int> = emptyList(),
+            uri: String,
+            saveDir: String,
+            category: String,
+            tags: List<String>,
+            paused: Boolean,
+            filePriorities: List<Int> = emptyList(),
     ) = onEngine {
         val trimmed = uri.trim()
         if (trimmed.isEmpty()) return@onEngine
-        val hash = engine.addMagnet(trimmed, saveDir) ?: run {
-            _state.update { it.copy(lastError = "无法解析磁力链接") }
-            return@onEngine
-        }
+        val hash =
+                engine.addMagnet(trimmed, saveDir)
+                        ?: run {
+                            _state.update { it.copy(lastError = "无法解析磁力链接") }
+                            return@onEngine
+                        }
         val info = engine.torrentInfo(hash)
         if (info != null) infoCache[hash] = info
-        val record = TorrentRecord(
-            hash = hash,
-            name = info?.name ?: "magnet",
-            kind = "MAGNET",
-            saveDir = saveDir,
-            data = trimmed,
-            addedAt = System.currentTimeMillis(),
-            paused = paused,
-            category = category,
-            tags = tags,
-            filePriorities = filePriorities,
-        )
+        val record =
+                TorrentRecord(
+                        hash = hash,
+                        name = info?.name ?: "magnet",
+                        kind = "MAGNET",
+                        saveDir = saveDir,
+                        data = trimmed,
+                        addedAt = System.currentTimeMillis(),
+                        paused = paused,
+                        category = category,
+                        tags = tags,
+                        filePriorities = filePriorities,
+                )
         records = records + record
         persistRecords()
         // File priorities can only be applied once the metadata arrives;
@@ -310,18 +317,19 @@ class AppStore(
     fun start(hash: String) = resume(hash)
 
     /**
-     * Pauses a torrent. The status flips to PAUSED immediately (optimistic
-     * UI), then the engine + records are updated on the background executor;
-     * the poll tick confirms the authoritative state. Never blocks the UI.
+     * Pauses a torrent. The status flips to PAUSED immediately (optimistic UI), then the engine +
+     * records are updated on the background executor; the poll tick confirms the authoritative
+     * state. Never blocks the UI.
      */
     fun pause(hash: String) {
         _state.update { s ->
             s.copy(
-                torrents = s.torrents.map { t ->
-                    if (t.hash == hash && t.status != TorrentStatus.PAUSED) {
-                        t.copy(status = TorrentStatus.PAUSED)
-                    } else t
-                },
+                    torrents =
+                            s.torrents.map { t ->
+                                if (t.hash == hash && t.status != TorrentStatus.PAUSED) {
+                                    t.copy(status = TorrentStatus.PAUSED)
+                                } else t
+                            },
             )
         }
         onEngine {
@@ -335,11 +343,16 @@ class AppStore(
     fun resume(hash: String) {
         _state.update { s ->
             s.copy(
-                torrents = s.torrents.map { t ->
-                    if (t.hash == hash && t.status == TorrentStatus.PAUSED) {
-                        t.copy(status = if (t.isComplete) TorrentStatus.SEEDING else TorrentStatus.DOWNLOADING)
-                    } else t
-                },
+                    torrents =
+                            s.torrents.map { t ->
+                                if (t.hash == hash && t.status == TorrentStatus.PAUSED) {
+                                    t.copy(
+                                            status =
+                                                    if (t.isComplete) TorrentStatus.SEEDING
+                                                    else TorrentStatus.DOWNLOADING
+                                    )
+                                } else t
+                            },
             )
         }
         onEngine {
@@ -353,8 +366,8 @@ class AppStore(
     fun remove(hash: String) {
         _state.update {
             it.copy(
-                torrents = it.torrents.filterNot { t -> t.hash == hash },
-                selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
+                    torrents = it.torrents.filterNot { t -> t.hash == hash },
+                    selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
             )
         }
         onEngine {
@@ -368,8 +381,8 @@ class AppStore(
             // rebuilt the row from the not-yet-updated records list.
             _state.update {
                 it.copy(
-                    torrents = it.torrents.filterNot { t -> t.hash == hash },
-                    selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
+                        torrents = it.torrents.filterNot { t -> t.hash == hash },
+                        selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
                 )
             }
         }
@@ -380,19 +393,20 @@ class AppStore(
     }
 
     /**
-     * Sets one file's download priority at runtime (0=Skip, 1=Normal,
-     * 2=High) and persists it. Skipped files stop being requested.
+     * Sets one file's download priority at runtime (0=Skip, 1=Normal, 2=High) and persists it.
+     * Skipped files stop being requested.
      */
     fun setFilePriority(hash: String, file: Int, priority: Int) = onEngine {
         if (engine.setFilePriority(hash, file, priority)) {
-            records = records.map { rec ->
-                if (rec.hash == hash) {
-                    val prio = rec.filePriorities.toMutableList()
-                    while (prio.size <= file) prio.add(1)
-                    prio[file] = priority
-                    rec.copy(filePriorities = prio)
-                } else rec
-            }
+            records =
+                    records.map { rec ->
+                        if (rec.hash == hash) {
+                            val prio = rec.filePriorities.toMutableList()
+                            while (prio.size <= file) prio.add(1)
+                            prio[file] = priority
+                            rec.copy(filePriorities = prio)
+                        } else rec
+                    }
             persistRecords()
         }
     }
@@ -402,11 +416,12 @@ class AppStore(
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return@onEngine
         if (engine.addTracker(hash, trimmed)) {
-            records = records.map { rec ->
-                if (rec.hash == hash && trimmed !in rec.trackers) {
-                    rec.copy(trackers = rec.trackers + trimmed)
-                } else rec
-            }
+            records =
+                    records.map { rec ->
+                        if (rec.hash == hash && trimmed !in rec.trackers) {
+                            rec.copy(trackers = rec.trackers + trimmed)
+                        } else rec
+                    }
             persistRecords()
         }
     }
@@ -414,9 +429,10 @@ class AppStore(
     /** Removes a tracker URL from a running torrent and persists it. */
     fun removeTracker(hash: String, url: String) = onEngine {
         if (engine.removeTracker(hash, url)) {
-            records = records.map { rec ->
-                if (rec.hash == hash) rec.copy(trackers = rec.trackers - url) else rec
-            }
+            records =
+                    records.map { rec ->
+                        if (rec.hash == hash) rec.copy(trackers = rec.trackers - url) else rec
+                    }
             persistRecords()
         }
     }
@@ -430,10 +446,9 @@ class AppStore(
     }
 
     /**
-     * Applies a settings edit. The UI state updates immediately; disk I/O
-     * and engine calls happen on the background executor, diffed so they
-     * only cross the JNI boundary when the relevant value changed, and the
-     * JSON write is coalesced (rapid edits collapse into one save).
+     * Applies a settings edit. The UI state updates immediately; disk I/O and engine calls happen
+     * on the background executor, diffed so they only cross the JNI boundary when the relevant
+     * value changed, and the JSON write is coalesced (rapid edits collapse into one save).
      */
     fun updateSettings(settings: AppSettings) {
         _state.update { it.copy(settings = settings) }
@@ -457,8 +472,13 @@ class AppStore(
         //    right away (the engine only reads the session config for
         //    torrents added afterwards, so a tracker-list import must be
         //    pushed to existing sessions explicitly).
-        val trackersNow = settings.bitTorrent.extraTrackers.lineSequence()
-            .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        val trackersNow =
+                settings.bitTorrent
+                        .extraTrackers
+                        .lineSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .toSet()
         if (trackersNow != lastAppliedExtraTrackers) {
             val added = trackersNow - lastAppliedExtraTrackers
             if (added.isNotEmpty()) {
@@ -488,26 +508,33 @@ class AppStore(
         persistRecords()
         _state.update {
             it.copy(
-                categories = buildCategories(),
-                torrents = it.torrents.map { t -> if (t.hash == hash) t.copy(category = category) else t },
+                    categories = buildCategories(),
+                    torrents =
+                            it.torrents.map { t ->
+                                if (t.hash == hash) t.copy(category = category) else t
+                            },
             )
         }
     }
 
     fun toggleTag(hash: String, tag: String) = onEngine {
-        records = records.map { r ->
-            if (r.hash == hash) {
-                val tags = if (tag in r.tags) r.tags - tag else r.tags + tag
-                r.copy(tags = tags)
-            } else r
-        }
+        records =
+                records.map { r ->
+                    if (r.hash == hash) {
+                        val tags = if (tag in r.tags) r.tags - tag else r.tags + tag
+                        r.copy(tags = tags)
+                    } else r
+                }
         persistRecords()
         _state.update {
             it.copy(
-                tags = buildTags(),
-                torrents = it.torrents.map { t ->
-                    if (t.hash == hash) t.copy(tags = records.first { r -> r.hash == hash }.tags) else t
-                },
+                    tags = buildTags(),
+                    torrents =
+                            it.torrents.map { t ->
+                                if (t.hash == hash)
+                                        t.copy(tags = records.first { r -> r.hash == hash }.tags)
+                                else t
+                            },
             )
         }
     }
@@ -525,16 +552,21 @@ class AppStore(
             val interval = _state.value.settings.behavior.refreshIntervalMs.coerceIn(200, 5000)
             delay(interval.toLong())
 
-            // 1) Drain engine events first (cheap, authoritative).
-            drainEvents(engine.takeEvents())
+            // 1) Drain engine events first (cheap, authoritative). Returns
+            //    true when a torrent completed or metadata arrived — both
+            //    states must be persisted IMMEDIATELY, not up to 30 s later
+            //    (otherwise a freshly-completed download reverts to an older
+            //    partial state after an app restart).
+            val saveNow = drainEvents(engine.takeEvents())
 
             // 2) Refresh per-torrent stats + global rates in ONE native
             //    snapshot call and ONE state update.
             refreshStats()
 
-            // 3) Persist resume data on a slow cadence (like qBittorrent).
+            // 3) Persist resume data on a slow cadence (like qBittorrent),
+            //    or right away when an event demands it.
             val now = System.currentTimeMillis()
-            if (now - lastSaveAt > 30_000) {
+            if (saveNow || now - lastSaveAt > 30_000) {
                 lastSaveAt = now
                 persistResume()
             }
@@ -542,11 +574,16 @@ class AppStore(
     }
 
     /**
-     * Applies engine events without rebuilding the whole list per event:
-     * deltas are aggregated per torrent first, then applied in one pass.
+     * Applies engine events without rebuilding the whole list per event: deltas are aggregated per
+     * torrent first, then applied in one pass. Returns true when a torrent completed or metadata
+     * arrived — states that must be persisted immediately.
      */
-    private fun drainEvents(events: List<EngineEventDto>) {
-        if (events.isEmpty()) return
+    private fun drainEvents(events: List<EngineEventDto>): Boolean {
+        if (events.isEmpty()) return false
+        // Declared outside the state-update lambda so the function can
+        // report whether an immediate persist is warranted.
+        val complete = HashSet<String>()
+        val metadata = HashSet<String>()
         _state.update { s ->
             var dht = s.dhtNodes
             var leechCount = s.antiLeechCount
@@ -557,8 +594,6 @@ class AppStore(
             val peerAbs = HashMap<String, Int>()
             val peerAdj = HashMap<String, Int>()
             val pieceAdj = HashMap<String, Int>()
-            val complete = HashSet<String>()
-            val metadata = HashSet<String>()
 
             for (ev in events) {
                 when (ev.t) {
@@ -570,79 +605,104 @@ class AppStore(
                     6 -> Unit // metadata failed — surfaced via status
                     7 -> if (ev.h.isNotEmpty()) peerAbs[ev.h] = ev.peers ?: 0
                     8 -> dht = ev.n ?: dht
-                    9 -> if (antiLeechOn) {
-                        leechCount++
-                        val name = ev.c ?: "未知客户端"
-                        if (name !in leechClients) {
-                            leechClients = (leechClients + name).takeLast(20)
-                        }
-                    }
-                    10 -> if (antiLeechOn) {
-                        // Built-in anti-leech engine banned a peer (0.1.1).
-                        leechCount++
-                        val reason = when (ev.r) {
-                            "corrupt" -> "封禁:供块校验失败"
-                            "protocol" -> "封禁:协议违规"
-                            "free-ride" -> "封禁:只下不上"
-                            else -> "封禁:${ev.r ?: "未知原因"}"
-                        }
-                        val label = "${reason} ${ev.a ?: ""}".trim()
-                        if (label !in leechClients) {
-                            leechClients = (leechClients + label).takeLast(20)
-                        }
-                    }
+                    9 ->
+                            if (antiLeechOn) {
+                                leechCount++
+                                val name = ev.c ?: "未知客户端"
+                                if (name !in leechClients) {
+                                    leechClients = (leechClients + name).takeLast(20)
+                                }
+                            }
+                    10 ->
+                            if (antiLeechOn) {
+                                // Built-in anti-leech engine banned a peer (0.1.1).
+                                leechCount++
+                                val reason =
+                                        when (ev.r) {
+                                            "corrupt" -> "封禁:供块校验失败"
+                                            "protocol" -> "封禁:协议违规"
+                                            "free-ride" -> "封禁:只下不上"
+                                            else -> "封禁:${ev.r ?: "未知原因"}"
+                                        }
+                                val label = "${reason} ${ev.a ?: ""}".trim()
+                                if (label !in leechClients) {
+                                    leechClients = (leechClients + label).takeLast(20)
+                                }
+                            }
                     11 -> {
-                        val msg = when (ev.code) {
-                            0 -> "引擎：UDP 端口无法打开，DHT 与 UDP tracker 已停用（HTTP tracker 仍可用）"
-                            1 -> "引擎：DHT 引导失败，无法解析引导路由器（DHT 休眠，tracker 不受影响）"
-                            2 -> "引擎：内部错误已自动恢复（下载不受影响）"
-                            else -> "引擎：${ev.detail ?: "未知错误"}"
-                        }
+                        val msg =
+                                when (ev.code) {
+                                    0 -> "引擎：UDP 端口无法打开，DHT 与 UDP tracker 已停用（HTTP tracker 仍可用）"
+                                    1 -> "引擎：DHT 引导失败，无法解析引导路由器（DHT 休眠，tracker 不受影响）"
+                                    2 -> {
+                                        val d = ev.detail?.takeIf { it.isNotBlank() }
+                                        "引擎：内部错误已自动恢复（下载不受影响）" + (if (d != null) "：$d" else "")
+                                    }
+                                    else -> "引擎：${ev.detail ?: "未知错误"}"
+                                }
                         engineNotice = msg
                     }
                 }
             }
 
-            if (peerAbs.isEmpty() && peerAdj.isEmpty() && pieceAdj.isEmpty() &&
-                complete.isEmpty() && metadata.isEmpty()
+            if (peerAbs.isEmpty() &&
+                            peerAdj.isEmpty() &&
+                            pieceAdj.isEmpty() &&
+                            complete.isEmpty() &&
+                            metadata.isEmpty()
             ) {
                 return@update s.copy(
-                    dhtNodes = dht,
-                    antiLeechCount = leechCount,
-                    antiLeechClients = leechClients,
-                    lastError = engineNotice ?: s.lastError,
+                        dhtNodes = dht,
+                        antiLeechCount = leechCount,
+                        antiLeechClients = leechClients,
+                        lastError = engineNotice ?: s.lastError,
                 )
             }
 
-            val torrents = s.torrents.map { t ->
-                var out = t
-                peerAbs[t.hash]?.let { out = out.copy(peers = it) }
-                peerAdj[t.hash]?.let { out = out.copy(peers = (out.peers + it).coerceAtLeast(0)) }
-                pieceAdj[t.hash]?.let {
-                    out = out.copy(havePieces = (out.havePieces + it).coerceAtMost(out.pieceCount.coerceAtLeast(0)))
-                }
-                if (t.hash in complete) {
-                    out = out.copy(status = TorrentStatus.SEEDING, progress = 1.0, completedAt = System.currentTimeMillis())
-                }
-                if (t.hash in metadata) out = out.copy(metadataReady = true)
-                out
-            }
+            val torrents =
+                    s.torrents.map { t ->
+                        var out = t
+                        peerAbs[t.hash]?.let { out = out.copy(peers = it) }
+                        peerAdj[t.hash]?.let {
+                            out = out.copy(peers = (out.peers + it).coerceAtLeast(0))
+                        }
+                        pieceAdj[t.hash]?.let {
+                            out =
+                                    out.copy(
+                                            havePieces =
+                                                    (out.havePieces + it).coerceAtMost(
+                                                            out.pieceCount.coerceAtLeast(0)
+                                                    )
+                                    )
+                        }
+                        if (t.hash in complete) {
+                            out =
+                                    out.copy(
+                                            status = TorrentStatus.SEEDING,
+                                            progress = 1.0,
+                                            completedAt = System.currentTimeMillis()
+                                    )
+                        }
+                        if (t.hash in metadata) out = out.copy(metadataReady = true)
+                        out
+                    }
 
             s.copy(
-                dhtNodes = dht,
-                torrents = torrents,
-                antiLeechCount = leechCount,
-                antiLeechClients = leechClients,
-                lastError = engineNotice ?: s.lastError,
+                    dhtNodes = dht,
+                    torrents = torrents,
+                    antiLeechCount = leechCount,
+                    antiLeechClients = leechClients,
+                    lastError = engineNotice ?: s.lastError,
             )
         }
+        return complete.isNotEmpty() || metadata.isNotEmpty()
     }
 
     /**
-     * Per-tick refresh driven by ONE batched native snapshot (DHT count,
-     * global totals and every torrent's runtime stats). Full metainfo is
-     * only refetched when the snapshot reports freshly-arrived metadata, so
-     * the per-tick JNI traffic is constant regardless of torrent count.
+     * Per-tick refresh driven by ONE batched native snapshot (DHT count, global totals and every
+     * torrent's runtime stats). Full metainfo is only refetched when the snapshot reports
+     * freshly-arrived metadata, so the per-tick JNI traffic is constant regardless of torrent
+     * count.
      */
     private fun refreshStats() {
         val now = System.currentTimeMillis()
@@ -650,8 +710,10 @@ class AppStore(
         val byHash = snap.torrents.associateBy { it.h }
         val totals = snap.totalsPair
         val dt = (now - lastGlobalPoll).coerceAtLeast(1L)
-        val downRate = if (lastTotals == null) 0L else (totals.first - lastTotals!!.first) * 1000 / dt
-        val upRate = if (lastTotals == null) 0L else (totals.second - lastTotals!!.second) * 1000 / dt
+        val downRate =
+                if (lastTotals == null) 0L else (totals.first - lastTotals!!.first) * 1000 / dt
+        val upRate =
+                if (lastTotals == null) 0L else (totals.second - lastTotals!!.second) * 1000 / dt
         lastTotals = totals
         lastGlobalPoll = now
 
@@ -671,32 +733,37 @@ class AppStore(
         }
 
         _state.update { s ->
-            val updated = records.map { rec ->
-                val base = s.torrents.firstOrNull { it.hash == rec.hash }
-                buildTorrent(rec, base, byHash[rec.hash], now)
-            }
+            val updated =
+                    records.map { rec ->
+                        val base = s.torrents.firstOrNull { it.hash == rec.hash }
+                        buildTorrent(rec, base, byHash[rec.hash], now)
+                    }
             s.copy(
-                torrents = updated,
-                globalDownRate = downRate.coerceAtLeast(0),
-                globalUpRate = upRate.coerceAtLeast(0),
-                totalDownloaded = totals.first,
-                totalUploaded = totals.second,
-                dhtNodes = snap.dht,
-                trackerCount = snap.trackers,
-                extIp = snap.extIp,
-                extPort = snap.extPort,
+                    torrents = updated,
+                    globalDownRate = downRate.coerceAtLeast(0),
+                    globalUpRate = upRate.coerceAtLeast(0),
+                    totalDownloaded = totals.first,
+                    totalUploaded = totals.second,
+                    dhtNodes = snap.dht,
+                    trackerCount = snap.trackers,
+                    extIp = snap.extIp,
+                    extPort = snap.extPort,
             )
         }
     }
 
     /**
-     * Rebuilds one display model from the snapshot row + the cached full
-     * metainfo. The status is deterministic — paused wins, then complete
-     * (seeding), then metadata availability — instead of the old heuristic
-     * that guessed from stale progress deltas and made pause/resume appear
+     * Rebuilds one display model from the snapshot row + the cached full metainfo. The status is
+     * deterministic — paused wins, then complete (seeding), then metadata availability — instead of
+     * the old heuristic that guessed from stale progress deltas and made pause/resume appear
      * broken.
      */
-    private fun buildTorrent(rec: TorrentRecord, base: Torrent?, row: TorrentSnapshotDto?, now: Long): Torrent {
+    private fun buildTorrent(
+            rec: TorrentRecord,
+            base: Torrent?,
+            row: TorrentSnapshotDto?,
+            now: Long
+    ): Torrent {
         val info = infoCache[rec.hash]
         val paused = (row?.paused ?: false) || rec.paused
         val complete = row?.c ?: (base?.isComplete == true)
@@ -705,63 +772,74 @@ class AppStore(
         val metadataReady = row?.meta ?: (info?.metadata_ready ?: base?.metadataReady ?: false)
         val havePieces = row?.have?.toInt() ?: base?.havePieces ?: 0
 
-        val status = when {
-            paused -> TorrentStatus.PAUSED
-            complete -> TorrentStatus.SEEDING
-            !metadataReady -> TorrentStatus.FETCHING_METADATA
-            else -> TorrentStatus.DOWNLOADING
-        }
+        val status =
+                when {
+                    paused -> TorrentStatus.PAUSED
+                    complete -> TorrentStatus.SEEDING
+                    !metadataReady -> TorrentStatus.FETCHING_METADATA
+                    else -> TorrentStatus.DOWNLOADING
+                }
 
         // Per-torrent download rate from byte deltas.
         val prev = lastSeen[rec.hash]
         val dt = (now - (prev?.first ?: now)).coerceAtLeast(1L)
-        val downRate = if (prev == null) 0L else (downloaded - prev.second).coerceAtLeast(0) * 1000 / dt
+        val downRate =
+                if (prev == null) 0L else (downloaded - prev.second).coerceAtLeast(0) * 1000 / dt
         lastSeen[rec.hash] = now to downloaded
 
         val snapName = row?.name?.takeIf { it.isNotBlank() }
         return Torrent(
-            hash = rec.hash,
-            name = snapName ?: info?.effectiveName() ?: rec.name,
-            saveDir = rec.saveDir,
-            status = status,
-            sizeBytes = (row?.size ?: 0L).takeIf { it > 0L } ?: info?.size ?: base?.sizeBytes ?: 0L,
-            downloadedBytes = downloaded,
-            uploadedBytes = 0L, // typebit 0.1.1 does not expose per-torrent uploads — see README
-            progress = progress,
-            pieceCount = (row?.pieces?.toInt() ?: 0).takeIf { it > 0 } ?: info?.piece_count?.toInt() ?: base?.pieceCount ?: 0,
-            havePieces = havePieces,
-            pieceLength = info?.piece_length ?: base?.pieceLength ?: 0L,
-            isPrivate = info?.`private` ?: base?.isPrivate ?: false,
-            metadataReady = metadataReady,
-            addedAt = rec.addedAt,
-            createdAt = info?.creation_date?.times(1000),
-            createdBy = info?.created_by,
-            comment = info?.comment,
-            kind = info?.kind ?: rec.kind,
-            trackers = buildTrackers(info, rec, base),
-            files = base?.files
-                ?: info?.files.orEmpty().map { com.typebit.model.FileEntry(it.path, it.length, it.renamed) },
-            seeds = base?.seeds ?: 0,
-            peers = base?.peers ?: 0,
-            downSpeed = downRate,
-            upSpeed = 0L,
-            completedAt = base?.completedAt,
-            category = rec.category,
-            tags = rec.tags,
-            haveBitsHex = row?.hx ?: base?.haveBitsHex.orEmpty(),
-            filePriorities = rec.filePriorities,
+                hash = rec.hash,
+                name = snapName ?: info?.effectiveName() ?: rec.name,
+                saveDir = rec.saveDir,
+                status = status,
+                sizeBytes = (row?.size ?: 0L).takeIf { it > 0L }
+                                ?: info?.size ?: base?.sizeBytes ?: 0L,
+                downloadedBytes = downloaded,
+                uploadedBytes =
+                        0L, // typebit 0.1.1 does not expose per-torrent uploads — see README
+                progress = progress,
+                pieceCount = (row?.pieces?.toInt() ?: 0).takeIf { it > 0 }
+                                ?: info?.piece_count?.toInt() ?: base?.pieceCount ?: 0,
+                havePieces = havePieces,
+                pieceLength = info?.piece_length ?: base?.pieceLength ?: 0L,
+                isPrivate = info?.`private` ?: base?.isPrivate ?: false,
+                metadataReady = metadataReady,
+                addedAt = rec.addedAt,
+                createdAt = info?.creation_date?.times(1000),
+                createdBy = info?.created_by,
+                comment = info?.comment,
+                kind = info?.kind ?: rec.kind,
+                trackers = buildTrackers(info, rec, base),
+                files = base?.files
+                                ?: info?.files.orEmpty().map {
+                                    com.typebit.model.FileEntry(it.path, it.length, it.renamed)
+                                },
+                seeds = base?.seeds ?: 0,
+                peers = base?.peers ?: 0,
+                downSpeed = downRate,
+                upSpeed = 0L,
+                completedAt = base?.completedAt,
+                category = rec.category,
+                tags = rec.tags,
+                haveBitsHex = row?.hx ?: base?.haveBitsHex.orEmpty(),
+                filePriorities = rec.filePriorities,
         )
     }
 
     /**
-     * The tracker list shown in the detail tab: the metainfo announce tiers
-     * plus any runtime-added trackers persisted on the record. `base` (the
-     * previous frame) already carries the merged list, so the merge only
-     * runs when a frame is first built.
+     * The tracker list shown in the detail tab: the metainfo announce tiers plus any runtime-added
+     * trackers persisted on the record. `base` (the previous frame) already carries the merged
+     * list, so the merge only runs when a frame is first built.
      */
-    private fun buildTrackers(info: TorrentInfoDto?, rec: TorrentRecord, base: Torrent?): List<TrackerInfo> {
-        val fromMeta = base?.trackers
-            ?: info?.announce_list.orEmpty().flatten().map { TrackerInfo(url = it) }
+    private fun buildTrackers(
+            info: TorrentInfoDto?,
+            rec: TorrentRecord,
+            base: Torrent?
+    ): List<TrackerInfo> {
+        val fromMeta =
+                base?.trackers
+                        ?: info?.announce_list.orEmpty().flatten().map { TrackerInfo(url = it) }
         if (base != null || rec.trackers.isEmpty()) return fromMeta
         val known = fromMeta.mapTo(HashSet()) { it.url }
         return fromMeta + rec.trackers.filter { it !in known }.map { TrackerInfo(url = it) }
@@ -770,13 +848,15 @@ class AppStore(
     // ---- persistence helpers ----
 
     private fun reAddRecord(rec: TorrentRecord) {
-        val hash = when (rec.kind) {
-            "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir)
-            else -> {
-                val bytes = B64.decode(rec.data)
-                if (bytes == null) null else engine.addTorrent(bytes, rec.saveDir, rec.filePriorities)
-            }
-        }
+        val hash =
+                when (rec.kind) {
+                    "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir)
+                    else -> {
+                        val bytes = B64.decode(rec.data)
+                        if (bytes == null) null
+                        else engine.addTorrent(bytes, rec.saveDir, rec.filePriorities)
+                    }
+                }
         if (hash == null) {
             _state.update { it.copy(lastError = "恢复失败：${rec.name}") }
             return
@@ -814,32 +894,32 @@ class AppStore(
     }
 
     /**
-     * Renames one file of a torrent. The engine keeps writing to the
-     * original staged path and promotes the renamed name on completion;
-     * the new name is persisted on the record so it survives restarts.
+     * Renames one file of a torrent. The engine keeps writing to the original staged path and
+     * promotes the renamed name on completion; the new name is persisted on the record so it
+     * survives restarts.
      */
     /**
      * Live peer list for the Peers tab (best-effort, from the engine).
      *
-     * Runs on a dedicated single-thread executor ([peersScope]) so a slow
-     * reply can NEVER block the poll loop or a download action on
-     * [engineScope]. The native worker serializes commands internally, so
-     * concurrent queries from both scopes are safe (the JNI handle is a
-     * shared, `Send + Sync` reference).
+     * Runs on a dedicated single-thread executor ([peersScope]) so a slow reply can NEVER block the
+     * poll loop or a download action on [engineScope]. The native worker serializes commands
+     * internally, so concurrent queries from both scopes are safe (the JNI handle is a shared,
+     * `Send + Sync` reference).
      */
     suspend fun peers(hash: String): List<com.typebit.engine.PeerDto> =
-        withContext(peersScope.coroutineContext) {
-            if (engine.isRunning) engine.peers(hash) else emptyList()
-        }
+            withContext(peersScope.coroutineContext) {
+                if (engine.isRunning) engine.peers(hash) else emptyList()
+            }
 
     fun renameFile(hash: String, file: Int, name: String) = onEngine {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return@onEngine
         if (engine.renameFile(hash, file, trimmed)) {
             engine.torrentInfo(hash)?.let { infoCache[hash] = it }
-            records = records.map { r ->
-                if (r.hash == hash) r.copy(renames = r.renames + (file to trimmed)) else r
-            }
+            records =
+                    records.map { r ->
+                        if (r.hash == hash) r.copy(renames = r.renames + (file to trimmed)) else r
+                    }
             persistRecords()
             refreshStats()
         } else {
@@ -871,30 +951,41 @@ class AppStore(
 
     /** Effective (down, up) byte-per-second limits, honoring the schedule. */
     private fun effectiveLimits(speed: com.typebit.data.SpeedSettings): Pair<Long, Long> {
-        val active = if (speed.alternativeLimitsEnabled && speed.scheduleEnabled && scheduleOpen(speed)) {
-            speed.altDownloadLimitKib to speed.altUploadLimitKib
-        } else {
-            speed.globalDownloadLimitKib to speed.globalUploadLimitKib
-        }
+        val active =
+                if (speed.alternativeLimitsEnabled && speed.scheduleEnabled && scheduleOpen(speed)
+                ) {
+                    speed.altDownloadLimitKib to speed.altUploadLimitKib
+                } else {
+                    speed.globalDownloadLimitKib to speed.globalUploadLimitKib
+                }
         return active.first * 1024 to active.second * 1024
     }
 
     /** Whether the alternative-limit schedule window is currently open. */
     private fun scheduleOpen(speed: com.typebit.data.SpeedSettings): Boolean {
-        val now = kotlinx.datetime.Clock.System.now()
-            .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
-        val dayOk = when (speed.scheduleDays) {
-            com.typebit.data.ScheduleDays.EVERY_DAY -> true
-            com.typebit.data.ScheduleDays.WEEKDAYS -> now.dayOfWeek.isoDayNumber in 1..5
-            com.typebit.data.ScheduleDays.WEEKEND -> now.dayOfWeek.isoDayNumber in 6..7
-            com.typebit.data.ScheduleDays.MONDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.MONDAY
-            com.typebit.data.ScheduleDays.TUESDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.TUESDAY
-            com.typebit.data.ScheduleDays.WEDNESDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.WEDNESDAY
-            com.typebit.data.ScheduleDays.THURSDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.THURSDAY
-            com.typebit.data.ScheduleDays.FRIDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.FRIDAY
-            com.typebit.data.ScheduleDays.SATURDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.SATURDAY
-            com.typebit.data.ScheduleDays.SUNDAY -> now.dayOfWeek == kotlinx.datetime.DayOfWeek.SUNDAY
-        }
+        val now =
+                kotlinx.datetime.Clock.System.now()
+                        .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
+        val dayOk =
+                when (speed.scheduleDays) {
+                    com.typebit.data.ScheduleDays.EVERY_DAY -> true
+                    com.typebit.data.ScheduleDays.WEEKDAYS -> now.dayOfWeek.isoDayNumber in 1..5
+                    com.typebit.data.ScheduleDays.WEEKEND -> now.dayOfWeek.isoDayNumber in 6..7
+                    com.typebit.data.ScheduleDays.MONDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.MONDAY
+                    com.typebit.data.ScheduleDays.TUESDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.TUESDAY
+                    com.typebit.data.ScheduleDays.WEDNESDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.WEDNESDAY
+                    com.typebit.data.ScheduleDays.THURSDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.THURSDAY
+                    com.typebit.data.ScheduleDays.FRIDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.FRIDAY
+                    com.typebit.data.ScheduleDays.SATURDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.SATURDAY
+                    com.typebit.data.ScheduleDays.SUNDAY ->
+                            now.dayOfWeek == kotlinx.datetime.DayOfWeek.SUNDAY
+                }
         if (!dayOk) return false
         val minutes = now.hour * 60 + now.minute
         val from = speed.scheduleFromHour * 60 + speed.scheduleFromMinute

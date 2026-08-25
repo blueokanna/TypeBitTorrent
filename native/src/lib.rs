@@ -11,6 +11,7 @@
 //!   getter, so the bridge mirrors name/files/trackers at add time).
 //! * [`json`]  — minimal JSON writer for the JNI surface.
 
+pub mod android_log;
 pub mod engine;
 pub mod host;
 pub mod jni_glue;
