@@ -22,11 +22,17 @@ pub mod meta;
 use jni::sys::{jint, JNI_VERSION_1_6};
 
 /// Standard JNI entry point — validates the JVM wants a compatible ABI.
+/// `jni::sys::JavaVM` is the FFI-safe `#[repr(C)]` JNI type; the high-level
+/// `jni::JavaVM` wrapper is not FFI-safe and trips
+/// `improper_ctypes_definitions`.
 #[no_mangle]
-pub extern "system" fn JNI_OnLoad(_vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) -> jint {
+pub extern "system" fn JNI_OnLoad(
+    _vm: *mut jni::sys::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jint {
     JNI_VERSION_1_6
 }
 
 /// No-op so `JNI_OnLoad` never appears dead to the linker in release builds.
 #[no_mangle]
-pub extern "system" fn JNI_OnUnload(_vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) {}
+pub extern "system" fn JNI_OnUnload(_vm: *mut jni::sys::JavaVM, _reserved: *mut std::ffi::c_void) {}

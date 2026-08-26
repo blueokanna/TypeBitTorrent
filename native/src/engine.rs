@@ -32,6 +32,12 @@ pub const TICK_MS: u64 = 100;
 pub type EventQueue = Arc<Mutex<VecDeque<String>>>;
 
 /// A command submitted from the JNI layer to the engine thread.
+///
+/// The enum mixes tiny no-reply commands with reply-bearing ones (which carry
+/// a `Sender`), so the variants differ a lot in size. Boxing the senders would
+/// churn every match arm in `handle_cmd` for no real gain — this enum is
+/// internal to the worker thread and created once per JNI call.
+#[allow(clippy::large_enum_variant)]
 pub enum Cmd {
     AddTorrent {
         data: Vec<u8>,
@@ -306,10 +312,12 @@ fn run_loop(
 
     let mut engine = Engine::new(host, engine_cfg);
     let mut meta = MetaRegistry::new();
-    let running = true;
     alog("run_loop: started");
 
-    while running {
+    // Exit via `break` on the stop flag / shutdown command; the loop simply
+    // runs until the engine is stopped (a `while running` with an immutable
+    // condition trips clippy::while_immutable_condition).
+    loop {
         if stop_flag.load(Ordering::Relaxed) {
             break;
         }
@@ -346,7 +354,7 @@ fn run_loop(
                 for ev in &evs {
                     if let EngineEvent::MetadataComplete { info_hash } = ev {
                         let h = info_hash.to_hex();
-                        if let Some(t) = engine.metainfo(&info_hash) {
+                        if let Some(t) = engine.metainfo(info_hash) {
                             meta.register_ready(t, &h);
                         } else {
                             meta.mark_metadata_ready(&h);
@@ -517,7 +525,7 @@ fn handle_cmd(
                         .map(|t| t.files.iter().map(|f| f.display_path()).collect())
                         .unwrap_or_default();
                     let r = engine.remove_torrent(&h).map_err(|e| e.tag().to_string());
-                    delete_staged_files(&mut engine.host, &meta, &hash, &engine_paths);
+                    delete_staged_files(&mut engine.host, meta, &hash, &engine_paths);
                     r
                 }
                 Err(_) => Err("invalid hash".to_string()),
@@ -1564,17 +1572,13 @@ mod tests {
                 eprintln!("diag: *** PANIC EVENT: {e}");
             }
         }
-        eprintln!(
-            "diag: done. recovered panics seen: {}",
-            panics.len()
-        );
+        eprintln!("diag: done. recovered panics seen: {}", panics.len());
         for p in &panics {
             eprintln!("diag:   {p}");
         }
 
         engine.shutdown();
         let _ = fs::remove_dir_all(&dir);
-        // This is a diagnostic: it never fails the test run; it prints.
-        assert!(true);
+        // This is a diagnostic: it never asserts; it only prints evidence.
     }
 }

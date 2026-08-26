@@ -145,11 +145,8 @@ impl NativeHost {
     /// Returns the actual bound port (falls back to an OS-assigned port when
     /// the requested one is taken — logged as a warning).
     pub fn bind_tcp(&mut self, port: u16) -> u16 {
-        if self.listener.is_some() {
-            return self
-                .listener
-                .as_ref()
-                .unwrap()
+        if let Some(listener) = &self.listener {
+            return listener
                 .local_addr()
                 .map(|a| a.port())
                 .unwrap_or(port);
@@ -843,6 +840,10 @@ impl Host for NativeHost {
             .read(true)
             .write(true)
             .create(true)
+            // Resume must NEVER truncate an existing staged/final file — a
+            // `.part` left by a previous run carries verified bytes that
+            // would be lost (explicit for clippy::suspicious_open_options).
+            .truncate(false)
             .open(&actual)
             .map_err(|_| Error::Io)?;
         self.log_internal(
