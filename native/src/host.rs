@@ -403,16 +403,40 @@ impl NativeHost {
     }
 }
 
-/// The async DNS resolver thread: resolves hostnames on its own thread so
-/// a slow/broken resolver can never stall the engine loop.
+/// The async DNS resolver: resolves each hostname on its OWN bounded thread
+/// so a single hung/blocked domain (common on restricted networks — several
+/// BEP-5 router hostnames hang for the full OS DNS timeout) can never stall
+/// the resolution of the other bootstrap routers behind it. Without this, a
+/// 6-host bootstrap could take minutes serially even though the one reachable
+/// router (e.g. `dht.transmissionbt.com`) resolves in milliseconds.
 fn resolve_worker_loop(
     jobs_rx: Receiver<ResolveJob>,
     done_tx: Sender<(String, u16, Option<NetAddr>)>,
 ) {
+    let active = Arc::new(AtomicUsize::new(0));
     while let Ok(job) = jobs_rx.recv() {
-        let resolved = typebit::host_std::StdHost::new().resolve_host(&job.host, job.port);
-        if done_tx.send((job.host, job.port, resolved)).is_err() {
-            break;
+        // Cap concurrent resolver threads (a resolver that hangs must not
+        // multiply into an unbounded thread pile-up).
+        while active.load(Ordering::SeqCst) >= MAX_HTTP_ACTIVE {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        active.fetch_add(1, Ordering::SeqCst);
+        let host_for_err = job.host.clone();
+        let port_for_err = job.port;
+        let worker_done_tx = done_tx.clone();
+        let worker_active = active.clone();
+        let spawned = std::thread::Builder::new()
+            .name("typebit-resolve-job".to_string())
+            .spawn(move || {
+                let resolved = typebit::host_std::StdHost::new().resolve_host(&job.host, job.port);
+                let _ = worker_done_tx.send((job.host, job.port, resolved));
+                worker_active.fetch_sub(1, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            // Spawn failed: report the job as unresolved (soft failure) and
+            // do not leak the active slot.
+            active.fetch_sub(1, Ordering::SeqCst);
+            let _ = done_tx.send((host_for_err, port_for_err, None));
         }
     }
 }
@@ -434,14 +458,27 @@ fn http_worker_loop(jobs_rx: Receiver<HttpJob>, done_tx: Sender<(u64, Result<Vec
             std::thread::sleep(Duration::from_millis(5));
         }
         active.fetch_add(1, Ordering::SeqCst);
+        let job_id = job.id;
         let client = client.clone();
-        let done_tx = done_tx.clone();
-        let active = active.clone();
-        std::thread::spawn(move || {
-            let res = http_job_execute(&client, &job);
-            let _ = done_tx.send((job.id, res));
+        let worker_active = active.clone();
+        let worker_done_tx = done_tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("typebit-http".to_string())
+            .spawn(move || {
+                let res = http_job_execute(&client, &job);
+                let _ = worker_done_tx.send((job.id, res));
+                worker_active.fetch_sub(1, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            // Thread spawn failed (e.g. hit the process thread limit under
+            // memory pressure). Do not leak the active slot — that would
+            // permanently wedge the worker at MAX_HTTP_ACTIVE and stall ALL
+            // HTTP (tracker announces + web seeds) — and report the job as
+            // failed so its owner is not left waiting on an id that never
+            // completes.
             active.fetch_sub(1, Ordering::SeqCst);
-        });
+            let _ = done_tx.send((job_id, Err(Error::Io)));
+        }
     }
 }
 
@@ -478,10 +515,18 @@ fn http_job_execute(
             if status != 200 && status != 206 {
                 return Err(Error::Tracker);
             }
-            resp.body
-                .collect()
-                .map(|b| b.to_vec())
-                .map_err(|_| Error::Io)
+            // Cap the collected body to the requested window: a web seed
+            // that ignores `Range` (returns 200 with the whole file) must
+            // never buffer the entire torrent into RAM (a multi-hundred-MB
+            // ISO would OOM the process). `collect_limited` rejects an
+            // over-length body before buffering it; an under-length one is
+            // also rejected and the session rotates away from that seed.
+            let window = (end - start + 1) as usize;
+            let body = resp.body.collect_limited(window).map_err(|_| Error::Io)?;
+            if body.len() != window {
+                return Err(Error::Protocol);
+            }
+            Ok(body.to_vec())
         }
     }
 }

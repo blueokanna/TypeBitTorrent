@@ -222,6 +222,23 @@ pub fn spawn_engine(
     save_dir: &str,
     logs: LogBuffer,
 ) -> Result<EngineHandle, String> {
+    // Install a panic hook that records the EXACT panic location to logcat
+    // at panic time (catch_unwind unwinds the stack, so a backtrace captured
+    // at the catch site can never show the panicking frame).
+    std::panic::set_hook(Box::new(|info| {
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            String::from("unknown panic")
+        };
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        alog(&format!("PANIC at {loc}: {msg}"));
+    }));
     let seq = ENGINE_SPAWN_SEQ.fetch_add(1, Ordering::Relaxed);
     alog(&format!(
         "spawn_engine #{seq} entering (live={})",
@@ -377,11 +394,15 @@ fn run_loop(
 
 /// Record a recovered panic: one log line plus one UI event, so a crash is
 /// never silent. The message is JSON-escaped so it can always be parsed by
-/// the Kotlin event consumer, and it is also printed to logcat so adb can
-/// see it even if the UI never surfaces it.
+/// the Kotlin event consumer, and it is also printed to logcat (with a
+/// backtrace) so adb can see it even if the UI never surfaces it.
 fn log_panic(logs: &LogBuffer, events: &EventQueue, payload: &(dyn std::any::Any + Send)) {
     let msg = panic_message(payload);
-    alog(&format!("engine PANIC recovered: {msg}"));
+    // A backtrace pinpoints the exact call site; it only materialises in
+    // release with debug info, but the debug/diagnostic builds carry it.
+    let bt = std::backtrace::Backtrace::force_capture();
+    let full = format!("engine PANIC recovered: {msg}\n{bt}");
+    alog(&full);
     if let Ok(mut q) = logs.lock() {
         q.push_back((3, format!("engine panic recovered: {msg}")));
     }
@@ -1420,5 +1441,140 @@ mod tests {
 
         engine.shutdown();
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Diagnostic (not a normal assertion test): run the REAL engine worker +
+    /// REAL NativeHost against the REAL network with a real torrent file for
+    /// `minutes` and report (a) any recovered panic (t=11 code=2 events),
+    /// (b) DHT node count over time, (c) download progress. Used to hunt the
+    /// intermittent engine panic / "DHT to zero / download stalls" bug.
+    ///
+    /// Torrent file: `$env:TBT_DIAG_TORRENT` or a known Kali ISO torrent.
+    /// Skip when the file is absent (e.g. CI).
+    #[test]
+    fn diag_real_download_panic_hunt() {
+        let _guard = engine_test_lock();
+        let torrent_path = std::env::var("TBT_DIAG_TORRENT")
+            .unwrap_or_else(|_| "D:\\RustProject\\TypeBitTorrent\\build\\tmp\\kali.torrent".into());
+        let data = match fs::read(&torrent_path) {
+            Ok(d) => d,
+            Err(_) => {
+                eprintln!("diag_real_download_panic_hunt: no torrent at {torrent_path}, skipping");
+                return;
+            }
+        };
+        let minutes = std::env::var("TBT_DIAG_MINUTES")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(3);
+
+        let dir = std::env::temp_dir().join(format!("typebit_diag_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let engine = spawn_engine("{}", dir.to_str().unwrap(), logs.clone()).expect("spawn");
+
+        // Add the real torrent and start it.
+        let (tx, rx) = channel();
+        let added = engine.request(
+            Cmd::AddTorrent {
+                data,
+                save_dir: dir.to_str().unwrap().to_string(),
+                file_priorities: Vec::new(),
+                tx,
+            },
+            rx,
+            Duration::from_secs(20),
+        );
+        let hash = match added {
+            Some(Ok(h)) => h,
+            Some(Err(e)) => {
+                eprintln!("diag: add failed: {e}");
+                engine.shutdown();
+                return;
+            }
+            None => {
+                eprintln!("diag: add timed out");
+                engine.shutdown();
+                return;
+            }
+        };
+        let (tx, rx) = channel();
+        let _ = engine.request(
+            Cmd::Start {
+                hash: hash.clone(),
+                tx,
+            },
+            rx,
+            Duration::from_secs(20),
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(minutes * 60);
+        let mut panics: Vec<String> = Vec::new();
+        let mut last_dht: i64 = -1;
+        let mut report_at = std::time::Instant::now();
+        eprintln!("diag: started engine, hunting panics for {minutes} min (hash {hash})");
+
+        while std::time::Instant::now() < deadline {
+            // Drain events: look for recovered panics.
+            let evs: Vec<String> = {
+                let mut q = engine.events.lock().unwrap();
+                q.drain(..).collect()
+            };
+            for e in &evs {
+                if e.contains("\"t\":11") && e.contains("\"code\":2") {
+                    panics.push(e.clone());
+                    eprintln!("diag: *** PANIC EVENT: {e}");
+                }
+            }
+            // Snapshot every ~2s: DHT count + progress.
+            if report_at.elapsed() >= Duration::from_secs(2) {
+                report_at = std::time::Instant::now();
+                let (tx, rx) = channel();
+                if let Some(snap) =
+                    engine.request(Cmd::Snapshot { tx }, rx, Duration::from_secs(10))
+                {
+                    let dht = snap
+                        .split("\"dht\":")
+                        .nth(1)
+                        .and_then(|s| s.split(',').next())
+                        .and_then(|s| s.trim().parse::<i64>().ok())
+                        .unwrap_or(-1);
+                    if dht != last_dht {
+                        last_dht = dht;
+                        eprintln!("diag: DHT nodes = {dht}");
+                    }
+                    if panics.len() >= 3 {
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+
+        // Final event drain.
+        let evs: Vec<String> = {
+            let mut q = engine.events.lock().unwrap();
+            q.drain(..).collect()
+        };
+        for e in &evs {
+            if e.contains("\"t\":11") && e.contains("\"code\":2") {
+                panics.push(e.clone());
+                eprintln!("diag: *** PANIC EVENT: {e}");
+            }
+        }
+        eprintln!(
+            "diag: done. recovered panics seen: {}",
+            panics.len()
+        );
+        for p in &panics {
+            eprintln!("diag:   {p}");
+        }
+
+        engine.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+        // This is a diagnostic: it never fails the test run; it prints.
+        assert!(true);
     }
 }
