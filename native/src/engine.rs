@@ -136,6 +136,20 @@ pub enum Cmd {
         prio: u8,
         tx: Sender<Result<(), String>>,
     },
+    /// Atomically replace all per-file priorities and release any
+    /// two-phase magnet hold (single engine-thread commit).
+    SetFilePriorities {
+        hash: String,
+        priorities: Vec<u8>,
+        tx: Sender<Result<(), String>>,
+    },
+    /// Two-phase magnet support: hold off data downloads until priorities
+    /// are committed.
+    SetHoldData {
+        hash: String,
+        hold: bool,
+        tx: Sender<Result<(), String>>,
+    },
     /// Current per-file priorities of a torrent as a JSON array.
     FilePriorities {
         hash: String,
@@ -750,6 +764,26 @@ fn handle_cmd(
             let res = match InfoHash::from_hex(&hash) {
                 Ok(h) => engine
                     .set_file_priority(&h, file, file_priority_from_u8(prio))
+                    .map_err(|e| e.tag().to_string()),
+                Err(_) => Err("invalid hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
+        Cmd::SetFilePriorities { hash, priorities, tx } => {
+            let prios: Vec<FilePriority> =
+                priorities.iter().map(|b| file_priority_from_u8(*b)).collect();
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => engine
+                    .set_file_priorities(&h, &prios)
+                    .map_err(|e| e.tag().to_string()),
+                Err(_) => Err("invalid hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
+        Cmd::SetHoldData { hash, hold, tx } => {
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => engine
+                    .set_hold_data(&h, hold)
                     .map_err(|e| e.tag().to_string()),
                 Err(_) => Err("invalid hash".to_string()),
             };

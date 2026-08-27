@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
 import com.typebit.data.AppSettings
 import com.typebit.data.AppearanceSettings
+import com.typebit.data.FontChoice
 import com.typebit.data.ThemeMode
 import com.typebit.platform.rememberWallpaperPicker
 import com.typebit.ui.wallpaper.WallpaperLayer
@@ -78,6 +79,27 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
         Text(
             "Monet 动态色彩由壁纸（或手动种子色）经 HCT 色彩空间实时生成整套 MD3 配色。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    SectionCard("字体") {
+        SettingDropdown(
+            label = "字体（Google Font）",
+            options = FontChoice.entries,
+            selected = s.fontChoice,
+            onSelect = { update(s.copy(fontChoice = it)) },
+            labelOf = { when (it) {
+                FontChoice.DEFAULT -> "默认（Inter + 思源黑体）"
+                FontChoice.ROBOTO -> "Roboto + 思源黑体"
+                FontChoice.OPEN_SANS -> "Open Sans + 思源黑体"
+                FontChoice.NOTO_SANS -> "思源黑体（Noto Sans SC）"
+                FontChoice.SYSTEM -> "系统默认字体"
+            } },
+        )
+        Text(
+            "拉丁文字使用所选字体，中文回退到思源黑体（Noto Sans SC）。默认组合兼顾拉丁 UI 密度与中文可读性。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

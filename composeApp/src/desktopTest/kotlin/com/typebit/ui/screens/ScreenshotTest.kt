@@ -11,6 +11,7 @@ import com.typebit.data.SettingsRepository
 import com.typebit.data.TorrentRepository
 import com.typebit.engine.EngineEventDto
 import com.typebit.engine.EngineSnapshotDto
+import com.typebit.engine.EngineStatsDto
 import com.typebit.engine.LogEntryDto
 import com.typebit.engine.PeerDto
 import com.typebit.engine.TorrentEngine
@@ -150,6 +151,7 @@ private class FakeEngine : TorrentEngine {
     override fun resume(hash: String) {}
     override fun remove(hash: String): Boolean = false
     override fun renameFile(hash: String, file: Int, name: String): Boolean = false
+    override fun renameTorrent(hash: String, name: String): Boolean = false
     override fun progress(hash: String): Double = 0.0
     override fun downloaded(hash: String): Long = 0L
     override fun isComplete(hash: String): Boolean = false
@@ -165,6 +167,8 @@ private class FakeEngine : TorrentEngine {
     override fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long) {}
     override fun setSessionConfig(configJson: String) {}
     override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean = false
+    override fun setFilePriorities(hash: String, priorities: List<Int>): Boolean = false
+    override fun setHoldData(hash: String, hold: Boolean): Boolean = false
     override fun filePriorities(hash: String): List<Int>? = null
     override fun addTracker(hash: String, url: String): Boolean = false
     override fun removeTracker(hash: String, url: String): Boolean = false

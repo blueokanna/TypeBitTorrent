@@ -161,19 +161,6 @@ fun MobileMainScreen(
                 title = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("TypeBitTorrent", style = MaterialTheme.typography.titleLarge)
-                        // Live engine status (DHT nodes + trackers + NAT
-                        // address). Wire speeds live per-task only — they
-                        // are shown on each transfer card, not up here.
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            StatusPill("DHT ${state.dhtNodes}")
-                            StatusPill("Tracker ${state.trackerCount}")
-                            if (state.extIp.isNotEmpty()) {
-                                StatusPill("外网 ${state.extIp}${if (state.extPort != 0) ":${state.extPort}" else ""}")
-                            }
-                        }
                     }
                 },
                 actions = {
@@ -357,23 +344,15 @@ fun MobileMainScreen(
 
     if (showStats) {
         stats?.let { s ->
-            StatsDialog(stats = s, onDismiss = { showStats = false })
+            StatsDialog(
+                stats = s,
+                onDismiss = { showStats = false },
+                dhtNodes = state.dhtNodes,
+                trackerCount = state.trackerCount,
+                extIp = state.extIp,
+                extPort = state.extPort,
+            )
         }
-    }
-}
-
-/** A small rounded status pill (DHT / Tracker counts). */
-@Composable
-private fun StatusPill(text: String) {
-    androidx.compose.material3.Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        )
     }
 }
 
@@ -412,9 +391,12 @@ private fun TorrentCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "${Format.percent(torrent.progress)} · ${Format.bytes(torrent.sizeBytes)}",
+                    "${Format.percent(torrent.progress)} · ${Format.targetSize(torrent.selectedBytes, torrent.sizeBytes)} · Tracker ${torrent.trackers.size}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
                 SpeedPair(down = torrent.downSpeed, up = torrent.upSpeed)
             }
@@ -471,7 +453,7 @@ private fun GridTorrentCard(
             TorrentProgressBar(torrent.progress.toFloat(), torrent.status)
             Spacer(Modifier.height(6.dp))
             Text(
-                "${Format.percent(torrent.progress)} · ${Format.bytes(torrent.sizeBytes)}",
+                "${Format.percent(torrent.progress)} · ${Format.targetSize(torrent.selectedBytes, torrent.sizeBytes)} · Tracker ${torrent.trackers.size}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

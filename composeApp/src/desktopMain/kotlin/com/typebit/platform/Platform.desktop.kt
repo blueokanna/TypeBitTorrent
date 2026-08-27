@@ -27,13 +27,12 @@ actual object Platform {
     actual fun isTraySupported(): Boolean = true
 
     actual fun ensureBackgroundMode(active: Boolean) {
-        // Desktop processes keep running while the window is open; nothing
-        // extra is needed.
     }
 
     actual fun backgroundModeEnabled(): Boolean = true
 
+    actual fun batteryOptimizationExempt(): Boolean = true
+
     actual fun openBatteryOptimizationSettings() {
-        // Desktop has no battery restrictions.
     }
 }

@@ -75,35 +75,42 @@ actual object Platform {
     actual fun backgroundModeEnabled(): Boolean {
         // True when the app is exempt from battery restrictions AND the
         // foreground service is up.
+        return batteryOptimizationExempt() && backgroundServiceUp
+    }
+
+    actual fun batteryOptimizationExempt(): Boolean {
         val ctx = AppContextHolder.context
         val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
-        val exempt = pm.isIgnoringBatteryOptimizations(ctx.packageName)
-        return exempt && backgroundServiceUp
+        return pm.isIgnoringBatteryOptimizations(ctx.packageName)
     }
 
     actual fun openBatteryOptimizationSettings() {
         val ctx = AppContextHolder.context
-        val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
-        if (pm.isIgnoringBatteryOptimizations(ctx.packageName)) return
+        if (batteryOptimizationExempt()) return
+        // Prefer the canonical "allow" dialog; it is only available on
+        // API 23+. Some OEMs (OPPO/ColorOS…) silently drop the action, so
+        // we always fall back to the app-details page where the user can
+        // flip the switch manually.
+        val request =
+                android.content.Intent(
+                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:${ctx.packageName}"),
+                ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+        var launched = false
         try {
-            val intent =
-                    android.content.Intent(
-                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                            android.net.Uri.parse("package:${ctx.packageName}"),
-                    )
-            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            ctx.startActivity(intent)
+            ctx.startActivity(request)
+            launched = true
         } catch (_: Exception) {
-            // OEMs (e.g. OPPO/ColorOS) may strip this action; fall back to
-            // the app details page where the user can set it manually.
+            // Fall through to the details page.
+        }
+        if (!launched) {
             try {
-                val intent =
+                val details =
                         android.content.Intent(
                                 android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                 android.net.Uri.parse("package:${ctx.packageName}"),
-                        )
-                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                ctx.startActivity(intent)
+                        ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+                ctx.startActivity(details)
             } catch (_: Exception) {
                 // No settings screen available — nothing more we can do.
             }

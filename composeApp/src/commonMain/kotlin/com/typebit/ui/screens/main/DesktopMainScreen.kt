@@ -205,7 +205,14 @@ fun DesktopMainScreen(
 
     if (showStats) {
         stats?.let { s ->
-            StatsDialog(stats = s, onDismiss = { showStats = false })
+            StatsDialog(
+                stats = s,
+                onDismiss = { showStats = false },
+                dhtNodes = state.dhtNodes,
+                trackerCount = state.trackerCount,
+                extIp = state.extIp,
+                extPort = state.extPort,
+            )
         }
     }
 

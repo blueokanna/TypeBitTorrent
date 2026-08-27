@@ -281,7 +281,9 @@ private fun TorrentRow(
         visible.forEach { key ->
             when (key) {
                 SortKey.NAME -> NameCell(torrent, key.width)
-                SortKey.SIZE -> Cell(Format.bytes(torrent.sizeBytes), key.width)
+                SortKey.SIZE -> Cell(
+                    Format.targetSize(torrent.selectedBytes, torrent.sizeBytes), key.width,
+                )
                 SortKey.PROGRESS -> PercentCell(torrent, key.width)
                 SortKey.STATUS -> StatusCell(torrent, key.width)
                 SortKey.SEEDS -> Cell(Format.count(torrent.seeds), key.width, alignEnd = true)

@@ -70,6 +70,18 @@ interface TorrentEngine {
     /** Sets one file's priority: 0=Skip, 1=Normal, 2=High. */
     fun setFilePriority(hash: String, file: Int, priority: Int): Boolean
 
+    /**
+     * Atomically replaces ALL per-file priorities and releases any two-phase
+     * magnet hold. 0=Skip, 1=Normal, 2=High, aligned with the file table.
+     */
+    fun setFilePriorities(hash: String, priorities: List<Int>): Boolean
+
+    /**
+     * Two-phase magnet support: `hold` makes the torrent fetch metadata / run
+     * discovery but request NO data pieces until priorities are committed.
+     */
+    fun setHoldData(hash: String, hold: Boolean): Boolean
+
     /** Current per-file priorities of a torrent, or null when unknown. */
     fun filePriorities(hash: String): List<Int>?
 
@@ -222,6 +234,14 @@ class NativeTorrentEngine : TorrentEngine {
 
     override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean =
         requireEngine().let { nativeSetFilePriority(it, hash, file, priority) == 0 }
+
+    override fun setFilePriorities(hash: String, priorities: List<Int>): Boolean {
+        val prioJson = priorities.joinToString(prefix = "[", postfix = "]")
+        return requireEngine().let { nativeSetFilePriorities(it, hash, prioJson) == 0 }
+    }
+
+    override fun setHoldData(hash: String, hold: Boolean): Boolean =
+        requireEngine().let { nativeSetHoldData(it, hash, if (hold) 1 else 0) == 0 }
 
     override fun filePriorities(hash: String): List<Int>? {
         val json = requireEngine().let { nativeFilePriorities(it, hash) } ?: return null

@@ -87,7 +87,7 @@ private fun GridTorrentCard(torrent: Torrent, onClick: () -> Unit) {
             TorrentProgressBar(torrent.progress.toFloat(), torrent.status)
             Spacer(Modifier.height(6.dp))
             Text(
-                "${Format.percent(torrent.progress)} · ${Format.bytes(torrent.sizeBytes)}",
+                "${Format.percent(torrent.progress)} · ${Format.targetSize(torrent.selectedBytes, torrent.sizeBytes)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -98,7 +98,7 @@ private fun GridTorrentCard(torrent: Torrent, onClick: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "${Format.bytes(torrent.downloadedBytes)} / ${Format.bytes(torrent.sizeBytes)}",
+                    "${Format.bytes(torrent.downloadedBytes)} / ${Format.bytes(torrent.selectedBytes)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

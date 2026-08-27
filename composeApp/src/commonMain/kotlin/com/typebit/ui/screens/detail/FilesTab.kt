@@ -60,7 +60,29 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
         buildFileTree(torrent.files.mapIndexed { i, f -> TreeLeaf(i, f.path, f.length) })
     }
 
+    // Selection summary: how many files are actually downloaded and the
+    // real target size — skipped (0-priority) files are excluded, so a
+    // 1-file pick never looks like a full-torrent download.
+    val selectedFiles =
+            torrent.files.indices.count { (torrent.filePriorities.getOrNull(it) ?: 1) != 0 }
+
     Column(modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "已选 $selectedFiles / ${torrent.files.size} 文件 · " +
+                        com.typebit.ui.util.Format.targetSizeFull(
+                                torrent.selectedBytes, torrent.sizeBytes
+                        ),
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,

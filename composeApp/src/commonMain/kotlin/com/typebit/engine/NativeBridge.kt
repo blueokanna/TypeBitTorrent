@@ -44,6 +44,20 @@ expect fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
 /** Starts (announces + connects) a torrent. 0 = ok, negative = error. */
 expect fun nativeStart(handle: Long, hash: String): Int
 
+/**
+ * Atomically replaces ALL per-file priorities and releases any two-phase
+ * magnet hold. `prioritiesJson` is `[0,1,2,…]` (0=Skip 1=Normal 2=High)
+ * aligned with the file table. 0 = ok, negative = error.
+ */
+expect fun nativeSetFilePriorities(handle: Long, hash: String, prioritiesJson: String): Int
+
+/**
+ * Two-phase magnet support: `hold != 0` makes the torrent fetch metadata /
+ * run discovery but request NO data pieces until priorities are committed
+ * via [nativeSetFilePriorities]. 0 = ok, negative = error.
+ */
+expect fun nativeSetHoldData(handle: Long, hash: String, hold: Int): Int
+
 /** Pauses a torrent. */
 expect fun nativePause(handle: Long, hash: String): Int
 

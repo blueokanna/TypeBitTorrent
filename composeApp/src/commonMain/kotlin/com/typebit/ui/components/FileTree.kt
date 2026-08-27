@@ -1,5 +1,6 @@
 package com.typebit.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -91,14 +92,27 @@ fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
             continue
         }
         var parentKey = ""
+        // The PARENT'S NODE key ("d:<path>", "" for root). Nested directories
+        // must be registered under this bucket — using the bare path ("d")
+        // instead orphaned every deeper level (a directory's children bucket
+        // is keyed by its NODE key, not its bare path).
+        var parentDirKey = ""
         for (i in 0 until segs.lastIndex) {
             val seg = segs[i]
             val key = if (parentKey.isEmpty()) seg else "$parentKey/$seg"
-            ensureDir("d:$key", seg, parentKey)
+            ensureDir("d:$key", seg, parentDirKey)
             parentKey = key
+            parentDirKey = "d:$key"
         }
         val leafKey = "f:${f.index}"
-        childrenOf.getOrPut("d:$parentKey") { mutableListOf() }
+        // A single-segment path (path = ["name"], i.e. a root-level file)
+        // leaves parentKey == "". It must land in the ROOT bucket (""), not
+        // a phantom "d:" directory — the old code bucketed it as "d:", the
+        // root stayed empty, and the whole tree rendered ZERO rows for any
+        // torrent whose files live at the top level. This is the root cause
+        // of "文件树空白 / 无法选择文件".
+        val bucket = if (parentKey.isEmpty()) "" else "d:$parentKey"
+        childrenOf.getOrPut(bucket) { mutableListOf() }
             .add(leafKey to segs.last())
     }
 
@@ -191,10 +205,15 @@ fun FileTreeView(
 ) {
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val q = filter.trim()
-    val visible = remember(roots, q) { collectVisible(roots, q) }
+    // Reads of `expanded` inside the calculation are tracked, so toggling a
+    // directory re-runs the flatten and children appear/disappear.
+    val visible = remember(roots, q) { collectVisible(roots, q, expanded) }
 
     LazyColumn(Modifier.fillMaxWidth()) {
         items(visible, key = { it.key }) { node ->
+            // Directories default to EXPANDED so the user immediately sees
+            // every file inside — the #1 complaint ("不知道种子里有什么").
+            val open = expanded[node.key] ?: true
             val state = if (node.isDir) {
                 val sel = node.leafIndices.map(isSelected)
                 when {
@@ -216,54 +235,67 @@ fun FileTreeView(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (node.isDir) {
-                    IconButton(onClick = { expanded[node.key] = !(expanded[node.key] ?: false) },
+                    IconButton(onClick = { expanded[node.key] = !open },
                         modifier = Modifier.width(28.dp)) {
                         Icon(
-                            if (expanded[node.key] ?: false) Icons.Filled.ArrowDropDown
+                            if (open) Icons.Filled.ArrowDropDown
                             else Icons.AutoMirrored.Filled.ArrowRight,
-                            contentDescription = if (expanded[node.key] ?: false) "折叠" else "展开",
+                            contentDescription = if (open) "折叠" else "展开",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 } else {
                     Spacer(Modifier.width(28.dp))
                 }
-                if (showSelection) {
-                    Checkbox(
-                        checked = state != Tri.UNCHECKED,
-                        onCheckedChange = {
-                            val newSel = state != Tri.CHECKED
-                            if (node.isDir) onToggleDir(node.key, newSel)
-                            else onToggleLeaf(node.leafIndex ?: -1, newSel)
-                        },
-                    )
-                }
-                Icon(
-                    when {
-                        node.isDir && (expanded[node.key] ?: false) -> Icons.Default.FolderOpen
-                        node.isDir -> Icons.Default.Folder
-                        else -> Icons.AutoMirrored.Filled.InsertDriveFile
+                // Tap the name (not the checkbox) toggles the file too — the
+                // whole row is the hit target, matching qBittorrent.
+                Row(
+                    Modifier.weight(1f).clickable {
+                        if (node.isDir) {
+                            expanded[node.key] = !open
+                        } else {
+                            val idx = node.leafIndex ?: -1
+                            if (showSelection) onToggleLeaf(idx, !isSelected(idx))
+                        }
                     },
-                    contentDescription = null,
-                    tint = if (node.isDir) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(18.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        node.name,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (showSelection) {
+                        Checkbox(
+                            checked = state != Tri.UNCHECKED,
+                            onCheckedChange = {
+                                val newSel = state != Tri.CHECKED
+                                if (node.isDir) onToggleDir(node.key, newSel)
+                                else onToggleLeaf(node.leafIndex ?: -1, newSel)
+                            },
+                        )
+                    }
+                    Icon(
+                        when {
+                            node.isDir && open -> Icons.Default.FolderOpen
+                            node.isDir -> Icons.Default.Folder
+                            else -> Icons.AutoMirrored.Filled.InsertDriveFile
+                        },
+                        contentDescription = null,
+                        tint = if (node.isDir) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(18.dp),
                     )
-                    Text(
-                        Format.bytes(node.size),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            node.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            Format.bytes(node.size),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
                 if (onRename != null && !node.isDir) {
                     IconButton(onClick = { node.leafIndex?.let(onRename) },
                         modifier = Modifier.width(28.dp)) {
@@ -294,23 +326,31 @@ fun FileTreeView(
     }
 }
 
-/** Depth-first flatten: directories expand recursively; filter prunes. */
-private fun collectVisible(roots: List<FileTreeNode>, q: String): List<FileTreeNode> {
+/**
+ * Depth-first flatten. Directories expand by default; a COLLAPSED directory
+ * hides its children (the arrow actually works now). A filter that matches
+ * a descendant forces that subtree to be shown so the user always sees the
+ * matching files ("筛选后不知道种子里有什么" is fixed by showing matches).
+ */
+private fun collectVisible(
+    nodes: List<FileTreeNode>,
+    q: String,
+    expanded: MutableMap<String, Boolean>,
+): List<FileTreeNode> {
     val out = mutableListOf<FileTreeNode>()
-    fun walk(nodes: List<FileTreeNode>) {
-        for (n in nodes) {
+    fun walk(list: List<FileTreeNode>) {
+        for (n in list) {
             val match = q.isEmpty() || n.name.contains(q, ignoreCase = true)
             if (match) {
                 out.add(n)
-                if (n.isDir) walk(n.children)
+                if (n.isDir && (expanded[n.key] ?: true)) walk(n.children)
             } else if (n.isDir && subtreeMatches(n, q)) {
-                // A parent that doesn't match may still contain matches deeper
-                // down; descend but do not add the parent itself.
+                // A non-matching parent still reveals matching descendants.
                 walk(n.children)
             }
         }
     }
-    walk(roots)
+    walk(nodes)
     return out
 }
 

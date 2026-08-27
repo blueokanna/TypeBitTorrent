@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.typebit.model.Torrent
 import com.typebit.platform.Platform
+import com.typebit.search.MagnetIndexEngine
 import com.typebit.search.NyaaEngine
 import com.typebit.search.PirateBayEngine
 import com.typebit.search.SearchEngineProgress
@@ -89,6 +90,25 @@ fun SearchScreen(
                 NyaaEngine(SearchHttpClient()),
                 X1337xEngine(SearchHttpClient()),
                 PirateBayEngine(SearchHttpClient()),
+                // 国内磁力搜索站（自动抓取，过滤在线视频/网盘内容）。
+                MagnetIndexEngine(
+                    name = "黑马磁力",
+                    http = SearchHttpClient(),
+                    bases = listOf("https://heimaai.top"),
+                    searchPaths = listOf("/s/{q}", "/search/{q}", "/so/{q}", "/index.php?q={q}", "/?q={q}", "/list/{q}"),
+                ),
+                MagnetIndexEngine(
+                    name = "磁力多",
+                    http = SearchHttpClient(),
+                    bases = listOf("https://ug.cilido.top"),
+                    searchPaths = listOf("/s/{q}", "/search/{q}", "/so/{q}", "/?q={q}", "/index.php?q={q}", "/list/{q}"),
+                ),
+                MagnetIndexEngine(
+                    name = "搜番",
+                    http = SearchHttpClient(),
+                    bases = listOf("https://sc.sefan.cc"),
+                    searchPaths = listOf("/s/{q}", "/search/{q}", "/so/{q}", "/?q={q}", "/index.php?q={q}", "/list/{q}", "/{q}"),
+                ),
             ),
         )
     }
@@ -134,35 +154,34 @@ fun SearchScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(12.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            // Search field on the first row, action button on the SECOND row
+            // (full width) so the placeholder never gets squeezed by the
+            // button on narrow screens.
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索种子（自动抓取 Nyaa / 1337x / TPB / 黑马磁力 / 磁力多 / 搜番）…") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { runSearch() },
+                enabled = query.isNotBlank() && !searching,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("搜索种子（自动抓取 Nyaa / 1337x / TPB）…") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Button(
-                    onClick = { runSearch() },
-                    enabled = query.isNotBlank() && !searching,
-                ) {
-                    if (searching) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    } else {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (searching) "搜索中" else "搜索")
+                if (searching) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
                 }
+                Spacer(Modifier.width(6.dp))
+                Text(if (searching) "搜索中" else "搜索")
             }
 
             // Live per-engine progress.

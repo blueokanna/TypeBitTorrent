@@ -20,6 +20,18 @@ object Format {
     fun speed(bytesPerSec: Long): String =
         if (bytesPerSec <= 0) "0 B/s" else "${bytes(bytesPerSec)}/s"
 
+    /**
+     * The download target size: when the user skipped files, show only the
+     * selected bytes so a partial selection never reads like a full-torrent
+     * download ("4.83 GiB" instead of "9.21 GiB"); otherwise the total.
+     */
+    fun targetSize(selected: Long, total: Long): String =
+        if (selected in 1 until total) bytes(selected) else bytes(total)
+
+    /** "4.83 GiB / 9.21 GiB" when some files are skipped, else "9.21 GiB". */
+    fun targetSizeFull(selected: Long, total: Long): String =
+        if (selected in 1 until total) "${bytes(selected)} / ${bytes(total)}" else bytes(total)
+
     fun percent(p: Double): String = "${(p * 100).coerceIn(0.0, 100.0).let { String.format("%.1f", it) }}%"
 
     /** "5 分钟", "∞", "—" */

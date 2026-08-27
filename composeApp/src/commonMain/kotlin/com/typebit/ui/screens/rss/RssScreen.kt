@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.typebit.data.RssFeed
 import com.typebit.data.RssRepository
 import com.typebit.data.fetchRssFeed
+import com.typebit.platform.openInBrowser
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
 import kotlinx.coroutines.Dispatchers
@@ -113,19 +114,24 @@ fun RssScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = newUrl,
-                    onValueChange = { newUrl = it },
-                    placeholder = { Text("https://example.com/feed.xml") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = ::addFeed, enabled = newUrl.isNotBlank()) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Text("订阅")
-                }
+            // Subscribe field on the first row, subscribe button on the
+            // SECOND row (full width) — matches the search screen layout.
+            OutlinedTextField(
+                value = newUrl,
+                onValueChange = { newUrl = it },
+                placeholder = { Text("订阅 RSS/Atom 地址 https://example.com/feed.xml") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = ::addFeed,
+                enabled = newUrl.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("订阅")
             }
             Spacer(Modifier.height(8.dp))
             if (loading) {
@@ -170,8 +176,13 @@ private fun FeedCard(feed: RssFeed, onRemove: () -> Unit) {
                 }
             }
             feed.items.take(30).forEach { item ->
+                // Every article opens in the default browser (like a real
+                // RSS reader); no dead rows.
                 Row(
-                    Modifier.fillMaxWidth().clickable { }.padding(vertical = 3.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { if (item.link.isNotBlank()) openInBrowser(item.link) }
+                        .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -180,12 +191,23 @@ private fun FeedCard(feed: RssFeed, onRemove: () -> Unit) {
                         color = MaterialTheme.colorScheme.outline,
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        item.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            item.title.ifBlank { "（无标题）" },
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (item.pubDate.isNotBlank()) {
+                            Text(
+                                item.pubDate,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         }

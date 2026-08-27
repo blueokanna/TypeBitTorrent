@@ -34,6 +34,13 @@ import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.toLocalDateTime
 
 /**
+ * Community tracker list fetched at startup (before any torrent starts) so
+ * every torrent announces to the most reliable public trackers from the very
+ * first moment.
+ */
+private const val COMMUNITY_TRACKERS_URL = "https://cf.trackerslist.com/best.txt"
+
+/**
  * The single source of truth for the UI.
  *
  * Unidirectional data flow: UI → action → (engine + persistence) → [state]. The engine runs on its
@@ -141,16 +148,40 @@ class AppStore(
         }
         // Restore verified-piece bitfields + DHT table.
         torrentRepo.loadResumeState()?.let { engine.loadState(it) }
-        // Start torrents that were not paused.
+
+        // Sync the community tracker list (best.txt) BEFORE any torrent
+        // starts, so a fresh launch announces to the most-reliable trackers
+        // first — the "tracker highly available from the very beginning"
+        // requirement. The fetch is best-effort: on failure the existing
+        // (persisted) tracker set is kept and downloads proceed.
+        val (effectiveSettings, addedTrackers) = syncCommunityTrackers(settings)
+        if (addedTrackers.isNotEmpty()) {
+            for (rec in records) {
+                for (url in addedTrackers) engine.addTracker(rec.hash, url)
+            }
+            // Refresh the mirrors so the Tracker tab shows the new URLs.
+            for (rec in records) {
+                engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
+            }
+            lastAppliedExtraTrackers = trackersSet(effectiveSettings)
+            settingsRepo.save(effectiveSettings)
+        }
+
+        // Start torrents that were not paused. A magnet that never received
+        // its per-file commit (app died mid-add-dialog) is held again so it
+        // keeps fetching metadata but cannot silently download everything.
         for (rec in records) {
+            if (rec.kind == "MAGNET" && rec.pendingSelection) {
+                engine.setHoldData(rec.hash, hold = true)
+            }
             if (!rec.paused) engine.start(rec.hash)
         }
         // Apply speed limits.
-        applyLimits(settings)
+        applyLimits(effectiveSettings)
 
         _state.update {
             it.copy(
-                    settings = settings,
+                    settings = effectiveSettings,
                     engineRunning = true,
                     peerId = engine.peerId(),
                     categories = buildCategories(),
@@ -166,6 +197,44 @@ class AppStore(
             pollJob = onEngineJob { pollLoop() }
         }
     }
+
+    /**
+     * Fetches the community tracker list (`best.txt`), merges the new URLs
+     * into the persisted `extraTrackers` setting and returns the effective
+     * settings plus the set of newly-added trackers. Best-effort: returns
+     * `(settings, emptySet())` unchanged on any network/parse failure.
+     */
+    private suspend fun syncCommunityTrackers(
+        settings: AppSettings,
+    ): Pair<AppSettings, Set<String>> {
+        val existing = trackersSet(settings)
+        val text =
+                withContext(Dispatchers.IO) {
+                    com.typebit.platform.fetchUrlText(COMMUNITY_TRACKERS_URL, 15_000)
+                } ?: return settings to emptySet()
+        val parsed =
+                text.lineSequence()
+                        .map { it.trim() }
+                        .filter { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("udp://") }
+                        .toSet()
+        val added = parsed - existing
+        if (added.isEmpty()) return settings to emptySet()
+        val merged = (existing + parsed).toList().sorted().joinToString("\n")
+        val effective =
+                settings.copy(
+                        bitTorrent = settings.bitTorrent.copy(extraTrackers = merged),
+                )
+        return effective to added
+    }
+
+    /** Parsed `extraTrackers` as a set of trimmed URLs. */
+    private fun trackersSet(settings: AppSettings): Set<String> =
+            settings.bitTorrent
+                    .extraTrackers
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .toSet()
 
     private fun onEngineJob(block: suspend () -> Unit): Job = engineScope.launch { block() }
 
@@ -463,10 +532,16 @@ class AppStore(
                                 data = trimmed,
                                 addedAt = System.currentTimeMillis(),
                                 paused = false,
+                                pendingSelection = true,
                         )
                 records = records + record
                 persistRecords()
                 engine.start(hash)
+                // Hold data until the user commits their per-file selection:
+                // the engine fetches metadata + runs discovery but requests
+                // NO data pieces, so a slow choice never downloads the whole
+                // torrent (this was the "only wanted 4 GB, got 9 GB" bug).
+                engine.setHoldData(hash, hold = true)
                 refreshStats()
                 hash
             }
@@ -501,13 +576,21 @@ class AppStore(
      */
     fun commitMagnetSelection(hash: String, filePriorities: List<Int>, paused: Boolean = false) =
             onEngine {
+                // Atomic engine-side commit: replaces every priority AND
+                // releases the data hold in one engine-thread step, so the
+                // torrent can never start requesting all files between the
+                // hold and the selection being applied.
+                engine.setFilePriorities(hash, filePriorities)
                 records =
                         records.map { rec ->
-                            if (rec.hash == hash) rec.copy(filePriorities = filePriorities)
-                            else rec
+                            if (rec.hash == hash) {
+                                rec.copy(
+                                        filePriorities = filePriorities,
+                                        pendingSelection = false,
+                                )
+                            } else rec
                         }
                 persistRecords()
-                applyPriorities(hash, filePriorities)
                 engine.torrentInfoRaw(hash)?.let { raw ->
                     if (raw.isNotBlank()) {
                         records =
@@ -913,15 +996,17 @@ class AppStore(
 
         // Background mode: keep the Android foreground service (and the
         // process alive) exactly while any torrent is running, so downloads
-        // survive locking the screen. The service is idempotent — cheap to
-        // call every poll.
+        // survive locking the screen — unless the user disabled background
+        // downloads in settings (the "锁屏后继续下载" master switch). The
+        // service is idempotent — cheap to call every poll.
         val anyActive =
                 _state.value.torrents.any {
                     it.status == TorrentStatus.DOWNLOADING ||
                             it.status == TorrentStatus.SEEDING ||
                             it.status == TorrentStatus.FETCHING_METADATA
                 }
-        com.typebit.platform.Platform.ensureBackgroundMode(anyActive)
+        val backgroundAllowed = _state.value.settings.behavior.backgroundDownloads
+        com.typebit.platform.Platform.ensureBackgroundMode(anyActive && backgroundAllowed)
     }
 
     /**
@@ -988,10 +1073,15 @@ class AppStore(
                 comment = info?.comment,
                 kind = info?.kind ?: rec.kind,
                 trackers = buildTrackers(info, rec, base),
-                files = base?.files
-                                ?: info?.files.orEmpty().map {
-                                    com.typebit.model.FileEntry(it.path, it.length, it.renamed)
-                                },
+                // Prefer the FRESH metainfo mirror (infoCache) — it is
+                // updated when metadata arrives. Falling back to the previous
+                // frame's list made `files` permanently empty when the first
+                // frame was built before the mirror existed (e.g. a magnet
+                // resolved in the add dialog): `base?.files` was `[]` and the
+                // `?:` short-circuit never let the real list through.
+                files = info?.files.orEmpty()
+                                .map { com.typebit.model.FileEntry(it.path, it.length, it.renamed) }
+                                .ifEmpty { base?.files.orEmpty() },
                 seeds = base?.seeds ?: 0,
                 peers = base?.peers ?: 0,
                 downSpeed = downRate,

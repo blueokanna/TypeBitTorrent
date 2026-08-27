@@ -10,6 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import com.typebit.data.FontChoice
 import com.typebit.ui.monet.DynamicScheme
 import com.typebit.ui.wallpaper.WallpaperLayer
 
@@ -68,6 +69,8 @@ fun TypeBitTheme(
     seedArgb: Int,
     darkTheme: Boolean,
     amoled: Boolean = false,
+    /** Bundled Google Font stack (see [com.typebit.data.FontChoice]). */
+    fontChoice: FontChoice = FontChoice.DEFAULT,
     /** Pre-blurred wallpaper bitmap (see [com.typebit.ui.wallpaper.blurWallpaper]). */
     wallpaper: ImageBitmap? = null,
     wallpaperEnabled: Boolean = false,
@@ -117,7 +120,7 @@ fun TypeBitTheme(
     CompositionLocalProvider(LocalStatusColors provides status) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = typebitTypography(),
+            typography = typebitTypography(fontChoice),
             shapes = TypeBitShapes,
         ) {
             WallpaperLayer(

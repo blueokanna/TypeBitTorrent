@@ -115,6 +115,7 @@ fun App() {
                 seedArgb = seedArgb,
                 darkTheme = darkTheme,
                 amoled = appearance.themeMode == ThemeMode.AMOLED,
+                fontChoice = appearance.fontChoice,
                 wallpaper = blurredWallpaper,
                 wallpaperEnabled = appearance.wallpaperEnabled,
                 wallpaperDim = appearance.dimAlpha,

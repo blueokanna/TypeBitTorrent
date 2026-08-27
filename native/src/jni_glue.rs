@@ -913,6 +913,79 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeFilePrioriti
     })
 }
 
+/// Atomically replace ALL per-file priorities and release any two-phase
+/// magnet hold (0=Skip, 1=Normal, 2=High). `priorities_json` is a JSON array
+/// aligned with the file table.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeSetFilePriorities(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+    priorities_json: JString,
+) -> jint {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(-4),
+        };
+        let hash = jstr(env, &hash);
+        let prio_json = jstr(env, &priorities_json);
+        let priorities = parse_priority_json(&prio_json);
+        let (tx, rx) = channel();
+        Ok(
+            match h.request(
+                Cmd::SetFilePriorities {
+                    hash,
+                    priorities,
+                    tx,
+                },
+                rx,
+                REPLY_TIMEOUT,
+            ) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
+    })
+}
+
+/// Two-phase magnet support: hold off data downloads until per-file
+/// priorities are committed. `hold != 0` enables the hold, 0 releases it.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeSetHoldData(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+    hold: jint,
+) -> jint {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(-4),
+        };
+        let hash = jstr(env, &hash);
+        let (tx, rx) = channel();
+        Ok(
+            match h.request(
+                Cmd::SetHoldData {
+                    hash,
+                    hold: hold != 0,
+                    tx,
+                },
+                rx,
+                REPLY_TIMEOUT,
+            ) {
+                Some(Ok(())) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
+    })
+}
+
 /// Add a tracker URL to a running torrent.
 #[no_mangle]
 pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddTracker(

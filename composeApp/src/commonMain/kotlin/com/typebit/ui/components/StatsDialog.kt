@@ -22,18 +22,34 @@ import com.typebit.ui.util.Format
 /**
  * qBittorrent-style statistics dialog. Every row is backed by a real engine
  * counter (see [EngineStatsDto]); nothing is fabricated. The caller polls
- * [EngineStatsDto] while the dialog is open.
+ * [EngineStatsDto] while the dialog is open and passes the live network
+ * counters ([dhtNodes], [trackerCount], [extIp]/[extPort]) so the DHT and
+ * tracker status the user sees is always current.
  */
 @Composable
 fun StatsDialog(
     stats: EngineStatsDto,
     onDismiss: () -> Unit,
+    dhtNodes: Int = 0,
+    trackerCount: Int = 0,
+    extIp: String = "",
+    extPort: Int = 0,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("统计") },
         text = {
             Column(Modifier.fillMaxWidth()) {
+                SectionTitle("网络统计")
+                StatRow("DHT 节点数", dhtNodes.toString())
+                StatRow("活跃 Tracker 数", trackerCount.toString())
+                if (extIp.isNotEmpty()) {
+                    StatRow(
+                        "外网地址",
+                        if (extPort != 0) "$extIp:$extPort" else extIp,
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 SectionTitle("用户统计")
                 StatRow("全局上传", Format.bytes(stats.u_total))
                 StatRow("总计下载", Format.bytes(stats.d_total))

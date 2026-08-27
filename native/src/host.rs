@@ -446,7 +446,6 @@ fn http_worker_loop(jobs_rx: Receiver<HttpJob>, done_tx: Sender<(u64, Result<Vec
     });
     let active = Arc::new(AtomicUsize::new(0));
     while let Ok(job) = jobs_rx.recv() {
-        // Back-pressure: cap concurrent inner threads.
         while active.load(Ordering::SeqCst) >= MAX_HTTP_ACTIVE {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -463,12 +462,6 @@ fn http_worker_loop(jobs_rx: Receiver<HttpJob>, done_tx: Sender<(u64, Result<Vec
                 worker_active.fetch_sub(1, Ordering::SeqCst);
             });
         if spawned.is_err() {
-            // Thread spawn failed (e.g. hit the process thread limit under
-            // memory pressure). Do not leak the active slot — that would
-            // permanently wedge the worker at MAX_HTTP_ACTIVE and stall ALL
-            // HTTP (tracker announces + web seeds) — and report the job as
-            // failed so its owner is not left waiting on an id that never
-            // completes.
             active.fetch_sub(1, Ordering::SeqCst);
             let _ = done_tx.send((job_id, Err(Error::Io)));
         }
@@ -508,12 +501,6 @@ fn http_job_execute(
             if status != 200 && status != 206 {
                 return Err(Error::Tracker);
             }
-            // Cap the collected body to the requested window: a web seed
-            // that ignores `Range` (returns 200 with the whole file) must
-            // never buffer the entire torrent into RAM (a multi-hundred-MB
-            // ISO would OOM the process). `collect_limited` rejects an
-            // over-length body before buffering it; an under-length one is
-            // also rejected and the session rotates away from that seed.
             let window = (end - start + 1) as usize;
             let body = resp.body.collect_limited(window).map_err(|_| Error::Io)?;
             if body.len() != window {
@@ -547,8 +534,6 @@ impl Host for NativeHost {
     }
 
     fn http_get(&mut self, url: &str, timeout_ms: u64, out: &mut Vec<u8>) -> Result<()> {
-        // Route through the async worker with a bounded wait so even the
-        // synchronous fallback paths can never block the engine indefinitely.
         let id = self.http_get_async(url, timeout_ms);
         if id == 0 {
             return self.http.http_get(url, timeout_ms, out);
@@ -655,9 +640,7 @@ impl Host for NativeHost {
         let tx = self.established_tx.clone();
         self.pending_connects += 1;
         self.conns.insert(id, ConnSlot::Connecting);
-        // `Builder::spawn` (not `thread::spawn`) so a failed spawn returns an
-        // error instead of panicking the engine thread; a bounded
-        // MAX_PENDING_CONNECTS keeps the connect-thread count sane on mobile.
+
         match std::thread::Builder::new()
             .name("typebit-conn".to_string())
             .spawn(move || {
@@ -666,8 +649,6 @@ impl Host for NativeHost {
             }) {
             Ok(_) => Ok(id),
             Err(e) => {
-                // Could not even spawn the connector thread: treat as full so
-                // the engine re-discovers the peer later.
                 self.pending_connects = self.pending_connects.saturating_sub(1);
                 self.conns.remove(&id);
                 crate::android_log::log(&format!("tcp_connect: spawn failed: {e}"));
@@ -764,12 +745,6 @@ impl Host for NativeHost {
         let target = netaddr_to_sockaddr(*addr).ok_or(Error::InvalidInput)?;
         match sock.send_to(data, target) {
             Ok(_) => Ok(()),
-            // Windows: after a destination sends an ICMP unreachable, the
-            // SAME socket starts reporting `ConnectionReset` (WSAECONNRESET
-            // 10054) on unrelated sends/recvs. Treating it as a hard error
-            // permanently wedges the UDP socket (DHT goes dead even for
-            // reachable routers). It is transient: the next operation on an
-            // unconnected socket proceeds normally.
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::ConnectionReset
@@ -841,9 +816,6 @@ impl Host for NativeHost {
         };
         match sock.recv_from(buf) {
             Ok((n, addr)) => Ok((sock_to_netaddr(addr), n)),
-            // Transient Windows ICMP-reset noise: an unreachable peer's ICMP
-            // error surfaces here as ConnectionReset on the next recv; the
-            // socket is fine and must keep receiving for reachable peers.
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::ConnectionReset
@@ -860,7 +832,6 @@ impl Host for NativeHost {
             return Err(Error::Full);
         }
         let actual = Self::resolve_disk_path(path);
-        // Multi-file torrents carry subdirectories that may not exist yet.
         if let Some(parent) = std::path::Path::new(&actual).parent() {
             if !parent.as_os_str().is_empty() {
                 let _ = std::fs::create_dir_all(parent);
@@ -870,9 +841,6 @@ impl Host for NativeHost {
             .read(true)
             .write(true)
             .create(true)
-            // Resume must NEVER truncate an existing staged/final file — a
-            // `.part` left by a previous run carries verified bytes that
-            // would be lost (explicit for clippy::suspicious_open_options).
             .truncate(false)
             .open(&actual)
             .map_err(|_| Error::Io)?;

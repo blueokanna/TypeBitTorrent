@@ -119,6 +119,20 @@ data class Torrent(
 ) {
     val remainingBytes: Long get() = (sizeBytes - downloadedBytes).coerceAtLeast(0L)
 
+    /**
+     * Sum of the SELECTED (non-skipped) file sizes — the real download
+     * target. Equals [sizeBytes] when no file is skipped (all-Normal or no
+     * priority list). The main list shows this instead of the total so a
+     * partial selection never looks like a full-torrent download.
+     */
+    val selectedBytes: Long
+        get() {
+            if (files.isEmpty() || filePriorities.isEmpty()) return sizeBytes
+            return files.mapIndexed { i, f ->
+                if ((filePriorities.getOrNull(i) ?: 1) != 0) f.length else 0L
+            }.sum()
+        }
+
     val isComplete: Boolean get() = progress >= 1.0 || status == TorrentStatus.SEEDING
 
     val ratio: Double
@@ -178,4 +192,11 @@ data class TorrentRecord(
      * never has to re-fetch (qBittorrent parity).
      */
     val infoBase64: String = "",
+    /**
+     * True while a two-phase magnet is waiting for the user's per-file
+     * selection in the add dialog. The engine keeps the torrent on a
+     * data hold (metadata + discovery only) until priorities are committed;
+     * if the app dies mid-dialog, the hold is re-applied on the next boot.
+     */
+    val pendingSelection: Boolean = false,
 )

@@ -99,6 +99,25 @@ fun AddTorrentScreen(
     var filterText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
+    // Whenever a new torrent is previewed (file picked OR magnet resolved),
+    // reset the selection map and initialize every file to SELECTED with
+    // normal priority. Clearing first is essential: a second torrent must
+    // not inherit stale indices/values from the previous preview.
+    LaunchedEffect(preview) {
+        fileSel.clear()
+        priorities.clear()
+        preview?.files?.forEachIndexed { i, _ ->
+            fileSel[i] = true
+            priorities[i] = 1
+        }
+    }
+
+    // True when every preview file is selected (default = selected).
+    val allSelected =
+            preview?.files?.indices?.all { fileSel[it] ?: true } ?: true
+    // Selected count with the same implicit-default semantics.
+    val selectedCount = preview?.files?.indices?.count { fileSel[it] ?: true } ?: 0
+
     val pickTorrent = rememberTorrentFilePicker { bytes, name ->
         pendingBytes = bytes
         pendingName = name
@@ -109,10 +128,6 @@ fun AddTorrentScreen(
         scope.launch {
             val parsed = withContext(Dispatchers.Default) { store.parseTorrentFile(bytes) }
             preview = parsed
-            parsed?.files?.forEachIndexed { i, _ ->
-                fileSel[i] = true
-                priorities[i] = 1
-            }
         }
     }
 
@@ -283,7 +298,7 @@ fun AddTorrentScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                    "文件（${fileSel.values.count { it }} / ${p.files.size}）",
+                                    "文件（$selectedCount / ${p.files.size}）",
                                     Modifier.weight(1f),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -296,12 +311,15 @@ fun AddTorrentScreen(
                                     modifier = Modifier.weight(1f),
                             )
                             Spacer(Modifier.width(8.dp))
+                            // 全选 / 取消全选 iterates the REAL file list (not
+                            // the sparse map), so it works even before the user
+                            // touched any checkbox.
                             OutlinedButton(
                                     onClick = {
-                                        val all = fileSel.values.all { it }
-                                        fileSel.keys.forEach { fileSel[it] = !all }
+                                        val newState = !allSelected
+                                        preview?.files?.indices?.forEach { fileSel[it] = newState }
                                     }
-                            ) { Text(if (fileSel.values.all { it }) "取消全选" else "全选") }
+                            ) { Text(if (allSelected) "取消全选" else "全选") }
                         }
                         Spacer(Modifier.height(4.dp))
                         val fileTree = remember(p.files) {
@@ -444,11 +462,9 @@ fun AddTorrentScreen(
                                         resolveError = "元数据获取超时（请确认网络可用、DHT/Tracker 可达）"
                                         return@launch
                                     }
+                                    // LaunchedEffect(preview) resets and seeds
+                                    // the selection map (all files selected).
                                     preview = info
-                                    info.files.forEachIndexed { i, _ ->
-                                        fileSel[i] = true
-                                        priorities[i] = 1
-                                    }
                                 }
                             }
                         },

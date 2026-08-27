@@ -39,9 +39,32 @@ data class AppSettings(
 @Serializable
 enum class ThemeMode { SYSTEM, LIGHT, DARK, AMOLED }
 
+/**
+ * Which bundled Google Font stack the UI uses.
+ *
+ * Latin/CJK mixed stacks pair a Latin font with Noto Sans SC so Chinese
+ * text always renders from a bundled CJK font (never a missing-glyph box).
+ * `SYSTEM` uses the platform default (smallest download, no bundle).
+ */
+@Serializable
+enum class FontChoice {
+    /** Inter (Latin) + Noto Sans SC (CJK) — the app default. */
+    DEFAULT,
+    /** Roboto (Latin) + Noto Sans SC (CJK). */
+    ROBOTO,
+    /** Open Sans (Latin) + Noto Sans SC (CJK). */
+    OPEN_SANS,
+    /** Noto Sans SC only (pure CJK / global). */
+    NOTO_SANS,
+    /** Platform system default font. */
+    SYSTEM,
+}
+
 @Serializable
 data class AppearanceSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** Bundled Google Font stack (see [FontChoice]). */
+    val fontChoice: FontChoice = FontChoice.DEFAULT,
     /** Wallpaper is shown blurred + dimmed behind the whole UI. */
     val wallpaperEnabled: Boolean = false,
     /**
@@ -85,6 +108,12 @@ data class BehaviorSettings(
     val notifyOnDownloadAdded: Boolean = true,
     val notifyOnDownloadFinished: Boolean = true,
     val notifyOnNewVersion: Boolean = false,
+    /**
+     * Whether the Android foreground service (dataSync + wake lock) may run
+     * while a torrent is active — the "锁屏后继续下载" master switch. When
+     * off, transfers only run while the app is foregrounded.
+     */
+    val backgroundDownloads: Boolean = true,
     /** UI refresh cadence in ms (also drives the engine poll loop). */
     val refreshIntervalMs: Int = 500,
 )

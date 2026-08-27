@@ -47,6 +47,21 @@ private fun parseRss(body: ByteArray, url: String): RssFeed? {
         return ""
     }
 
+    // Atom <link rel="alternate" href="…"/> is self-closing (no text node),
+    // so textOf() returns "" — the link must be read from the href attribute.
+    fun attrOf(node: org.w3c.dom.Node, tag: String, attr: String): String {
+        val list = node.childNodes
+        for (i in 0 until list.length) {
+            val child = list.item(i)
+            if (child.nodeName.equals(tag, ignoreCase = true) && child.nodeType == org.w3c.dom.Node.ELEMENT_NODE) {
+                val el = child as org.w3c.dom.Element
+                val href = el.getAttribute(attr)
+                if (href.isNotBlank()) return href.trim()
+            }
+        }
+        return ""
+    }
+
     // RSS 2.0: <channel><item>…; Atom: <feed><entry>…
     if (root.nodeName.equals("rss", ignoreCase = true)) {
         val channel = root.childNodes.let { nl ->
@@ -78,8 +93,8 @@ private fun parseRss(body: ByteArray, url: String): RssFeed? {
                 items.add(
                     RssItem(
                         title = textOf(n, "title"),
-                        link = textOf(n, "link").ifEmpty { textOf(n, "id") },
-                        description = textOf(n, "summary"),
+                        link = textOf(n, "link").ifEmpty { attrOf(n, "link", "href") }.ifEmpty { textOf(n, "id") },
+                        description = textOf(n, "summary").ifEmpty { textOf(n, "content") },
                         pubDate = textOf(n, "updated"),
                     ),
                 )
