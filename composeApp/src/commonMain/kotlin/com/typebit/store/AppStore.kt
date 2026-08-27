@@ -495,29 +495,36 @@ class AppStore(
      * Two-phase magnet add, phase 2b: applies the user's per-file priorities
      * (0=Skip, 1=Normal, 2=High) to the now-resolved magnet and persists the
      * raw `info` dict so a restart never re-fetches metadata. The torrent is
-     * already running (phase 1 started it), so this only reshapes which
-     * files are requested.
+     * already running (phase 1 started it to fetch metadata), so this only
+     * reshapes which files are requested — unless `paused` was chosen, in
+     * which case it is paused after the priorities land.
      */
-    fun commitMagnetSelection(hash: String, filePriorities: List<Int>) = onEngine {
-        records =
-                records.map { rec ->
-                    if (rec.hash == hash) rec.copy(filePriorities = filePriorities) else rec
-                }
-        persistRecords()
-        applyPriorities(hash, filePriorities)
-        engine.torrentInfoRaw(hash)?.let { raw ->
-            if (raw.isNotBlank()) {
+    fun commitMagnetSelection(hash: String, filePriorities: List<Int>, paused: Boolean = false) =
+            onEngine {
                 records =
-                        records.map {
-                            if (it.hash == hash && it.infoBase64 != raw) {
-                                it.copy(infoBase64 = raw)
-                            } else it
+                        records.map { rec ->
+                            if (rec.hash == hash) rec.copy(filePriorities = filePriorities)
+                            else rec
                         }
                 persistRecords()
+                applyPriorities(hash, filePriorities)
+                engine.torrentInfoRaw(hash)?.let { raw ->
+                    if (raw.isNotBlank()) {
+                        records =
+                                records.map {
+                                    if (it.hash == hash && it.infoBase64 != raw) {
+                                        it.copy(infoBase64 = raw)
+                                    } else it
+                                }
+                        persistRecords()
+                    }
+                }
+                if (paused) {
+                    engine.pause(hash)
+                    setRecordPaused(hash, paused = true)
+                }
+                refreshStats()
             }
-        }
-        refreshStats()
-    }
 
     /** Removes a magnet the user cancelled in the add dialog (phase 2 cancel). */
     fun cancelMagnetPending(hash: String) = onEngine {

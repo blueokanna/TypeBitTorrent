@@ -519,11 +519,7 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRenameTorren
         let name = jstr(env, &name);
         let (tx, rx) = channel();
         Ok(
-            match h.request(
-                Cmd::RenameTorrent { hash, name, tx },
-                rx,
-                REPLY_TIMEOUT,
-            ) {
+            match h.request(Cmd::RenameTorrent { hash, name, tx }, rx, REPLY_TIMEOUT) {
                 Some(Ok(_)) => 0,
                 Some(Err(_)) => -1,
                 None => -2,

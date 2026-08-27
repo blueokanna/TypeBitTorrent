@@ -5,7 +5,6 @@
 package com.typebit.ui.screens.main
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,23 +25,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Sort
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -51,15 +44,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -82,10 +71,14 @@ import com.typebit.platform.PlatformBackHandler
 import com.typebit.platform.shareText
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
+import com.typebit.ui.components.DeleteTorrentDialog
 import com.typebit.ui.components.EmptyState
+import com.typebit.ui.components.RenameTorrentDialog
 import com.typebit.ui.components.SpeedPair
 import com.typebit.ui.components.StatsDialog
 import com.typebit.ui.components.StatusBadge
+import com.typebit.ui.components.TorrentActions
+import com.typebit.ui.components.TorrentActionsSheet
 import com.typebit.ui.components.TorrentProgressBar
 import com.typebit.ui.theme.TypeBitThemeColors
 import com.typebit.ui.util.Format
@@ -200,7 +193,7 @@ fun MobileMainScreen(
                     var sortMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { sortMenu = true }) {
-                            Icon(Icons.Default.Sort, contentDescription = "排序")
+                            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "排序")
                         }
                         DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                             MobileSort.entries.forEach { key ->
@@ -316,23 +309,27 @@ fun MobileMainScreen(
     actionsFor?.let { t ->
         TorrentActionsSheet(
             torrent = t,
+            actions =
+                    TorrentActions(
+                            onRename = {
+                                actionsFor = null
+                                renameFor = t
+                            },
+                            onShare = {
+                                actionsFor = null
+                                shareText(t.name, store.magnetLink(t.hash, t.name))
+                            },
+                            onTogglePause = {
+                                actionsFor = null
+                                if (t.status == TorrentStatus.PAUSED) store.resume(t.hash)
+                                else store.pause(t.hash)
+                            },
+                            onDelete = {
+                                actionsFor = null
+                                deleteFor = t
+                            },
+                    ),
             onDismiss = { actionsFor = null },
-            onRename = {
-                actionsFor = null
-                renameFor = t
-            },
-            onShare = {
-                actionsFor = null
-                shareText(t.name, store.magnetLink(t.hash, t.name))
-            },
-            onTogglePause = {
-                actionsFor = null
-                if (t.status == TorrentStatus.PAUSED) store.resume(t.hash) else store.pause(t.hash)
-            },
-            onDelete = {
-                actionsFor = null
-                deleteFor = t
-            },
         )
     }
 
@@ -348,19 +345,13 @@ fun MobileMainScreen(
     }
 
     deleteFor?.let { t ->
-        AlertDialog(
-            onDismissRequest = { deleteFor = null },
-            title = { Text("删除种子") },
-            text = { Text("确定删除「${t.name}」吗？已下载的临时文件（.part）会被清理。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    store.remove(t.hash)
-                    deleteFor = null
-                }) { Text("删除") }
+        DeleteTorrentDialog(
+            torrent = t,
+            onConfirm = {
+                store.remove(t.hash)
+                deleteFor = null
             },
-            dismissButton = {
-                TextButton(onClick = { deleteFor = null }) { Text("取消") }
-            },
+            onDismiss = { deleteFor = null },
         )
     }
 
@@ -453,7 +444,7 @@ private fun GridTorrentCard(
         Column(Modifier.padding(14.dp)) {
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Icon(
-                    Icons.Default.InsertDriveFile,
+                    Icons.AutoMirrored.Filled.InsertDriveFile,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
@@ -513,97 +504,6 @@ private fun GridTorrentCard(
             }
         }
     }
-}
-
-/** Bottom-sheet with per-torrent actions: rename / share / pause-resume / delete. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TorrentActionsSheet(
-    torrent: Torrent,
-    onDismiss: () -> Unit,
-    onRename: () -> Unit,
-    onShare: () -> Unit,
-    onTogglePause: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 24.dp)) {
-            Text(
-                torrent.name,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-            )
-            Text(
-                "${Format.percent(torrent.progress)} · ${Format.bytes(torrent.sizeBytes)} · ${torrent.seeds} 种 / ${torrent.peers} 下载者",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 24.dp),
-            )
-            Spacer(Modifier.height(8.dp))
-            HorizontalDivider()
-            ListItem(
-                headlineContent = { Text("重命名") },
-                leadingContent = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
-                modifier = Modifier.clickable(onClick = onRename),
-            )
-            ListItem(
-                headlineContent = { Text("分享（磁力链接）") },
-                leadingContent = { Icon(Icons.Default.Share, contentDescription = null) },
-                modifier = Modifier.clickable(onClick = onShare),
-            )
-            ListItem(
-                headlineContent = { Text(if (torrent.status == TorrentStatus.PAUSED) "继续" else "暂停") },
-                leadingContent = {
-                    Icon(
-                        if (torrent.status == TorrentStatus.PAUSED) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = null,
-                    )
-                },
-                modifier = Modifier.clickable(onClick = onTogglePause),
-            )
-            ListItem(
-                headlineContent = { Text("删除", color = MaterialTheme.colorScheme.error) },
-                leadingContent = {
-                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                },
-                modifier = Modifier.clickable(onClick = onDelete),
-            )
-        }
-    }
-}
-
-/** Rename-torrent dialog (display name only). */
-@Composable
-private fun RenameTorrentDialog(
-    initial: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var text by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("重命名") },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                label = { Text("新名称") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { if (text.trim().isNotEmpty()) onConfirm(text.trim()) },
-                enabled = text.trim().isNotEmpty(),
-            ) { Text("确定") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
 }
 
 /** Full-screen detail page for Android. */

@@ -389,7 +389,7 @@ fun AddTorrentScreen(
                     Spacer(Modifier.height(8.dp))
                     com.typebit.ui.screens.settings.SettingSwitch(
                             label = "添加后开始下载",
-                            description = "关闭则以暂停状态添加",
+                            description = "磁力需先解析元数据；关闭则添加后立即暂停（可选文件后暂停）",
                             checked = startNow,
                             onCheckedChange = { startNow = it },
                     )
@@ -419,7 +419,11 @@ fun AddTorrentScreen(
                                 added = true
                             } else if (magnetHash != null) {
                                 // Magnet — phase 2: commit the file selection.
-                                store.commitMagnetSelection(magnetHash!!, buildPriorities())
+                                store.commitMagnetSelection(
+                                        magnetHash!!,
+                                        buildPriorities(),
+                                        paused = !startNow,
+                                )
                                 added = true
                             } else {
                                 // Magnet — phase 1: resolve metadata first,

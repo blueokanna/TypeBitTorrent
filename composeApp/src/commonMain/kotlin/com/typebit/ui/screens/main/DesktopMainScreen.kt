@@ -113,6 +113,11 @@ fun DesktopMainScreen(
     var showStats by remember { mutableStateOf(false) }
     var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
 
+    // Per-torrent long-press / right-click actions (rename / share / pause / delete).
+    var actionsFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
+    var renameFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
+    var deleteFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
+
     // Poll engine statistics while the dialog is open (once per second).
     LaunchedEffect(showStats) {
         if (showStats) {
@@ -169,6 +174,7 @@ fun DesktopMainScreen(
                         torrents = state.filteredTorrents,
                         selectedHash = state.selectedHash,
                         onSelect = store::select,
+                        onActions = { actionsFor = it },
                     )
                 }
             }
@@ -201,6 +207,60 @@ fun DesktopMainScreen(
         stats?.let { s ->
             StatsDialog(stats = s, onDismiss = { showStats = false })
         }
+    }
+
+    // Per-torrent actions: long-press a row (or hold the mouse) → sheet with
+    // rename / share / pause-resume / delete, same as the mobile app.
+    actionsFor?.let { t ->
+        com.typebit.ui.components.TorrentActionsSheet(
+            torrent = t,
+            actions =
+                    com.typebit.ui.components.TorrentActions(
+                            onRename = {
+                                actionsFor = null
+                                renameFor = t
+                            },
+                            onShare = {
+                                actionsFor = null
+                                com.typebit.platform.shareText(
+                                        t.name,
+                                        store.magnetLink(t.hash, t.name),
+                                )
+                            },
+                            onTogglePause = {
+                                actionsFor = null
+                                if (t.status == TorrentStatus.PAUSED) store.resume(t.hash)
+                                else store.pause(t.hash)
+                            },
+                            onDelete = {
+                                actionsFor = null
+                                deleteFor = t
+                            },
+                    ),
+            onDismiss = { actionsFor = null },
+        )
+    }
+
+    renameFor?.let { t ->
+        com.typebit.ui.components.RenameTorrentDialog(
+            initial = t.name,
+            onConfirm = { name ->
+                store.renameTorrent(t.hash, name)
+                renameFor = null
+            },
+            onDismiss = { renameFor = null },
+        )
+    }
+
+    deleteFor?.let { t ->
+        com.typebit.ui.components.DeleteTorrentDialog(
+            torrent = t,
+            onConfirm = {
+                store.remove(t.hash)
+                deleteFor = null
+            },
+            onDismiss = { deleteFor = null },
+        )
     }
 }
 
@@ -374,9 +434,9 @@ private fun filterIcon(f: TorrentFilter): ImageVector = when (f) {
 }
 
 /**
- * Single MD3-Expressive header row: title + live speeds + search field +
- * bulk actions + navigation. Everything the user needs on one line — no
- * stacked toolbars.
+ * Single MD3-Expressive header row: title + search field + bulk actions +
+ * navigation. Wire speeds live per-task in the transfer table only — the
+ * header stays clean.
  */
 @Composable
 private fun AppTopBar(

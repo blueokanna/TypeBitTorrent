@@ -9,6 +9,13 @@ import java.net.ServerSocket
 actual object Platform {
     private var backgroundServiceUp = false
 
+    // Android's WiFi driver drops multicast by default — without a
+    // MulticastLock the engine's LSD (BEP-14) announces and LAN peer
+    // replies never arrive, so "download from my PC on the LAN" silently
+    // fails. Held exactly while any transfer is live (same window as the
+    // foreground service).
+    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+
     actual val name: String = "Android"
 
     actual val isDesktop: Boolean = false
@@ -31,10 +38,38 @@ actual object Platform {
         if (active && !backgroundServiceUp) {
             backgroundServiceUp = true
             DownloadService.start(AppContextHolder.context)
+            acquireMulticastLock()
         } else if (!active && backgroundServiceUp) {
             backgroundServiceUp = false
             DownloadService.stop(AppContextHolder.context)
+            releaseMulticastLock()
         }
+    }
+
+    private fun acquireMulticastLock() {
+        try {
+            val wifi =
+                AppContextHolder.context.getSystemService(android.content.Context.WIFI_SERVICE)
+                    as android.net.wifi.WifiManager
+            if (multicastLock == null) {
+                multicastLock = wifi.createMulticastLock("typebit-lsd").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+        } catch (_: Exception) {
+            // Not on WiFi / driver quirk: LSD just won't receive — the
+            // engine still announces out and DHT/Tracker keep working.
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        try {
+            multicastLock?.release()
+        } catch (_: Exception) {
+            // Already released / not held.
+        }
+        multicastLock = null
     }
 
     actual fun backgroundModeEnabled(): Boolean {

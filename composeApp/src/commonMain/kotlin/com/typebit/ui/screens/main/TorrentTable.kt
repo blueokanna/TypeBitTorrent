@@ -86,6 +86,7 @@ fun TorrentTable(
     torrents: List<Torrent>,
     selectedHash: String?,
     onSelect: (String) -> Unit,
+    onActions: ((Torrent) -> Unit)? = null,
 ) {
     var sort by remember { mutableStateOf(SortState(SortKey.NAME)) }
     var hidden by remember { mutableStateOf(setOf<SortKey>()) }
@@ -162,6 +163,7 @@ fun TorrentTable(
                             torrent = t,
                             selected = t.hash == selectedHash,
                             onClick = { onSelect(t.hash) },
+                            onActions = onActions,
                             visible = visible,
                         )
                     }
@@ -247,6 +249,7 @@ private fun TorrentRow(
     torrent: Torrent,
     selected: Boolean,
     onClick: () -> Unit,
+    onActions: ((Torrent) -> Unit)?,
     visible: List<SortKey>,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -266,7 +269,12 @@ private fun TorrentRow(
             .clip(MaterialTheme.shapes.large)
             .background(bg)
             .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+                onLongClick = onActions?.let { { it(torrent) } },
+            )
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

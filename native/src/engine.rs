@@ -1810,7 +1810,6 @@ mod tests {
             }
             if report_at.elapsed() >= Duration::from_secs(2) {
                 report_at = std::time::Instant::now();
-                // Dump engine-side diagnostic logs (peer drops, uTP cleanups).
                 let mut lq = logs.lock().unwrap();
                 while let Some((_lvl, msg)) = lq.pop_front() {
                     if msg.contains("DIAG") || msg.contains("utp") || msg.contains("drop") {
@@ -1819,7 +1818,8 @@ mod tests {
                 }
                 drop(lq);
                 let (tx, rx) = channel();
-                if let Some(snap) = engine.request(Cmd::Snapshot { tx }, rx, Duration::from_secs(10))
+                if let Some(snap) =
+                    engine.request(Cmd::Snapshot { tx }, rx, Duration::from_secs(10))
                 {
                     let dht = snap
                         .split("\"dht\":")
@@ -1839,7 +1839,14 @@ mod tests {
                     }
                     let (tx2, rx2) = channel();
                     let peers = engine
-                        .request(Cmd::Peers { hash: hash.clone(), tx: tx2 }, rx2, Duration::from_secs(10))
+                        .request(
+                            Cmd::Peers {
+                                hash: hash.clone(),
+                                tx: tx2,
+                            },
+                            rx2,
+                            Duration::from_secs(10),
+                        )
                         .unwrap_or_default();
                     let peer_n = peers.matches("\"addr\"").count();
                     let secs = start.elapsed().as_secs();
@@ -1893,7 +1900,6 @@ mod tests {
 
         let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
         let engine = spawn_engine("{}", dir.to_str().unwrap(), logs.clone()).expect("spawn");
-
         let start = std::time::Instant::now();
         let deadline = start + Duration::from_secs(seconds);
         let mut report_at = std::time::Instant::now();
@@ -2011,7 +2017,7 @@ mod tests {
                         got = Some(n);
                         break;
                     }
-                    Err(e) if e == typebit::error::Error::WouldBlock => {
+                    Err(typebit::error::Error::WouldBlock) => {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                     Err(e) => {

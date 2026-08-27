@@ -223,8 +223,7 @@ impl NativeHost {
                     let _ = stream.set_nonblocking(true);
                     self.conns.insert(id, ConnSlot::Established(stream));
                 }
-                Err(e) => {
-                    // Failed: remove the slot so tcp_connect_done reports Io.
+                Err(_) => {
                     self.conns.remove(&id);
                 }
             }
