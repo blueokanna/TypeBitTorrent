@@ -237,7 +237,21 @@ data class BitTorrentSettings(
     val enableUpnp: Boolean = true,
     val enableNatPmp: Boolean = true,
     val maxPeersPerTorrent: Int = 80,
-    val requestPipeline: Int = 256,
+    /**
+     * Request pipeline depth per peer (16 KiB blocks, mechanism 1). 32
+     * blocks = ≤ 512 KiB in flight per peer — the libtorrent-class default.
+     */
+    val requestPipeline: Int = 32,
+    /**
+     * Per-request timeout in ms (mechanism 2): a block not answered within
+     * this window is released and re-issued to a healthier peer.
+     */
+    val requestTimeoutMs: Long = 20_000,
+    /**
+     * Consecutive request timeouts on one peer before it is disconnected
+     * and blacklisted (mechanism 2).
+     */
+    val maxRequestTimeouts: Int = 5,
     val endgamePieces: Int = 32,
     val smartScheduling: Boolean = true,
     val useDefaultTrackers: Boolean = true,

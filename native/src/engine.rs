@@ -1041,6 +1041,10 @@ fn peers_to_json(peers: Vec<typebit::session::PeerSnapshot>) -> String {
         w.comma();
         w.kv_string("client", &p.client);
         w.comma();
+        // ISO-3166 alpha-2 country code ("" when unknown/private) — the UI
+        // renders the national flag before the address from this.
+        w.kv_string("cc", &country_code(&p.cc));
+        w.comma();
         w.kv_u64("phase", p.phase as u64);
         w.comma();
         w.kv_bool("seed", p.is_seed);
@@ -1054,6 +1058,15 @@ fn peers_to_json(peers: Vec<typebit::session::PeerSnapshot>) -> String {
     }
     w.end_array();
     w.into_string()
+}
+
+/// A `[u8; 2]` country code as a 2-char string ("" when all-zero).
+fn country_code(cc: &[u8; 2]) -> String {
+    if cc[0] == 0 && cc[1] == 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(cc).into_owned()
+    }
 }
 
 /// Serialize the engine-wide statistics for the stats dialog.
@@ -1197,6 +1210,7 @@ fn ban_reason_str(r: &typebit::leech::BanReason) -> String {
         typebit::leech::BanReason::Corrupt => "corrupt".to_string(),
         typebit::leech::BanReason::Protocol => "protocol".to_string(),
         typebit::leech::BanReason::FreeRide => "free-ride".to_string(),
+        typebit::leech::BanReason::Timeout => "timeout".to_string(),
     }
 }
 
@@ -1269,6 +1283,10 @@ pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, Session
     let max_connections_per_ip = num("max_connections_per_ip", 8) as u32;
     let port_mapping = flag("port_mapping", false);
     let lsd_enabled = flag("lsd_enabled", true);
+    // LSD announce interval (mechanism 4): one infohash per interval,
+    // round-robin over active torrents. The engine clamps it to a hard
+    // floor so the LAN multicast can never become a storm.
+    let lsd_interval_ms = num("lsd_interval_ms", typebit::lsd::LSD_INTERVAL_MS);
     let verify_workers = num("verify_workers", 0) as usize;
     let connect_timeout_ms = num("connect_timeout_ms", 30_000);
     let proxy = parse_proxy(&root);
@@ -1287,6 +1305,7 @@ pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, Session
         max_connections_per_ip,
         port_mapping,
         lsd_enabled,
+        lsd_interval_ms,
         verify_workers,
         proxy,
         connect_timeout_ms,
@@ -1366,6 +1385,9 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
 
     let max_peers = num("max_peers", 80) as u32;
     let request_pipeline = num("request_pipeline", typebit::consts::REQUEST_PIPELINE as u64) as u32;
+    // Mechanism 2: per-request timeout + consecutive-timeout ban limit.
+    let request_timeout_ms = num("request_timeout_ms", typebit::consts::REQUEST_TIMEOUT_MS);
+    let max_request_timeouts = num("max_request_timeouts", typebit::consts::MAX_REQUEST_TIMEOUTS as u64) as u32;
     let endgame_pieces = num("endgame_pieces", 32) as u32;
     let smart_scheduling = flag("smart_scheduling", true);
     let use_default_trackers = flag("use_default_trackers", true);
@@ -1421,6 +1443,8 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
         listen_port,
         upload_limit_bps,
         download_limit_bps,
+        request_timeout_ms,
+        max_request_timeouts,
         file_priorities: Vec::new(),
         proxy: None,
         webseed: WebSeedConfig::default(),

@@ -95,6 +95,11 @@ data class TorrentSnapshotDto(
 data class PeerDto(
     val addr: String = "",
     val client: String = "",
+    /**
+     * ISO-3166 alpha-2 country code ("" when unknown/private). The Peers tab
+     * renders the national flag before the address from this.
+     */
+    val cc: String = "",
     /** 0=Connecting 1=Handshake 2=Ready 3=Closed. */
     val phase: Int = 0,
     val seed: Boolean = false,

@@ -26,6 +26,10 @@ object EngineConfigJson {
             put("cache_bytes", bt.cacheBytes)
             put("dht_enabled", bt.enableDht)
             put("lsd_enabled", bt.enableLsd)
+            // LSD (BEP-14) announce interval: one infohash per interval,
+            // round-robin over active torrents (mechanism 4). The engine
+            // clamps it to a 30 s hard floor.
+            put("lsd_interval_ms", 60_000)
             // typebit 0.1.1 built-in token-bucket global limits (bytes/sec).
             put("global_download_limit_bps", speed.globalDownloadLimitKib * 1024)
             put("global_upload_limit_bps", speed.globalUploadLimitKib * 1024)
@@ -50,6 +54,8 @@ object EngineConfigJson {
             )
             put("max_peers", bt.maxPeersPerTorrent)
             put("request_pipeline", bt.requestPipeline)
+            put("request_timeout_ms", bt.requestTimeoutMs)
+            put("max_request_timeouts", bt.maxRequestTimeouts)
             put("endgame_pieces", bt.endgamePieces)
             put("smart_scheduling", bt.smartScheduling)
             put("use_default_trackers", bt.useDefaultTrackers)
@@ -74,6 +80,8 @@ object EngineConfigJson {
         return buildJsonObject {
             put("max_peers", bt.maxPeersPerTorrent)
             put("request_pipeline", bt.requestPipeline)
+            put("request_timeout_ms", bt.requestTimeoutMs)
+            put("max_request_timeouts", bt.maxRequestTimeouts)
             put("endgame_pieces", bt.endgamePieces)
             put("smart_scheduling", bt.smartScheduling)
             put("use_default_trackers", bt.useDefaultTrackers)

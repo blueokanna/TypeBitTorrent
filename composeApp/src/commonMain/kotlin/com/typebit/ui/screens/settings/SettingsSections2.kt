@@ -169,6 +169,30 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                 { update(s.copy(requestPipeline = it.toIntOrNull() ?: s.requestPipeline)) }
         )
         SettingNumberField(
+                "请求超时 (s)",
+                (s.requestTimeoutMs / 1000).toString(),
+                {
+                    update(
+                            s.copy(
+                                    requestTimeoutMs = (it.toLongOrNull() ?: 20L).coerceIn(1L, 60L) * 1000
+                            )
+                    )
+                },
+                suffix = "s"
+        )
+        SettingNumberField(
+                "最大连续超时",
+                s.maxRequestTimeouts.toString(),
+                {
+                    update(
+                            s.copy(
+                                    maxRequestTimeouts = (it.toIntOrNull() ?: 5).coerceIn(1, 20)
+                            )
+                    )
+                },
+                suffix = "次"
+        )
+        SettingNumberField(
                 "Endgame 触发分块数",
                 s.endgamePieces.toString(),
                 { update(s.copy(endgamePieces = it.toIntOrNull() ?: s.endgamePieces)) }

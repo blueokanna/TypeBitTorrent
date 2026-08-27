@@ -133,10 +133,16 @@ fun AddTorrentScreen(
 
     val canAdd = pendingBytes != null || magnetHash != null || magnet.isNotBlank()
 
-    // Clean up a pending magnet when the user leaves (cancel / back), so a
-    // cancelled dialog never leaves a half-configured magnet running.
+    // A magnet whose resolve started is ALREADY a real task (added + started
+    // in phase 1, persisted). Leaving the dialog must not silently delete it:
+    // the metadata may simply be slow (cold DHT / blocked trackers), and
+    // removing it made the user re-add the same magnet forever. Instead we
+    // release the data hold so it downloads (all files) once metadata
+    // arrives in the background — qBittorrent behaviour. Only an EXPLICIT
+    // cancel of a resolve that has not even returned a hash removes nothing
+    // (there is no task yet in that case).
     fun leaveDialog() {
-        magnetHash?.let { store.cancelMagnetPending(it) }
+        magnetHash?.let { store.releaseMagnetPending(it) }
         onBack()
     }
 
@@ -456,10 +462,19 @@ fun AddTorrentScreen(
                                         return@launch
                                     }
                                     magnetHash = hash
-                                    val info = store.waitMetadata(hash, 90_000)
+                                    // Generous window: DHT is cold at first
+                                    // launch (routing table empty) and many
+                                    // public trackers are unreachable, so
+                                    // metadata routinely takes 60-120 s.
+                                    val info = store.waitMetadata(hash, 180_000)
                                     resolving = false
                                     if (info == null) {
-                                        resolveError = "元数据获取超时（请确认网络可用、DHT/Tracker 可达）"
+                                        // The task is already added and keeps
+                                        // resolving in the background — keep
+                                        // it instead of deleting it.
+                                        store.releaseMagnetPending(hash)
+                                        resolveError =
+                                                "元数据获取超时，任务已保留并继续后台解析（首次启动 DHT 冷启动较慢）"
                                         return@launch
                                     }
                                     // LaunchedEffect(preview) resets and seeds

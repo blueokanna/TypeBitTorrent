@@ -1,16 +1,18 @@
 package com.typebit.ui.screens.detail
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +31,7 @@ import com.typebit.engine.PeerDto
 import com.typebit.model.Torrent
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
+import com.typebit.ui.components.flagPainter
 import com.typebit.ui.util.Format
 import kotlinx.coroutines.delay
 
@@ -78,12 +81,24 @@ private fun PeerRow(peer: PeerDto) {
         Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            Icons.Default.Person,
-            contentDescription = null,
-            tint = if (peer.phase == 2) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // The peer's national flag (bundled PNG — Windows cannot render
+        // flag emoji, which is why the earlier emoji version showed boxes).
+        // Unknown / private ranges fall back to a globe icon.
+        val flag = flagPainter(peer.cc)
+        if (flag != null) {
+            Image(
+                flag,
+                contentDescription = peer.cc,
+                modifier = Modifier.size(24.dp, 18.dp),
+            )
+        } else {
+            Icon(
+                Icons.Default.Public,
+                contentDescription = "未知国家",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
+        }
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(

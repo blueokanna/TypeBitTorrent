@@ -135,49 +135,63 @@ class AppStore(
             _state.update { it.copy(lastError = "引擎启动失败：原生库未加载") }
             return
         }
-
-        // Restore app-level torrent records.
-        records = torrentRepo.loadRecords()
-        for (rec in records) {
-            reAddRecord(rec)
-        }
-        // Pre-populate the info cache so the first tick renders full rows;
-        // it is refetched whenever the snapshot reports new metadata.
-        for (rec in records) {
-            engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
-        }
-        // Restore verified-piece bitfields + DHT table.
-        torrentRepo.loadResumeState()?.let { engine.loadState(it) }
-
-        // Sync the community tracker list (best.txt) BEFORE any torrent
-        // starts, so a fresh launch announces to the most-reliable trackers
-        // first — the "tracker highly available from the very beginning"
-        // requirement. The fetch is best-effort: on failure the existing
-        // (persisted) tracker set is kept and downloads proceed.
-        val (effectiveSettings, addedTrackers) = syncCommunityTrackers(settings)
-        if (addedTrackers.isNotEmpty()) {
+        // The restored settings (never the defaults): every recovery step
+        // below is best-effort, but the user's appearance/limits MUST reach
+        // the UI even if one step throws — otherwise the app would silently
+        // run on default theme/font after a single bad record or a transient
+        // JNI failure.
+        var effectiveSettings = settings
+        try {
+            // Restore app-level torrent records. One malformed record must
+            // not abort the whole boot (reAddRecord already reports per
+            // record, but a defensive catch keeps the boot total).
+            records = torrentRepo.loadRecords()
             for (rec in records) {
-                for (url in addedTrackers) engine.addTracker(rec.hash, url)
+                reAddRecord(rec)
             }
-            // Refresh the mirrors so the Tracker tab shows the new URLs.
+            // Pre-populate the info cache so the first tick renders full rows;
+            // it is refetched whenever the snapshot reports new metadata.
             for (rec in records) {
                 engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
             }
-            lastAppliedExtraTrackers = trackersSet(effectiveSettings)
-            settingsRepo.save(effectiveSettings)
-        }
+            // Restore verified-piece bitfields + DHT table.
+            torrentRepo.loadResumeState()?.let { engine.loadState(it) }
 
-        // Start torrents that were not paused. A magnet that never received
-        // its per-file commit (app died mid-add-dialog) is held again so it
-        // keeps fetching metadata but cannot silently download everything.
-        for (rec in records) {
-            if (rec.kind == "MAGNET" && rec.pendingSelection) {
-                engine.setHoldData(rec.hash, hold = true)
+            // Sync the community tracker list (best.txt) BEFORE any torrent
+            // starts, so a fresh launch announces to the most-reliable trackers
+            // first — the "tracker highly available from the very beginning"
+            // requirement. The fetch is best-effort: on failure the existing
+            // (persisted) tracker set is kept and downloads proceed.
+            val (synced, addedTrackers) = syncCommunityTrackers(settings)
+            effectiveSettings = synced
+            if (addedTrackers.isNotEmpty()) {
+                for (rec in records) {
+                    for (url in addedTrackers) engine.addTracker(rec.hash, url)
+                }
+                // Refresh the mirrors so the Tracker tab shows the new URLs.
+                for (rec in records) {
+                    engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
+                }
+                lastAppliedExtraTrackers = trackersSet(effectiveSettings)
+                settingsRepo.save(effectiveSettings)
             }
-            if (!rec.paused) engine.start(rec.hash)
+
+            // Start torrents that were not paused. A magnet that never received
+            // its per-file commit (app died mid-add-dialog) is held again so it
+            // keeps fetching metadata but cannot silently download everything.
+            for (rec in records) {
+                if (rec.kind == "MAGNET" && rec.pendingSelection) {
+                    engine.setHoldData(rec.hash, hold = true)
+                }
+                if (!rec.paused) engine.start(rec.hash)
+            }
+            // Apply speed limits.
+            applyLimits(effectiveSettings)
+        } catch (t: Throwable) {
+            // A restore hiccup must never take the whole app down: keep the
+            // loaded settings, keep whatever records recovered, and continue.
+            _state.update { it.copy(lastError = "恢复部分数据时出错：${t.message ?: t::class.simpleName}") }
         }
-        // Apply speed limits.
-        applyLimits(effectiveSettings)
 
         _state.update {
             it.copy(
@@ -257,6 +271,14 @@ class AppStore(
             withTimeoutOrNull(5_000) {
                 settingsSaveJob?.cancel()
                 settingsRepo.save(_state.value.settings)
+                // Records are normally persisted on every mutation, but a
+                // mutation queued on [engineScope] is cancelled by the
+                // `engineScope.cancel()` above. Re-persisting here means the
+                // latest in-memory library always reaches disk — otherwise a
+                // just-added torrent (or a just-applied priority/tracker
+                // change) could silently vanish on the next launch, orphaning
+                // its `.part` files on disk.
+                persistRecords()
                 persistResume()
             }
             engine.stop()
@@ -626,6 +648,23 @@ class AppStore(
     }
 
     /**
+     * Keeps a magnet whose metadata did not arrive inside the add dialog's
+     * wait window. The magnet is already a real task (it was added and
+     * started in phase 1); releasing the data hold lets it download with the
+     * default all-files selection as soon as the engine finishes fetching
+     * metadata in the background — exactly how qBittorrent treats a magnet
+     * that resolves slowly. Without this, a slow DHT/tracker bootstrap made
+     * the dialog remove the magnet on timeout, so the user had to re-add it
+     * repeatedly and it never appeared to load.
+     */
+    fun releaseMagnetPending(hash: String) = onEngine {
+        engine.setHoldData(hash, hold = false)
+        records = records.map { if (it.hash == hash) it.copy(pendingSelection = false) else it }
+        persistRecords()
+        refreshStats()
+    }
+
+    /**
      * Sets one file's download priority at runtime (0=Skip, 1=Normal, 2=High) and persists it.
      * Skipped files stop being requested.
      */
@@ -726,12 +765,14 @@ class AppStore(
             }
             lastAppliedExtraTrackers = trackersNow
         }
-        // 4) Persist, coalesced: a slider drag / keystroke storm becomes a
-        //    single write after the input settles (plus the final save in
-        //    [stop]).
+        // 4) Persist the settings immediately (no debounce). Losing the
+        //    user's theme/font/limit choices to a killed process inside a
+        //    400 ms window is a real data-loss bug; a settings.json write is
+        //    a few KB and the engine scope is serialized, so saving on every
+        //    committed edit is cheap. `settingsSaveJob` coalesces rapid
+        //    edits by cancelling the previous queued write.
         settingsSaveJob?.cancel()
         settingsSaveJob = onEngineJob {
-            delay(400)
             settingsRepo.save(settings)
         }
     }
