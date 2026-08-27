@@ -102,7 +102,12 @@ private fun TrackerImportRow(
 }
 
 @Composable
-fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+fun BitTorrentSection(
+        settings: AppSettings,
+        onChange: (AppSettings) -> Unit,
+        state: com.typebit.store.AppState = com.typebit.store.AppState(),
+        store: com.typebit.store.AppStore? = null,
+) {
     val s = settings.bitTorrent
     val update: (BitTorrentSettings) -> Unit = { ns -> onChange(settings.copy(bitTorrent = ns)) }
 
@@ -117,10 +122,20 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
         SettingSwitch(
                 "启用 UPnP / NAT-PMP",
-                "自动端口映射（存储项）",
+                upnpStatusText(state),
                 s.enableUpnp || s.enableNatPmp,
                 { update(s.copy(enableUpnp = it, enableNatPmp = it)) }
         )
+        if (s.enableUpnp || s.enableNatPmp) {
+            Text(
+                    upnpStatusText(state, verbose = true),
+                    style = MaterialTheme.typography.labelSmall,
+                    color =
+                            if (state.portMapPhase == 9) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+            )
+        }
         SettingSwitch("匿名模式", "尽量隐藏客户端特征", s.anonymousMode, { update(s.copy(anonymousMode = it)) })
         SettingSwitch(
                 "反吸血检测",
@@ -222,6 +237,18 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                 { update(s.copy(cacheBytes = (it.toLongOrNull() ?: 256L) * 1024 * 1024)) },
                 suffix = "MiB"
         )
+        SettingDropdown(
+                label = "磁盘分配",
+                options = com.typebit.data.PreallocationMode.entries,
+                selected = com.typebit.data.PreallocationMode.fromCode(s.preallocation),
+                onSelect = { update(s.copy(preallocation = it.code)) },
+                labelOf = { it.label },
+        )
+        Text(
+                "在文件首次打开时预留完整长度，让操作系统一次性连续分配簇，显著减少磁盘碎片（仅影响之后添加的种子）。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 
     SectionCard("种子调度器 (typebit)") {
@@ -288,6 +315,86 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                     }
                 },
         )
+    }
+
+    if (com.typebit.platform.Platform.isDesktop) {
+        WindowsFirewallCard(state, store)
+    }
+}
+
+/** Human-readable UPnP/NAT-PMP status from the live engine state. */
+private fun upnpStatusText(
+        state: com.typebit.store.AppState,
+        verbose: Boolean = false,
+): String =
+        when (state.portMapPhase) {
+            6 -> "已映射端口 ${state.portMapPort}（TCP+UDP，对等节点可直接连接）"
+            9 -> "映射失败：路由器未开启 UPnP/NAT-PMP（内网对等发现不受影响）"
+            0 -> if (verbose) "未启动（引擎启动后自动映射）" else "自动端口映射（路由器支持 UPnP 时内网免配置）"
+            7 -> "正在移除映射…"
+            8 -> "已取消映射"
+            else -> "端口映射进行中…"
+        }
+
+/**
+ * Windows firewall (ICF) + Internet Connection Sharing (ICS) card.
+ * Desktop only: `netsh advfirewall` needs elevation, so a failed direct
+ * attempt is followed by a one-time UAC retry; ICS is an explicit,
+ * admin-gated action that changes system networking.
+ */
+@Composable
+private fun WindowsFirewallCard(
+        state: com.typebit.store.AppState,
+        store: com.typebit.store.AppStore?,
+) {
+    SectionCard("Windows 防火墙与共享") {
+        if (store == null) return@SectionCard
+        val portText =
+                if (state.listenPort > 0) "监听端口 ${state.listenPort}"
+                else "监听端口 ${state.settings.connection.listenPort}"
+        Text(
+                "$portText — 自动放行入站连接；ICS 会把本机网络共享给局域网设备（需管理员）。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = { store.configureFirewall() }) { Text("自动配置防火墙") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { store.configureFirewallElevated() }) { Text("提权重试") }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { store.refreshFirewallStatus() }) { Text("状态") }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { store.removeFirewallRules() }) { Text("移除规则") }
+        }
+        if (state.systemMessage.isNotEmpty()) {
+            Text(
+                    state.systemMessage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color =
+                            if (state.systemOk == true) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        Text(
+                "Internet 连接共享 (ICS)：将本机互联网连接共享给局域网设备。会改变系统网络设置，仅在你明确需要时使用。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = { store.configureIcs() }) { Text("启用 ICS") }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { store.disableIcs() }) { Text("停用 ICS") }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { store.refreshIcsStatus() }) { Text("状态") }
+        }
     }
 }
 

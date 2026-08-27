@@ -24,6 +24,15 @@ data class AppState(
     val extIp: String = "",
     /** NAT-detected external UDP port (BEP-42), 0 until confirmed. */
     val extPort: Int = 0,
+    /**
+     * UPnP/NAT-PMP port-mapping phase (6 = mapped, 9 = failed). Live from
+     * both the batched snapshot and the t=12 engine events.
+     */
+    val portMapPhase: Int = 0,
+    /** External port granted by the gateway, 0 until mapped. */
+    val portMapPort: Int = 0,
+    /** Actual bound TCP listen port (0 = not listening yet). */
+    val listenPort: Int = 0,
     /** Anti-leech: count of known leeching clients detected so far. */
     val antiLeechCount: Int = 0,
     /** Anti-leech: most recent detected client names (deduped, capped). */
@@ -38,6 +47,12 @@ data class AppState(
     val categories: List<String> = listOf("未分类"),
     val tags: List<String> = emptyList(),
     val lastError: String? = null,
+    /**
+     * Result of the last Windows firewall/ICS action (desktop only):
+     * `null` = nothing attempted yet. `true`/`false` = ok/failed.
+     */
+    val systemOk: Boolean? = null,
+    val systemMessage: String = "",
 ) {
     val selectedTorrent: Torrent? get() = torrents.firstOrNull { it.hash == selectedHash }
 

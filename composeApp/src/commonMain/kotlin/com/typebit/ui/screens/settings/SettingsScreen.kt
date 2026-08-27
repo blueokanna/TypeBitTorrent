@@ -134,22 +134,12 @@ fun SettingsScreen(
                         )
                     }
                 }
-                // Vertical divider between the sidebar and the editor pane.
-                // `HorizontalDivider` always applies its own `fillMaxWidth`
-                // + `height(thickness)` internally, so pinning the width is
-                // not enough — it collapses to a 1x1 dot instead of a line.
-                // `VerticalDivider` is unavailable in this M3 version, so a
-                // 1.dp Box draws the true vertical separator.
                 Box(
                     Modifier
                         .width(1.dp)
                         .fillMaxHeight()
                         .background(MaterialTheme.colorScheme.outlineVariant),
                 )
-                // Editor pane on a distinct container tone. The scrollable
-                // Column fills the remaining width/height directly so the
-                // section content is always laid out (no nested-Surface
-                // measurement surprises).
                 Column(
                     Modifier
                         .weight(1f)
@@ -159,27 +149,19 @@ fun SettingsScreen(
                         .padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // Category switch fades instead of snapping. The section
-                    // MUST be wrapped in an explicit Column: AnimatedContent
-                    // only lays out the first top-level child it measures, so
-                    // a bare multi-card section would render just its first
-                    // card and swallow the rest of the settings.
                     AnimatedContent(
                         targetState = categories[category],
                         transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
                         label = "settingsCategory",
                     ) { cat ->
                         Column {
-                            CategoryContent(cat, settings, onChange)
+                            CategoryContent(cat, settings, onChange, state, store)
                         }
                     }
                     Spacer(Modifier.height(24.dp))
                 }
             }
         } else {
-            // Mobile: a horizontally scrollable MD3 chip bar switches the
-            // category (cleaner than a bare dropdown), then the scrollable
-            // section below renders the active category's cards.
             Column(Modifier.fillMaxSize().padding(padding)) {
                 MobileCategoryBar(categories, category) { category = it }
                 SettingsScaffold {
@@ -188,9 +170,8 @@ fun SettingsScreen(
                         transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
                         label = "settingsCategoryMobile",
                     ) { cat ->
-                        // Same single-Column requirement as the desktop pane.
                         Column {
-                            CategoryContent(cat, settings, onChange)
+                            CategoryContent(cat, settings, onChange, state, store)
                         }
                     }
                 }
@@ -240,6 +221,8 @@ private fun CategoryContent(
     category: SettingsCategory,
     settings: com.typebit.data.AppSettings,
     onChange: (com.typebit.data.AppSettings) -> Unit,
+    state: AppState,
+    store: AppStore,
 ) {
     when (category) {
         SettingsCategory.BEHAVIOR -> BehaviorSection(settings, onChange)
@@ -247,7 +230,7 @@ private fun CategoryContent(
         SettingsCategory.DOWNLOADS -> DownloadsSection(settings, onChange)
         SettingsCategory.CONNECTION -> ConnectionSection(settings, onChange)
         SettingsCategory.SPEED -> SpeedSection(settings, onChange)
-        SettingsCategory.BIT_TORRENT -> BitTorrentSection(settings, onChange)
+        SettingsCategory.BIT_TORRENT -> BitTorrentSection(settings, onChange, state, store)
         SettingsCategory.BACKGROUND -> BackgroundSection(settings, onChange)
         SettingsCategory.WEBUI -> WebUiSection(settings, onChange)
         SettingsCategory.ADVANCED -> AdvancedSection(settings, onChange)

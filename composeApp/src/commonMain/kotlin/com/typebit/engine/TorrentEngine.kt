@@ -138,6 +138,32 @@ interface TorrentEngine {
 
     fun setSessionConfig(configJson: String)
 
+    // -- Windows system integration (firewall / ICS) -------------------------
+    // These never need the engine handle; they shell out to `netsh` /
+    // `powershell` on the caller's (IO) thread and return a truthful result.
+    // Android reports "仅 Windows 支持" for every call.
+
+    /** Adds inbound Windows firewall rules for `port` (TCP+UDP). */
+    fun firewallAdd(port: Int): SystemResultDto
+
+    /** Retries [firewallAdd] through a single UAC elevation prompt. */
+    fun firewallAddElevated(port: Int): SystemResultDto
+
+    /** Removes the inbound firewall rules for `port`. */
+    fun firewallRemove(port: Int): SystemResultDto
+
+    /** Whether the firewall rules for `port` currently exist. */
+    fun firewallStatus(port: Int): SystemResultDto
+
+    /** Query whether Internet Connection Sharing is enabled. */
+    fun icsStatus(): SystemResultDto
+
+    /** Enables Internet Connection Sharing (explicit, admin-gated). */
+    fun icsEnable(): SystemResultDto
+
+    /** Disables Internet Connection Sharing on all shared connections. */
+    fun icsDisable(): SystemResultDto
+
     // -- persistence --------------------------------------------------------
 
     fun saveState(): ByteArray?
@@ -327,6 +353,24 @@ class NativeTorrentEngine : TorrentEngine {
         requireEngine().let { nativeSetSessionConfig(it, configJson) }
     }
 
+    override fun firewallAdd(port: Int): SystemResultDto =
+        decodeSystemResult(nativeFirewallAdd(port))
+
+    override fun firewallAddElevated(port: Int): SystemResultDto =
+        decodeSystemResult(nativeFirewallAddElevated(port))
+
+    override fun firewallRemove(port: Int): SystemResultDto =
+        decodeSystemResult(nativeFirewallRemove(port))
+
+    override fun firewallStatus(port: Int): SystemResultDto =
+        decodeSystemResult(nativeFirewallStatus(port))
+
+    override fun icsStatus(): SystemResultDto = decodeSystemResult(nativeIcsStatus())
+
+    override fun icsEnable(): SystemResultDto = decodeSystemResult(nativeIcsEnable())
+
+    override fun icsDisable(): SystemResultDto = decodeSystemResult(nativeIcsDisable())
+
     override fun saveState(): ByteArray? = requireEngine().let { nativeSaveState(it) }
 
     override fun loadState(data: ByteArray) {
@@ -352,6 +396,11 @@ class NativeTorrentEngine : TorrentEngine {
         return handle
     }
 }
+
+/** Decodes a `{"ok":bool,"message":".."}` bridge result (lenient). */
+private fun decodeSystemResult(raw: String): SystemResultDto =
+    runCatching { BRIDGE_JSON.decodeFromString<SystemResultDto>(raw) }
+        .getOrElse { SystemResultDto(ok = false, message = raw) }
 
 /** JSON string literal with proper escaping (for the make-torrent file list). */
 private fun jsonString(s: String): String {

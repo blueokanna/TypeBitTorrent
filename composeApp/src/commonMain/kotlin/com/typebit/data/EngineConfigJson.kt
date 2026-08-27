@@ -59,6 +59,8 @@ object EngineConfigJson {
             put("endgame_pieces", bt.endgamePieces)
             put("smart_scheduling", bt.smartScheduling)
             put("use_default_trackers", bt.useDefaultTrackers)
+            // Disk allocation strategy: 0=off 1=sparse 2=full.
+            put("preallocation", bt.preallocation)
             put("seeding_slots", bt.seedingSlots)
             put("leeching_slots", bt.leechingSlots)
             put("optimistic_interval_ms", bt.optimisticIntervalMs)
@@ -85,6 +87,8 @@ object EngineConfigJson {
             put("endgame_pieces", bt.endgamePieces)
             put("smart_scheduling", bt.smartScheduling)
             put("use_default_trackers", bt.useDefaultTrackers)
+            // Disk allocation strategy: 0=off 1=sparse 2=full.
+            put("preallocation", bt.preallocation)
             put("seeding_slots", bt.seedingSlots)
             put("leeching_slots", bt.leechingSlots)
             put("optimistic_interval_ms", bt.optimisticIntervalMs)

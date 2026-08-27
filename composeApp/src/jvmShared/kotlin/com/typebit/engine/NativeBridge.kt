@@ -49,3 +49,12 @@ actual external fun nativeSaveState(handle: Long): ByteArray?
 actual external fun nativeLoadState(handle: Long, data: ByteArray): Int
 actual external fun nativeTakeEvents(handle: Long): String
 actual external fun nativeTakeLogs(handle: Long): String
+
+// Windows system integration (firewall / ICS) — engine-independent.
+actual external fun nativeFirewallAdd(port: Int): String
+actual external fun nativeFirewallAddElevated(port: Int): String
+actual external fun nativeFirewallRemove(port: Int): String
+actual external fun nativeFirewallStatus(port: Int): String
+actual external fun nativeIcsStatus(): String
+actual external fun nativeIcsEnable(): String
+actual external fun nativeIcsDisable(): String

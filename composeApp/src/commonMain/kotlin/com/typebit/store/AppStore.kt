@@ -79,6 +79,14 @@ class AppStore(
     private fun newPeersScope(): CoroutineScope =
             CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
 
+    // Dedicated executor for one-shot Windows system actions (firewall /
+    // ICS). These call out to `netsh` / `powershell` and can take seconds;
+    // they must never occupy the serialized engine executor. `IO` is fine
+    // here — these are user-initiated, not a polling loop, so blocking
+    // JNI threads cannot pile up.
+    private var systemScope: CoroutineScope =
+            CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(2))
+
     // Persisted app-level records (engine cannot carry category/tags/source).
     // Only touched from [engineScope] — never from the UI thread.
     private var records: List<TorrentRecord> = emptyList()
@@ -124,6 +132,9 @@ class AppStore(
         if (bootJob?.isActive == true) return
         if (!engineScope.isActive) engineScope = newEngineScope()
         if (!peersScope.isActive) peersScope = newPeersScope()
+        if (!systemScope.isActive) {
+            systemScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(2))
+        }
         bootJob = onEngineJob { boot() }
     }
 
@@ -267,6 +278,7 @@ class AppStore(
         pollJob?.cancel()
         engineScope.cancel()
         peersScope.cancel()
+        systemScope.cancel()
         runBlocking {
             withTimeoutOrNull(5_000) {
                 settingsSaveJob?.cancel()
@@ -818,6 +830,72 @@ class AppStore(
     }
 
     // ------------------------------------------------------------------
+    // Windows system integration (firewall / ICS) — desktop only
+    // ------------------------------------------------------------------
+
+    /** The actual bound listen port, falling back to the configured one. */
+    private fun listenPort(): Int =
+        _state.value.listenPort.takeIf { it > 0 }
+            ?: if (_state.value.settings.connection.useRandomPort) 0
+            else _state.value.settings.connection.listenPort
+
+    /** Runs a firewall/ICS action off the engine thread and surfaces the
+     *  result in `state.systemOk` / `state.systemMessage`. */
+    private fun runSystemAction(block: suspend () -> com.typebit.engine.SystemResultDto) {
+        systemScope.launch {
+            val r = block()
+            _state.update { it.copy(systemOk = r.ok, systemMessage = r.message) }
+        }
+    }
+
+    /** Adds (or refreshes) the Windows firewall rules for the listen port. */
+    fun configureFirewall() {
+        val port = listenPort()
+        if (port <= 0) {
+            _state.update {
+                it.copy(systemOk = false, systemMessage = "监听端口未知（引擎尚未启动或随机端口模式）")
+            }
+            return
+        }
+        runSystemAction { engine.firewallAdd(port) }
+    }
+
+    /** Elevated retry (one UAC prompt) for [configureFirewall]. */
+    fun configureFirewallElevated() {
+        val port = listenPort()
+        if (port <= 0) {
+            _state.update {
+                it.copy(systemOk = false, systemMessage = "监听端口未知（引擎尚未启动或随机端口模式）")
+            }
+            return
+        }
+        runSystemAction { engine.firewallAddElevated(port) }
+    }
+
+    /** Removes the inbound firewall rules for the listen port. */
+    fun removeFirewallRules() {
+        val port = listenPort()
+        if (port <= 0) return
+        runSystemAction { engine.firewallRemove(port) }
+    }
+
+    /** Refreshes the firewall status line in the settings card. */
+    fun refreshFirewallStatus() {
+        val port = listenPort()
+        if (port <= 0) return
+        runSystemAction { engine.firewallStatus(port) }
+    }
+
+    /** Enables Internet Connection Sharing (explicit, admin-gated). */
+    fun configureIcs() = runSystemAction { engine.icsEnable() }
+
+    /** Disables Internet Connection Sharing on all shared connections. */
+    fun disableIcs() = runSystemAction { engine.icsDisable() }
+
+    /** Refreshes the ICS status line. */
+    fun refreshIcsStatus() = runSystemAction { engine.icsStatus() }
+
+    // ------------------------------------------------------------------
     // poll loop
     // ------------------------------------------------------------------
 
@@ -862,6 +940,8 @@ class AppStore(
             var dht = s.dhtNodes
             var leechCount = s.antiLeechCount
             var leechClients = s.antiLeechClients
+            var pmPhase = s.portMapPhase
+            var pmPort = s.portMapPort
             var engineNotice: String? = null
             val antiLeechOn = s.settings.bitTorrent.antiLeechEnabled
 
@@ -916,6 +996,11 @@ class AppStore(
                                 }
                         engineNotice = msg
                     }
+                    12 -> {
+                        // UPnP/NAT-PMP port-mapping lifecycle (0.1.7).
+                        if (ev.phase != null) pmPhase = ev.phase
+                        if (ev.port != null && ev.port!! > 0) pmPort = ev.port!!
+                    }
                 }
             }
 
@@ -929,6 +1014,8 @@ class AppStore(
                         dhtNodes = dht,
                         antiLeechCount = leechCount,
                         antiLeechClients = leechClients,
+                        portMapPhase = pmPhase,
+                        portMapPort = pmPort,
                         lastError = engineNotice ?: s.lastError,
                 )
             }
@@ -966,6 +1053,8 @@ class AppStore(
                     torrents = torrents,
                     antiLeechCount = leechCount,
                     antiLeechClients = leechClients,
+                    portMapPhase = pmPhase,
+                    portMapPort = pmPort,
                     lastError = engineNotice ?: s.lastError,
             )
         }
@@ -1032,6 +1121,9 @@ class AppStore(
                     trackerCount = snap.trackers,
                     extIp = snap.extIp,
                     extPort = snap.extPort,
+                    portMapPhase = snap.pmPhase,
+                    portMapPort = snap.pmPort,
+                    listenPort = snap.listenPort,
             )
         }
 

@@ -125,6 +125,36 @@ expect fun nativeTotals(handle: Long): String
 expect fun nativeStats(handle: Long): String
 
 // ---------------------------------------------------------------------------
+// Windows system integration (firewall / ICS) — no engine handle needed
+// ---------------------------------------------------------------------------
+
+/**
+ * Add inbound Windows firewall rules for `port` (TCP+UDP). Returns
+ * `{"ok":bool,"message":".."}`. May fail when not elevated — use
+ * [nativeFirewallAddElevated] for the one-time UAC retry. Android always
+ * reports `"仅 Windows 支持"`.
+ */
+expect fun nativeFirewallAdd(port: Int): String
+
+/** Retry [nativeFirewallAdd] through a single UAC elevation prompt. */
+expect fun nativeFirewallAddElevated(port: Int): String
+
+/** Remove the inbound firewall rules for `port`. */
+expect fun nativeFirewallRemove(port: Int): String
+
+/** Whether the firewall rules for `port` exist. */
+expect fun nativeFirewallStatus(port: Int): String
+
+/** Query whether Internet Connection Sharing is enabled. */
+expect fun nativeIcsStatus(): String
+
+/** Enable Internet Connection Sharing (explicit, admin-gated). */
+expect fun nativeIcsEnable(): String
+
+/** Disable Internet Connection Sharing on all shared connections. */
+expect fun nativeIcsDisable(): String
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 

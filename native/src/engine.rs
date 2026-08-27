@@ -674,6 +674,18 @@ fn handle_cmd(
             w.comma();
             w.kv_u64("ext_port", ext_port as u64);
             w.comma();
+            // UPnP/NAT-PMP port-mapping lifecycle (0=idle … 6=mapped, 9=failed).
+            let pm = engine.port_mapping_status();
+            let pm_phase = pm.as_ref().map(|s| s.phase.code() as u64).unwrap_or(0);
+            let pm_port = pm.as_ref().and_then(|s| s.external_port).unwrap_or(0);
+            w.kv_u64("pm_phase", pm_phase);
+            w.comma();
+            w.kv_u64("pm_port", pm_port as u64);
+            w.comma();
+            // Actual bound TCP port (drives the firewall rule target; equals
+            // the configured port except in random-port mode).
+            w.kv_u64("listen_port", engine.host.listen_port() as u64);
+            w.comma();
             w.key("totals");
             w.begin_object();
             w.kv_u64("d", d_total);
@@ -769,9 +781,15 @@ fn handle_cmd(
             };
             let _ = tx.send(res);
         }
-        Cmd::SetFilePriorities { hash, priorities, tx } => {
-            let prios: Vec<FilePriority> =
-                priorities.iter().map(|b| file_priority_from_u8(*b)).collect();
+        Cmd::SetFilePriorities {
+            hash,
+            priorities,
+            tx,
+        } => {
+            let prios: Vec<FilePriority> = priorities
+                .iter()
+                .map(|b| file_priority_from_u8(*b))
+                .collect();
             let res = match InfoHash::from_hex(&hash) {
                 Ok(h) => engine
                     .set_file_priorities(&h, &prios)
@@ -989,6 +1007,19 @@ fn event_to_json(ev: &EngineEvent) -> String {
             w.kv_u64("t", 8);
             w.comma();
             w.kv_u64("n", *n as u64);
+        }
+        // UPnP/NAT-PMP port mapping phase changed (0.1.7 dual-protocol).
+        EngineEvent::PortMapping {
+            phase,
+            external_port,
+        } => {
+            w.kv_u64("t", 12);
+            w.comma();
+            w.kv_u64("phase", phase.code() as u64);
+            if let Some(p) = external_port {
+                w.comma();
+                w.kv_u64("port", *p as u64);
+            }
         }
         // A peer was banned by the built-in anti-leech engine (0.1.1).
         EngineEvent::PeerBanned {
@@ -1384,10 +1415,15 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
         |key: &str| -> Option<String> { root.get(key).and_then(Value::as_str).map(str::to_string) };
 
     let max_peers = num("max_peers", 80) as u32;
+    // Disk allocation strategy: 0=off 1=sparse(set_len) 2=full(set_len+fill).
+    let preallocation = typebit::session::Preallocation::from_code(num("preallocation", 1) as u8);
     let request_pipeline = num("request_pipeline", typebit::consts::REQUEST_PIPELINE as u64) as u32;
     // Mechanism 2: per-request timeout + consecutive-timeout ban limit.
     let request_timeout_ms = num("request_timeout_ms", typebit::consts::REQUEST_TIMEOUT_MS);
-    let max_request_timeouts = num("max_request_timeouts", typebit::consts::MAX_REQUEST_TIMEOUTS as u64) as u32;
+    let max_request_timeouts = num(
+        "max_request_timeouts",
+        typebit::consts::MAX_REQUEST_TIMEOUTS as u64,
+    ) as u32;
     let endgame_pieces = num("endgame_pieces", 32) as u32;
     let smart_scheduling = flag("smart_scheduling", true);
     let use_default_trackers = flag("use_default_trackers", true);
@@ -1448,6 +1484,7 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
         file_priorities: Vec::new(),
         proxy: None,
         webseed: WebSeedConfig::default(),
+        preallocation,
     })
 }
 

@@ -228,6 +228,29 @@ enum class EncryptionMode { ALLOW, PREFER, REQUIRE }
 @Serializable
 enum class ContentLayout { ORIGINAL, SUBFOLDER, NO_SUBFOLDER }
 
+/**
+ * Disk file allocation strategy (fragmentation vs. upfront cost).
+ *
+ * - OFF: files grow as pieces land — least startup I/O, most fragmentation
+ *   on HDDs.
+ * - SPARSE (recommended): the full extent is reserved at open time so the
+ *   OS lays out clusters contiguously, while disk space is only consumed
+ *   for data actually written (sparse file on Windows).
+ * - FULL: reserved AND physically written out — best contiguous layout on
+ *   all filesystems, costs full disk space and an initial write pass.
+ */
+@Serializable
+enum class PreallocationMode(val label: String, val code: Int) {
+    OFF("关闭", 0),
+    SPARSE("稀疏（推荐）", 1),
+    FULL("完整", 2);
+
+    companion object {
+        fun fromCode(code: Int): PreallocationMode =
+            entries.firstOrNull { it.code == code } ?: SPARSE
+    }
+}
+
 @Serializable
 data class BitTorrentSettings(
     val enableDht: Boolean = true,
@@ -266,6 +289,12 @@ data class BitTorrentSettings(
     val extraTrackers: String = "",
     /** Disk write-back cache budget in bytes. */
     val cacheBytes: Long = 256L * 1024 * 1024,
+    /**
+     * Disk file allocation strategy (0=off, 1=sparse, 2=full). Applied when
+     * a torrent's files are first opened; only affects torrents added
+     * afterwards. See [PreallocationMode].
+     */
+    val preallocation: Int = 1,
     val seedingSlots: Int = 8,
     val leechingSlots: Int = 8,
     val optimisticIntervalMs: Long = 30_000,

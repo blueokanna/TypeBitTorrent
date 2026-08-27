@@ -13,6 +13,7 @@
 
 pub mod android_log;
 pub mod engine;
+pub mod firewall;
 pub mod host;
 pub mod jni_glue;
 pub mod json;

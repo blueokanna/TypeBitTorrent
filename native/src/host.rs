@@ -103,6 +103,10 @@ pub struct NativeHost {
     established_tx: Sender<ConnectResult>,
     pending_connects: usize,
     files: HashMap<DiskId, std::fs::File>,
+    /// Per-file allocation mode set by `disk_set_alloc`: 0=off, 1=sparse,
+    /// 2=full. Consulted by `disk_prealloc` so the native side can commit
+    /// the full extent only when the user asked for it.
+    alloc_mode: HashMap<DiskId, u8>,
     http: typebit::host_std::StdHost,
     /// Async HTTP worker (lazily spawned); lets the engine submit tracker
     /// announces and web-seed fetches without ever blocking on HTTP.
@@ -134,6 +138,7 @@ impl NativeHost {
             established_tx,
             pending_connects: 0,
             files: HashMap::new(),
+            alloc_mode: HashMap::new(),
             http: typebit::host_std::StdHost::new(),
             http_worker: None,
             resolve_worker: None,
@@ -190,6 +195,17 @@ impl NativeHost {
                 }
             }
         }
+    }
+
+    /// The actual TCP port we are bound to (0 = not listening). This is the
+    /// port inbound peers connect to and therefore the one a firewall rule
+    /// must open — it differs from the configured port in random-port mode.
+    pub fn listen_port(&self) -> u16 {
+        self.listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(0)
     }
 
     /// Accept all pending inbound connections (non-blocking drain).
@@ -856,7 +872,7 @@ impl Host for NativeHost {
             }
             // Port 6771 in use (another local client, or the OS) — LSD
             // receive degrades gracefully; outgoing announces still work.
-            Err(e) => Err(Error::Io),
+            Err(_) => Err(Error::Io),
         }
     }
 
@@ -942,9 +958,61 @@ impl Host for NativeHost {
         file.write_all(data).map_err(|_| Error::Io)
     }
 
+    fn disk_set_alloc(&mut self, id: DiskId, mode: u8) -> Result<()> {
+        self.alloc_mode.insert(id, mode);
+        // Sparse (mode 1): mark the file sparse on Windows so the extent
+        // reservation done by `disk_prealloc` (set_len) does not consume
+        // real disk space for unwritten regions. This is the fragmentation
+        // win without the disk-space cost.
+        if mode == 1 {
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Foundation::HANDLE;
+                use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
+                use windows_sys::Win32::System::IO::DeviceIoControl;
+                if let Some(f) = self.files.get(&id) {
+                    let mut bytes: u32 = 0;
+                    // Best-effort: if the FS rejects it (e.g. FAT), the
+                    // extent is still reserved by set_len.
+                    let _ = unsafe {
+                        DeviceIoControl(
+                            f.as_raw_handle() as HANDLE,
+                            FSCTL_SET_SPARSE,
+                            std::ptr::null(),
+                            0,
+                            std::ptr::null_mut(),
+                            0,
+                            &mut bytes,
+                            std::ptr::null_mut(),
+                        )
+                    };
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn disk_prealloc(&mut self, id: DiskId, size: u64) -> Result<()> {
-        let file = self.files.get_mut(&id).ok_or(Error::NotFound)?;
-        file.set_len(size).map_err(|_| Error::Io)
+        let mode = self.alloc_mode.get(&id).copied().unwrap_or(1);
+        {
+            let file = self.files.get_mut(&id).ok_or(Error::NotFound)?;
+            // Reserves the full logical extent: the OS lays out clusters
+            // contiguously in one pass instead of growing the file as
+            // pieces land in random order (the main fragmentation driver).
+            file.set_len(size).map_err(|_| Error::Io)?;
+        }
+        // Full allocation: physically commit the extent so filesystems
+        // without sparse semantics still get contiguous clusters. Capped at
+        // 1 GiB of zero-fill per file — beyond that the set_len reservation
+        // is kept and the fill is skipped so the engine thread never blocks
+        // for minutes on multi-GB torrents.
+        if mode == 2 && size <= (1 << 30) {
+            if let Some(file) = self.files.get(&id) {
+                let _ = fill_file(file, size);
+            }
+        }
+        Ok(())
     }
 
     fn disk_flush(&mut self, id: DiskId) -> Result<()> {
@@ -954,7 +1022,25 @@ impl Host for NativeHost {
 
     fn disk_close(&mut self, id: DiskId) {
         self.files.remove(&id);
+        self.alloc_mode.remove(&id);
     }
+}
+
+/// Write zeros across the whole file in bounded chunks (full allocation).
+/// Best-effort: a failure leaves the extent reserved by `set_len`, which is
+/// still the fragmentation win.
+fn fill_file(file: &std::fs::File, size: u64) -> Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut f = file.try_clone().map_err(|_| Error::Io)?;
+    let buf = vec![0u8; 4 * 1024 * 1024];
+    let mut written: u64 = 0;
+    while written < size {
+        let chunk = ((size - written) as usize).min(buf.len());
+        f.seek(SeekFrom::Start(written)).map_err(|_| Error::Io)?;
+        f.write_all(&buf[..chunk]).map_err(|_| Error::Io)?;
+        written += chunk as u64;
+    }
+    Ok(())
 }
 
 // ---------- address conversion helpers ----------

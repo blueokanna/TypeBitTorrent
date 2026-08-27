@@ -178,4 +178,11 @@ private class FakeEngine : TorrentEngine {
     override fun loadState(data: ByteArray) {}
     override fun takeEvents(): List<EngineEventDto> = emptyList()
     override fun takeLogs(): List<LogEntryDto> = emptyList()
+    override fun firewallAdd(port: Int): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
+    override fun firewallAddElevated(port: Int): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
+    override fun firewallRemove(port: Int): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
+    override fun firewallStatus(port: Int): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
+    override fun icsStatus(): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
+    override fun icsEnable(): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
+    override fun icsDisable(): SystemResultDto = SystemResultDto(false, "仅 Windows 支持")
 }

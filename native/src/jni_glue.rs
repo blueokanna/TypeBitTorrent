@@ -1175,3 +1175,103 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTakeLogs(
         Ok(new_jstring(env, &out))
     })
 }
+
+// ---------------------------------------------------------------------------
+// Windows system integration (firewall / ICS)
+//
+// These are one-shot, user-initiated operations that do NOT touch the
+// engine handle: they run `netsh` / `powershell` on the calling (JVM IO)
+// thread and return a `{"ok":bool,"message":".."}` JSON string. Slow system
+// calls therefore never block the engine loop. Android simply reports
+// "仅 Windows 支持" from `firewall.rs`.
+// ---------------------------------------------------------------------------
+
+/// Add inbound firewall rules for `port` (TCP+UDP). May fail with an
+/// elevation hint; call `nativeFirewallAddElevated` for the UAC retry.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeFirewallAdd(
+    unowned: EnvUnowned,
+    _class: JClass,
+    port: jint,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::firewall_add(port.max(0) as u16);
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
+
+/// Retry [`nativeFirewallAdd`] through a single UAC elevation prompt.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeFirewallAddElevated(
+    unowned: EnvUnowned,
+    _class: JClass,
+    port: jint,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::firewall_add_elevated(port.max(0) as u16);
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
+
+/// Remove the inbound firewall rules for `port`.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeFirewallRemove(
+    unowned: EnvUnowned,
+    _class: JClass,
+    port: jint,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::firewall_remove(port.max(0) as u16);
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
+
+/// Whether the firewall rules for `port` exist.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeFirewallStatus(
+    unowned: EnvUnowned,
+    _class: JClass,
+    port: jint,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::firewall_status(port.max(0) as u16);
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
+
+/// Query whether Internet Connection Sharing is currently enabled.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeIcsStatus(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::ics_status();
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
+
+/// Enable Internet Connection Sharing (explicit, admin-gated, changes
+/// system networking).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeIcsEnable(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::ics_enable();
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
+
+/// Disable Internet Connection Sharing on all shared connections.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeIcsDisable(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jstring {
+    with_env(unowned, |env| {
+        let r = crate::firewall::ics_disable();
+        Ok(new_jstring(env, &crate::firewall::sys_result_to_json(&r)))
+    })
+}
