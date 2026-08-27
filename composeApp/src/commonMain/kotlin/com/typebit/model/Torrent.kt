@@ -172,4 +172,10 @@ data class TorrentRecord(
     val trackers: List<String> = emptyList(),
     /** Per-file renames: file index → new relative path (persisted). */
     val renames: Map<Int, String> = emptyMap(),
+    /**
+     * Base64 of the raw bencoded `info` dict, set once metadata is fetched
+     * for a magnet. On restart the torrent is re-added WITH metadata, so it
+     * never has to re-fetch (qBittorrent parity).
+     */
+    val infoBase64: String = "",
 )

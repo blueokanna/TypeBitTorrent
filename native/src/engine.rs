@@ -75,6 +75,13 @@ pub enum Cmd {
         name: String,
         tx: Sender<Result<String, String>>,
     },
+    /// Rename the torrent itself (display name only — staged file paths are
+    /// untouched, exactly like qBittorrent's per-torrent rename).
+    RenameTorrent {
+        hash: String,
+        name: String,
+        tx: Sender<Result<String, String>>,
+    },
     Progress {
         hash: String,
         tx: Sender<f64>,
@@ -90,6 +97,12 @@ pub enum Cmd {
     TorrentInfo {
         hash: String,
         tx: Sender<Option<String>>,
+    },
+    /// The raw bencoded `info` dict of a torrent (for persistence so a
+    /// magnet never re-fetches metadata after a restart).
+    TorrentInfoRaw {
+        hash: String,
+        tx: Sender<Option<Vec<u8>>>,
     },
     TorrentStates {
         tx: Sender<String>,
@@ -153,6 +166,11 @@ pub enum Cmd {
     /// Global wire counters (down_total, up_total) from the host.
     Totals {
         tx: Sender<(u64, u64)>,
+    },
+    /// Engine-wide statistics (wire totals, cache counters, connected peers,
+    /// discarded bytes) for the qBittorrent-style stats dialog.
+    Stats {
+        tx: Sender<String>,
     },
     SaveState {
         tx: Sender<Option<Vec<u8>>>,
@@ -221,6 +239,12 @@ static ENGINE_LIVE: AtomicBool = AtomicBool::new(false);
 /// Diagnostic: monotonically increasing spawn sequence for logcat tracing.
 static ENGINE_SPAWN_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// The most recent panic's `file:line` (set by the panic hook BEFORE the
+/// stack unwinds). `catch_unwind` only exposes the payload, not the source
+/// location, so the hook records it here and `log_panic` surfaces it in the
+/// UI event — otherwise a recovered panic is impossible to localise.
+static LAST_PANIC_LOC: Mutex<Option<String>> = Mutex::new(None);
+
 /// Spawn the engine worker thread. `config_json` is the JSON blob produced by
 /// the Kotlin side (see `parse_config`). Returns a handle or a string error.
 pub fn spawn_engine(
@@ -228,9 +252,6 @@ pub fn spawn_engine(
     save_dir: &str,
     logs: LogBuffer,
 ) -> Result<EngineHandle, String> {
-    // Install a panic hook that records the EXACT panic location to logcat
-    // at panic time (catch_unwind unwinds the stack, so a backtrace captured
-    // at the catch site can never show the panicking frame).
     std::panic::set_hook(Box::new(|info| {
         let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
             (*s).to_string()
@@ -243,6 +264,9 @@ pub fn spawn_engine(
             .location()
             .map(|l| format!("{}:{}", l.file(), l.line()))
             .unwrap_or_default();
+        if let Ok(mut g) = LAST_PANIC_LOC.lock() {
+            *g = Some(loc.clone());
+        }
         alog(&format!("PANIC at {loc}: {msg}"));
     }));
     let seq = ENGINE_SPAWN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -406,13 +430,25 @@ fn run_loop(
 /// backtrace) so adb can see it even if the UI never surfaces it.
 fn log_panic(logs: &LogBuffer, events: &EventQueue, payload: &(dyn std::any::Any + Send)) {
     let msg = panic_message(payload);
+    // The panic hook recorded the exact `file:line` before unwinding; carry
+    // it into every consumer so a recovered panic is always localisable.
+    let loc = LAST_PANIC_LOC
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default();
     // A backtrace pinpoints the exact call site; it only materialises in
     // release with debug info, but the debug/diagnostic builds carry it.
     let bt = std::backtrace::Backtrace::force_capture();
-    let full = format!("engine PANIC recovered: {msg}\n{bt}");
+    let full = format!("engine PANIC recovered: {msg} (at {loc})\n{bt}");
     alog(&full);
+    let label = if loc.is_empty() {
+        format!("engine panic recovered: {msg}")
+    } else {
+        format!("engine panic recovered: {msg} (at {loc})")
+    };
     if let Ok(mut q) = logs.lock() {
-        q.push_back((3, format!("engine panic recovered: {msg}")));
+        q.push_back((3, label.clone()));
     }
     if let Ok(mut q) = events.lock() {
         let mut w = JsonWriter::new();
@@ -421,7 +457,7 @@ fn log_panic(logs: &LogBuffer, events: &EventQueue, payload: &(dyn std::any::Any
         w.comma();
         w.kv_u64("code", 2);
         w.comma();
-        w.kv_string("detail", &format!("engine panic recovered: {msg}"));
+        w.kv_string("detail", &label);
         w.end_object();
         q.push_back(w.into_string());
     }
@@ -544,6 +580,12 @@ fn handle_cmd(
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
         }
+        Cmd::RenameTorrent { hash, name, tx } => {
+            let res = meta
+                .rename_torrent(&hash, name.trim())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        }
         Cmd::Peers { hash, tx } => {
             let json = InfoHash::from_hex(&hash)
                 .map(|h| peers_to_json(engine.peer_snapshot(&h)))
@@ -570,6 +612,13 @@ fn handle_cmd(
         }
         Cmd::TorrentInfo { hash, tx } => {
             let v = meta.json_for(&hash);
+            let _ = tx.send(v);
+        }
+        Cmd::TorrentInfoRaw { hash, tx } => {
+            let v = InfoHash::from_hex(&hash)
+                .ok()
+                .and_then(|h| engine.metainfo(&h))
+                .map(|t| t.info_raw.clone());
             let _ = tx.send(v);
         }
         Cmd::TorrentStates { tx } => {
@@ -628,6 +677,7 @@ fn handle_cmd(
                 let ih = InfoHash::from_hex(&hash).ok();
                 let progress = ih.as_ref().map(|h| engine.progress(h)).unwrap_or(0.0);
                 let downloaded = ih.as_ref().map(|h| engine.downloaded(h)).unwrap_or(0);
+                let uploaded = ih.as_ref().map(|h| engine.uploaded(h)).unwrap_or(0);
                 let complete = ih.as_ref().map(|h| engine.is_complete(h)).unwrap_or(false);
                 let (name, size, pieces, meta_ready) = meta
                     .get(&hash)
@@ -646,6 +696,8 @@ fn handle_cmd(
                 w.kv_f64("p", progress);
                 w.comma();
                 w.kv_u64("d", downloaded);
+                w.comma();
+                w.kv_u64("u", uploaded);
                 w.comma();
                 w.kv_bool("c", complete);
                 w.comma();
@@ -763,6 +815,11 @@ fn handle_cmd(
             let totals = engine.host.totals();
             let _ = tx.send(totals);
         }
+        Cmd::Stats { tx } => {
+            let st = engine.stats();
+            let (d_total, u_total) = engine.host.totals();
+            let _ = tx.send(stats_to_json(&st, d_total, u_total));
+        }
         Cmd::SaveState { tx } => {
             engine.flush_cache();
             let st = engine.save_state();
@@ -785,6 +842,16 @@ fn handle_cmd(
                                     t.have.len()
                                 ),
                             );
+                        }
+                        // Persisted metadata: upgrade a magnet session so it
+                        // never re-fetches metadata after a restart.
+                        if !t.info_raw.is_empty() {
+                            if let Err(e) = engine.install_metadata(&h, &t.info_raw) {
+                                engine.host.log(
+                                    typebit::platform::LogLevel::Warn,
+                                    &format!("install_metadata {} failed: {}", h.to_hex(), e.tag()),
+                                );
+                            }
                         }
                     }
                 }
@@ -952,6 +1019,51 @@ fn peers_to_json(peers: Vec<typebit::session::PeerSnapshot>) -> String {
         w.end_object();
     }
     w.end_array();
+    w.into_string()
+}
+
+/// Serialize the engine-wide statistics for the stats dialog.
+///
+/// `d_total`/`u_total` are the cumulative wire counters from the host; the
+/// rest come from the engine's [`typebit::engine::EngineStats`]. Every field
+/// is a real counter.
+fn stats_to_json(st: &typebit::engine::EngineStats, d_total: u64, u_total: u64) -> String {
+    let mut w = JsonWriter::new();
+    w.begin_object();
+    w.kv_u64("d_total", d_total);
+    w.comma();
+    w.kv_u64("u_total", u_total);
+    w.comma();
+    w.kv_u64("d_discarded", st.discarded_bytes);
+    w.comma();
+    w.kv_u64("d_peers", st.connected_peers as u64);
+    w.comma();
+    w.kv_u64("c_read_ops", st.cache.read_ops);
+    w.comma();
+    w.kv_u64("c_read_hits", st.cache.read_hits);
+    w.comma();
+    w.kv_u64("c_read_bytes", st.cache.read_bytes);
+    w.comma();
+    w.kv_u64("c_write_ops", st.cache.write_ops);
+    w.comma();
+    w.kv_u64("c_write_bytes", st.cache.write_bytes);
+    w.comma();
+    w.kv_u64("c_coalesced", st.cache.bytes_coalesced);
+    w.comma();
+    w.kv_u64("c_ops_saved", st.cache.ops_saved);
+    w.comma();
+    w.kv_u64("c_evictions", st.cache.evictions);
+    w.comma();
+    w.kv_u64("c_buf", st.cache_bytes);
+    w.comma();
+    w.kv_u64("c_budget", st.cache_budget);
+    w.comma();
+    w.kv_u64("c_clean", st.cache_clean);
+    w.comma();
+    w.kv_u64("c_clean_budget", st.cache_clean_budget);
+    w.comma();
+    w.kv_u64("c_dirty_entries", st.cache_dirty_entries as u64);
+    w.end_object();
     w.into_string()
 }
 
@@ -1302,6 +1414,29 @@ mod tests {
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Diagnostic: resolve the BEP-5 DHT bootstrap routers through the exact
+    /// same `StdHost::resolve_host` path the engine uses, printing each
+    /// result. Isolates whether a "DHT stuck at 1 node" report is a DNS
+    /// failure or an engine-flow bug. Prints evidence; never asserts.
+    #[test]
+    fn diag_dns_bootstrap_routers() {
+        use typebit::host_std::StdHost;
+        let routers: &[(&str, u16)] = &[
+            ("dht.transmissionbt.com", 6881),
+            ("router.bittorrent.com", 6881),
+            ("router.utorrent.com", 6881),
+            ("router.transmissionbt.com", 6881),
+            ("dht.libtorrent.org", 25401),
+        ];
+        for (host, port) in routers {
+            let r = StdHost::new().resolve_host(host, *port);
+            match r {
+                Some(addr) => eprintln!("diag-dns: {host}:{port} -> {addr}"),
+                None => eprintln!("diag-dns: {host}:{port} -> UNRESOLVED"),
+            }
+        }
+    }
+
     /// A download writes `<final>.part` (never the final name); after
     /// `finalize_file` the file appears under the final name and the staging
     /// copy is gone. Resume re-opens the staging file.
@@ -1525,7 +1660,6 @@ mod tests {
         eprintln!("diag: started engine, hunting panics for {minutes} min (hash {hash})");
 
         while std::time::Instant::now() < deadline {
-            // Drain events: look for recovered panics.
             let evs: Vec<String> = {
                 let mut q = engine.events.lock().unwrap();
                 q.drain(..).collect()
@@ -1580,5 +1714,315 @@ mod tests {
         engine.shutdown();
         let _ = fs::remove_dir_all(&dir);
         // This is a diagnostic: it never asserts; it only prints evidence.
+    }
+
+    /// Diagnostic: add a REAL MAGNET and watch whether metadata ever arrives.
+    /// Prints DHT count, peer-connection events, engine notices and the
+    /// snapshot's meta flag every 2 s. This is the reproduction path for the
+    /// "stuck at metadata while qBittorrent succeeds" report — the swarm is
+    /// mostly uTP/XunLei peers, so it also exercises the uTP dial path.
+    ///
+    /// Magnet: `$env:TBT_DIAG_MAGNET` or the Kali netinst magnet with
+    /// several trackers. Duration: `$env:TBT_DIAG_MINUTES` (default 2).
+    #[test]
+    fn diag_magnet_metadata() {
+        let _guard = engine_test_lock();
+        let magnet = std::env::var("TBT_DIAG_MAGNET").unwrap_or_else(|_| {
+            "magnet:?xt=urn:btih:2f3e884b9f97b376e4c8abbdf1e446889da6bcbc\
+             &dn=kali-linux-2026.2-installer-netinst-amd64.iso\
+             &tr=http%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce\
+             &tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce\
+             &tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce\
+             &tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce"
+                .to_string()
+        });
+        let minutes = std::env::var("TBT_DIAG_MINUTES")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(2);
+
+        let dir = std::env::temp_dir().join(format!("typebit_magnet_diag_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let engine = spawn_engine("{}", dir.to_str().unwrap(), logs.clone()).expect("spawn");
+
+        let (tx, rx) = channel();
+        let added = engine.request(
+            Cmd::AddMagnet {
+                uri: magnet.clone(),
+                save_dir: dir.to_str().unwrap().to_string(),
+                tx,
+            },
+            rx,
+            Duration::from_secs(20),
+        );
+        let hash = match added {
+            Some(Ok(h)) => h,
+            Some(Err(e)) => {
+                eprintln!("diag-magnet: add failed: {e}");
+                engine.shutdown();
+                return;
+            }
+            None => {
+                eprintln!("diag-magnet: add timed out");
+                engine.shutdown();
+                return;
+            }
+        };
+        let (tx, rx) = channel();
+        let _ = engine.request(
+            Cmd::Start {
+                hash: hash.clone(),
+                tx,
+            },
+            rx,
+            Duration::from_secs(20),
+        );
+
+        let start = std::time::Instant::now();
+        let deadline = start + Duration::from_secs(minutes * 60);
+        let mut report_at = std::time::Instant::now();
+        let mut last_dht: i64 = -1;
+        let mut metadata_done = false;
+        eprintln!("diag-magnet: hash {hash} — hunting metadata for {minutes} min");
+
+        while std::time::Instant::now() < deadline {
+            let evs: Vec<String> = {
+                let mut q = engine.events.lock().unwrap();
+                q.drain(..).collect()
+            };
+            for e in &evs {
+                if e.contains("\"t\":1") {
+                    eprintln!("diag-magnet: PEER CONNECTED: {e}");
+                }
+                if e.contains("\"t\":5") {
+                    metadata_done = true;
+                    eprintln!("diag-magnet: *** METADATA COMPLETE: {e}");
+                }
+                if e.contains("\"t\":7") {
+                    eprintln!("diag-magnet: PEER COUNT: {e}");
+                }
+                if e.contains("\"t\":11") {
+                    eprintln!("diag-magnet: ENGINE NOTICE: {e}");
+                }
+            }
+            if report_at.elapsed() >= Duration::from_secs(2) {
+                report_at = std::time::Instant::now();
+                // Dump engine-side diagnostic logs (peer drops, uTP cleanups).
+                let mut lq = logs.lock().unwrap();
+                while let Some((_lvl, msg)) = lq.pop_front() {
+                    if msg.contains("DIAG") || msg.contains("utp") || msg.contains("drop") {
+                        eprintln!("diag-magnet: LOG {msg}");
+                    }
+                }
+                drop(lq);
+                let (tx, rx) = channel();
+                if let Some(snap) = engine.request(Cmd::Snapshot { tx }, rx, Duration::from_secs(10))
+                {
+                    let dht = snap
+                        .split("\"dht\":")
+                        .nth(1)
+                        .and_then(|s| s.split(',').next())
+                        .and_then(|s| s.trim().parse::<i64>().ok())
+                        .unwrap_or(-1);
+                    if dht != last_dht {
+                        last_dht = dht;
+                        eprintln!("diag-magnet: DHT nodes = {dht}");
+                    }
+                    let meta = snap.contains("\"meta\":true");
+                    let has_name = snap.contains("\"name\":\"kali");
+                    if !metadata_done && meta {
+                        metadata_done = true;
+                        eprintln!("diag-magnet: snapshot reports meta=true");
+                    }
+                    let (tx2, rx2) = channel();
+                    let peers = engine
+                        .request(Cmd::Peers { hash: hash.clone(), tx: tx2 }, rx2, Duration::from_secs(10))
+                        .unwrap_or_default();
+                    let peer_n = peers.matches("\"addr\"").count();
+                    let secs = start.elapsed().as_secs();
+                    eprintln!(
+                        "diag-magnet: t+{secs:>4}s dht={dht:>3} peers={peer_n} meta={meta} name_ok={has_name}"
+                    );
+                }
+                if metadata_done {
+                    eprintln!("diag-magnet: metadata arrived — stopping early");
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+
+        let (tx, rx) = channel();
+        let raw = engine.request(
+            Cmd::TorrentInfoRaw {
+                hash: hash.clone(),
+                tx,
+            },
+            rx,
+            Duration::from_secs(10),
+        );
+        eprintln!(
+            "diag-magnet: done. metadata={metadata_done} dht_final={last_dht} info_raw_len={}",
+            raw.and_then(|v| v).map(|v| v.len()).unwrap_or(0)
+        );
+
+        engine.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+        // Diagnostic only — never asserts.
+    }
+
+    /// Diagnostic: watch the DHT routing table grow from a bare engine
+    /// (no torrents) over `TBT_DIAG_SECONDS` (default 60). Validates the
+    /// bootstrap flow end-to-end: async DNS → `dht.bootstrap(seeds)` →
+    /// ping responses → the table snowballs past `DHT_REBOOTSTRAP_THRESHOLD`.
+    /// Prints evidence; never asserts.
+    #[test]
+    fn diag_dht_bootstrap_growth() {
+        let _guard = engine_test_lock();
+        let seconds = std::env::var("TBT_DIAG_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
+
+        let dir = std::env::temp_dir().join(format!("typebit_dht_diag_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let engine = spawn_engine("{}", dir.to_str().unwrap(), logs.clone()).expect("spawn");
+
+        let start = std::time::Instant::now();
+        let deadline = start + Duration::from_secs(seconds);
+        let mut report_at = std::time::Instant::now();
+        let mut peak: i64 = 0;
+        eprintln!("diag-dht: observing DHT table growth for {seconds}s (no torrents)");
+
+        while std::time::Instant::now() < deadline {
+            // Drain engine notices (dht_no_seeds etc.).
+            let evs: Vec<String> = {
+                let mut q = engine.events.lock().unwrap();
+                q.drain(..).collect()
+            };
+            for e in &evs {
+                if e.contains("\"t\":11") {
+                    eprintln!("diag-dht: ENGINE NOTICE: {e}");
+                }
+            }
+            if report_at.elapsed() >= Duration::from_secs(5) {
+                report_at = std::time::Instant::now();
+                let (tx, rx) = channel();
+                if let Some(snap) =
+                    engine.request(Cmd::Snapshot { tx }, rx, Duration::from_secs(10))
+                {
+                    let dht = snap
+                        .split("\"dht\":")
+                        .nth(1)
+                        .and_then(|s| s.split(',').next())
+                        .and_then(|s| s.trim().parse::<i64>().ok())
+                        .unwrap_or(-1);
+                    peak = peak.max(dht);
+                    eprintln!(
+                        "diag-dht: t+{:>4}s dht={dht:>3} (peak {peak})",
+                        start.elapsed().as_secs()
+                    );
+                }
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+
+        eprintln!("diag-dht: done. final dht peak={peak}");
+        engine.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Diagnostic: raw UDP DHT round-trip through `NativeHost` — bind the
+    /// UDP socket, send a valid `ping` query to `router.bittorrent.com`
+    /// (and `dht.transmissionbt.com`), then wait up to 5 s for a reply.
+    /// Decides whether a "DHT stuck at 1 node" report is a network/UDP
+    /// problem or an engine-flow problem. Prints evidence; never asserts.
+    #[test]
+    fn diag_udp_dht_roundtrip() {
+        use crate::host::NativeHost as NH;
+        use typebit::platform::Host;
+        let logs: LogBuffer = Arc::new(Mutex::new(VecDeque::new()));
+        let mut host = NH::new(logs.clone());
+        match host.udp_open(0) {
+            Ok(()) => eprintln!("diag-udp: udp_open OK"),
+            Err(e) => {
+                eprintln!("diag-udp: udp_open FAILED: {e}");
+                return;
+            }
+        }
+        // Drain host logs for "UDP bound".
+        {
+            let mut q = logs.lock().unwrap();
+            while let Some((_l, m)) = q.pop_front() {
+                if m.contains("UDP") {
+                    eprintln!("diag-udp: hostlog {m}");
+                }
+            }
+        }
+        let routers: &[(&str, u16)] = &[
+            ("router.bittorrent.com", 6881),
+            ("dht.transmissionbt.com", 6881),
+            ("router.utorrent.com", 6881),
+            ("dht.libtorrent.org", 25401),
+        ];
+        let mut id = [0u8; 20];
+        id.fill(0x11);
+        for (hostname, port) in routers {
+            {
+                let mut q = logs.lock().unwrap();
+                while let Some((_l, m)) = q.pop_front() {
+                    if m.contains("udp") || m.contains("UDP") {
+                        eprintln!("diag-udp: hostlog {m}");
+                    }
+                }
+            }
+            let Some(addr) = host.resolve_host(hostname, *port) else {
+                eprintln!("diag-udp: {hostname}:{port} UNRESOLVED");
+                continue;
+            };
+            let mut req = Vec::with_capacity(64);
+            req.extend_from_slice(b"d1:ad2:id20:");
+            req.extend_from_slice(&id);
+            req.extend_from_slice(b"e1:q4:ping1:t2:aa1:y1:qe");
+            match host.udp_send(&addr, &req) {
+                Ok(()) => eprintln!("diag-udp: ping sent to {hostname}:{port} ({addr})"),
+                Err(e) => {
+                    eprintln!("diag-udp: ping send to {hostname}:{port} FAILED: {e:?}");
+                    continue;
+                }
+            }
+            // Wait up to 5 s for a reply.
+            let mut reply = [0u8; 2048];
+            let mut got = None;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                match host.udp_recv(&mut reply) {
+                    Ok((src, n)) => {
+                        eprintln!(
+                            "diag-udp: reply from {src} len={n} prefix={:?}",
+                            &reply[..n.min(8)]
+                        );
+                        got = Some(n);
+                        break;
+                    }
+                    Err(e) if e == typebit::error::Error::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                    Err(e) => {
+                        eprintln!("diag-udp: recv err {e}");
+                        break;
+                    }
+                }
+            }
+            if got.is_none() {
+                eprintln!("diag-udp: {hostname}:{port} NO REPLY in 5s");
+            }
+        }
     }
 }

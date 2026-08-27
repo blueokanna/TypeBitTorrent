@@ -70,6 +70,8 @@ data class TorrentSnapshotDto(
     val p: Double = 0.0,
     /** Payload bytes downloaded. */
     val d: Long = 0L,
+    /** Payload bytes uploaded. */
+    val u: Long = 0L,
     /** True once every piece is verified. */
     val c: Boolean = false,
     /** Engine-side paused flag (from saved state). */
@@ -180,3 +182,42 @@ data class GlobalStats(
     val dhtNodes: Int = 0,
     val torrentCount: Int = 0,
 )
+
+/**
+ * Engine-wide statistics for the qBittorrent-style stats dialog. Field
+ * names mirror `Cmd::Stats` JSON (see native/src/engine.rs::stats_to_json).
+ */
+@Serializable
+data class EngineStatsDto(
+    val d_total: Long = 0L,
+    val u_total: Long = 0L,
+    val d_discarded: Long = 0L,
+    val d_peers: Long = 0L,
+    val c_read_ops: Long = 0L,
+    val c_read_hits: Long = 0L,
+    val c_read_bytes: Long = 0L,
+    val c_write_ops: Long = 0L,
+    val c_write_bytes: Long = 0L,
+    val c_coalesced: Long = 0L,
+    val c_ops_saved: Long = 0L,
+    val c_evictions: Long = 0L,
+    val c_buf: Long = 0L,
+    val c_budget: Long = 0L,
+    val c_clean: Long = 0L,
+    val c_clean_budget: Long = 0L,
+    val c_dirty_entries: Long = 0L,
+) {
+    /** 全局分享率 (upload/download). */
+    val ratio: Double get() = if (d_total > 0) u_total.toDouble() / d_total else 0.0
+
+    /** 读缓存命中率 (0..1). */
+    val readHitRate: Double get() = if (c_read_ops > 0) c_read_hits.toDouble() / c_read_ops else 0.0
+
+    /** 写入缓存超负荷 (dirty / budget, 0..1). */
+    val writeOverload: Double
+        get() = if (c_budget > 0) (c_buf - c_clean).coerceAtLeast(0L).toDouble() / c_budget else 0.0
+
+    /** 读取缓存超负荷 (clean / clean budget, 0..1). */
+    val readOverload: Double
+        get() = if (c_clean_budget > 0) c_clean.toDouble() / c_clean_budget else 0.0
+}

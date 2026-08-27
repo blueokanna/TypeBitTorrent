@@ -175,6 +175,73 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
+// Background (Android foreground service + battery optimization)
+// ---------------------------------------------------------------------------
+
+/**
+ * Background-transfer controls. Android keeps a `dataSync` foreground
+ * service + partial wake lock running while any torrent is active, so
+ * downloads continue with the screen locked or the app backgrounded. The
+ * battery-optimization exemption is the one piece a user must grant through
+ * the system dialog (apps cannot self-exempt) — this card surfaces the
+ * current state and opens that dialog. Desktop needs none of it.
+ */
+@Composable
+fun BackgroundSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
+    var enabled by remember { mutableStateOf(com.typebit.platform.Platform.backgroundModeEnabled()) }
+    val scope = rememberCoroutineScope()
+
+    if (!com.typebit.platform.Platform.isDesktop) {
+        SectionCard("后台下载（Android）") {
+            SettingSwitch(
+                "锁屏后继续下载 / 做种",
+                "前台服务 + 唤醒锁保证进程存活；关闭后仅前台运行",
+                enabled,
+                { _ ->
+                    // The service follows the engine automatically; this
+                    // switch is informational. Force a refresh of the real
+                    // state instead of trusting a stale flag.
+                    scope.launch {
+                        kotlinx.coroutines.delay(300)
+                        enabled =
+                            com.typebit.platform.Platform.backgroundModeEnabled()
+                    }
+                },
+            )
+            SettingNote(
+                "下载/做种期间，通知栏会常驻一条「正在传输」状态；锁屏后仍继续传输。",
+            )
+            if (!enabled) {
+                Button(
+                    onClick = {
+                        com.typebit.platform.Platform.openBatteryOptimizationSettings()
+                        scope.launch {
+                            kotlinx.coroutines.delay(1_500)
+                            enabled =
+                                com.typebit.platform.Platform.backgroundModeEnabled()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("忽略电池优化")
+                }
+                SettingNote(
+                    "请在弹出的系统对话框中选择「允许」，否则系统可能在锁屏后冻结下载。",
+                )
+            } else {
+                SettingNote("已忽略电池优化，锁屏后台下载已就绪。")
+            }
+        }
+    } else {
+        SectionCard("后台下载") {
+            SettingNote(
+                "桌面版在窗口打开期间持续传输；关闭窗口即停止。无需额外配置。",
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WebUI
 // ---------------------------------------------------------------------------
 

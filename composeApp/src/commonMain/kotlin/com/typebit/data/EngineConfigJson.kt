@@ -34,11 +34,13 @@ object EngineConfigJson {
             put("connect_timeout_ms", 30_000)
             // UPnP/NAT-PMP is now real in the engine (was stored-only).
             put("port_mapping", bt.enableUpnp || bt.enableNatPmp)
-            // SOCKS5 proxy (outbound-only anonymity mode).
+            // SOCKS5 proxy (outbound-only mode). The engine implements SOCKS5
+            // ONLY; SOCKS4/HTTP are legacy persisted values that must never
+            // enable a proxy (an unsupported type would just break dialing).
             put(
                 "proxy",
                 buildJsonObject {
-                    put("enabled", proxy != ProxyType.NONE)
+                    put("enabled", proxy == ProxyType.SOCKS5)
                     put("host", settings.connection.proxyHost)
                     put("port", settings.connection.proxyPort)
                     put("username", if (settings.connection.proxyAuthEnabled) settings.connection.proxyUsername else "")

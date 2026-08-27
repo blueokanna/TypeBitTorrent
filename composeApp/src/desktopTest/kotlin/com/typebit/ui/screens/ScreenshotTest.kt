@@ -154,12 +154,14 @@ private class FakeEngine : TorrentEngine {
     override fun downloaded(hash: String): Long = 0L
     override fun isComplete(hash: String): Boolean = false
     override fun torrentInfo(hash: String): TorrentInfoDto? = null
+    override fun torrentInfoRaw(hash: String): String? = null
     override fun torrentStates(): List<TorrentStateDto> = emptyList()
     override fun snapshot(): EngineSnapshotDto = EngineSnapshotDto()
     override fun torrentCount(): Int = 0
     override fun dhtNodeCount(): Int = 0
     override fun peerId(): String = ""
     override fun totals(): Pair<Long, Long> = 0L to 0L
+    override fun stats(): EngineStatsDto = EngineStatsDto()
     override fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long) {}
     override fun setSessionConfig(configJson: String) {}
     override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean = false

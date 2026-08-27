@@ -1,26 +1,31 @@
+@file:Suppress("OVERLOAD_RESOLUTION_AMBIGUITY")
+// OverloadResolutionAmbiguity is an IDE false positive from Kotlin Multiplatform
+// expect/actual resolution (rememberTorrentFilePicker); both targets compile cleanly.
+
 package com.typebit.ui.screens.add
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,7 +47,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.typebit.engine.TorrentInfoDto
@@ -50,27 +54,19 @@ import com.typebit.platform.Platform
 import com.typebit.platform.rememberTorrentFilePicker
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
+import com.typebit.ui.components.FileTreeView
+import com.typebit.ui.components.TreeLeaf
+import com.typebit.ui.components.buildFileTree
+import com.typebit.ui.components.findNodeByKey
 import com.typebit.ui.util.Format
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Per-file download priority shown in the add dialog. */
-private enum class FilePriority(val label: String, val value: Int) {
-    NORMAL("普通", 0),
-    HIGH("高", 1),
-    LOW("低", 2),
-    SKIP("跳过", 3),
-}
-
 /**
  * qBittorrent-style add-torrent dialog: pick a `.torrent` (or paste a magnet), inspect the file
- * table BEFORE adding, choose the files/priorities, pick the save path / category / tags and
- * start-or-pause.
- *
- * Honesty note: `typebit 0.1.0`'s `add_torrent` has no per-file filter, so the selections below are
- * recorded on the torrent entry (visible in the detail panel) while the engine downloads every file
- * — documented in README.
+ * tree BEFORE adding (collapsible folders, tri-state selection, per-file priority), choose the
+ * files/priorities, pick the save path / category / tags and start-or-pause.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,29 +81,62 @@ fun AddTorrentScreen(
     var preview by remember { mutableStateOf<TorrentInfoDto?>(null) }
     var added by remember { mutableStateOf(false) }
 
+    // Two-phase magnet state: the resolved hash, whether a resolve is in
+    // flight, and the failure message when metadata never arrived.
+    var magnetHash by remember { mutableStateOf<String?>(null) }
+    var resolving by remember { mutableStateOf(false) }
+    var resolveError by remember { mutableStateOf<String?>(null) }
+
     var saveDir by remember { mutableStateOf(state.settings.downloads.defaultSavePath) }
     var category by remember { mutableStateOf("") }
     var tagsText by remember { mutableStateOf("") }
     var startNow by remember { mutableStateOf(true) }
 
-    val fileSel = remember { mutableStateMapOf<String, Boolean>() }
-    val priorities = remember { mutableStateMapOf<String, Int>() }
+    // Selection/priority keyed by the FLAT file index (not displayPath), so a
+    // directory toggle can address every descendant leaf in one call.
+    val fileSel = remember { mutableStateMapOf<Int, Boolean>() }
+    val priorities = remember { mutableStateMapOf<Int, Int>() }
+    var filterText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     val pickTorrent = rememberTorrentFilePicker { bytes, name ->
         pendingBytes = bytes
         pendingName = name
+        // A picked .torrent supersedes any in-flight magnet resolution.
+        magnetHash?.let { store.cancelMagnetPending(it) }
+        magnetHash = null
+        resolveError = null
         scope.launch {
             val parsed = withContext(Dispatchers.Default) { store.parseTorrentFile(bytes) }
             preview = parsed
-            parsed?.files?.forEach {
-                fileSel[it.displayPath] = true
-                priorities[it.displayPath] = 0
+            parsed?.files?.forEachIndexed { i, _ ->
+                fileSel[i] = true
+                priorities[i] = 1
             }
         }
     }
 
-    val canAdd = pendingBytes != null || magnet.isNotBlank()
+    val canAdd = pendingBytes != null || magnetHash != null || magnet.isNotBlank()
+
+    // Clean up a pending magnet when the user leaves (cancel / back), so a
+    // cancelled dialog never leaves a half-configured magnet running.
+    fun leaveDialog() {
+        magnetHash?.let { store.cancelMagnetPending(it) }
+        onBack()
+    }
+
+    // Per-file priorities aligned with the file tree (0=Skip, 1=Normal,
+    // 2=High); unchecked = Skip. Shared by the .torrent and magnet paths.
+    fun buildPriorities(): List<Int> =
+            preview?.files.orEmpty().mapIndexed { i, _ ->
+                val sel = fileSel[i] ?: true
+                val p = priorities[i] ?: 1
+                when {
+                    !sel -> 0        // unchecked = Skip
+                    p == 2 -> 2      // High
+                    else -> 1        // Normal
+                }
+            }
 
     // After a successful add, leave the dialog and return to the main list.
     // No "已添加" pause step — adding should feel one-shot on both platforms.
@@ -120,7 +149,7 @@ fun AddTorrentScreen(
                 TopAppBar(
                         title = { Text("添加种子") },
                         navigationIcon = {
-                            IconButton(onClick = onBack) {
+                            IconButton(onClick = { leaveDialog() }) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                             }
                         },
@@ -176,6 +205,49 @@ fun AddTorrentScreen(
                 }
             }
 
+            // Resolution status (magnet phase 1): spinner while the engine
+            // fetches metadata via DHT / trackers / LAN LSD.
+            if (resolving) {
+                Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors =
+                                CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                                ),
+                ) {
+                    Row(
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                                modifier = Modifier.width(22.dp).height(22.dp),
+                                strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                                "正在获取元数据（DHT / Tracker / 局域网 LSD）…",
+                                style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+            resolveError?.let { err ->
+                Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors =
+                                CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer
+                                ),
+                ) {
+                    Text(
+                            err,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(14.dp),
+                    )
+                }
+            }
+
             preview?.let { p ->
                 Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -216,6 +288,14 @@ fun AddTorrentScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            OutlinedTextField(
+                                    value = filterText,
+                                    onValueChange = { filterText = it },
+                                    placeholder = { Text("筛选文件...") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
                             OutlinedButton(
                                     onClick = {
                                         val all = fileSel.values.all { it }
@@ -224,19 +304,42 @@ fun AddTorrentScreen(
                             ) { Text(if (fileSel.values.all { it }) "取消全选" else "全选") }
                         }
                         Spacer(Modifier.height(4.dp))
-                        p.files.forEach { f ->
-                            FilePickRow(
-                                    path = f.displayPath,
-                                    size = f.length,
-                                    selected = fileSel[f.displayPath] ?: true,
-                                    priority = priorities[f.displayPath] ?: 0,
-                                    onToggle = { fileSel[f.displayPath] = it },
-                                    onPriority = { priorities[f.displayPath] = it },
+                        val fileTree = remember(p.files) {
+                            buildFileTree(
+                                    p.files.mapIndexed { i, f ->
+                                        TreeLeaf(i, f.path, f.length)
+                                    }
+                            )
+                        }
+                        // The file tree is a LazyColumn; it MUST sit in a
+                        // bounded-height container. This screen's outer
+                        // Column is `verticalScroll` — an unbounded (infinite)
+                        // max height would make the LazyColumn crash with
+                        // "measured with an infinity maximum height"
+                        // (nesting LazyColumn inside a scrollable Column).
+                        Box(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                            FileTreeView(
+                                    roots = fileTree,
+                                    isSelected = { fileSel[it] ?: true },
+                                    priority = { priorities[it] ?: 1 },
+                                    onToggleLeaf = { i, sel -> fileSel[i] = sel },
+                                    onToggleDir = { dirKey, sel ->
+                                        findNodeByKey(fileTree, dirKey)
+                                                ?.leafIndices
+                                                ?.forEach { fileSel[it] = sel }
+                                    },
+                                    onPriorityLeaf = { i, prio -> priorities[i] = prio },
+                                    onPriorityDir = { dirKey, prio ->
+                                        findNodeByKey(fileTree, dirKey)
+                                                ?.leafIndices
+                                                ?.forEach { priorities[it] = prio }
+                                    },
+                                    filter = filterText,
                             )
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                                "勾选 = 下载，未勾选 = 跳过；高/低优先级影响分块调度（typebit 0.1.1 支持按文件选择）。",
+                                "勾选 = 下载，未勾选 = 跳过；优先级影响分块调度（typebit 支持按文件选择）。",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -299,23 +402,11 @@ fun AddTorrentScreen(
             ) {
                 Button(
                         onClick = {
-                            val tags =
-                                    tagsText.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-                            val effSave = saveDir.ifBlank { Platform.defaultDownloadDir() }
-                            // Per-file priorities aligned with the preview's
-                            // file table (0=Skip, 1=Normal, 2=High) — the
-                            // typebit 0.1.1 engine honors them (selective
-                            // download). Unchecked files are skipped.
-                            val filePriorities = preview?.files.orEmpty().map { f ->
-                                val sel = fileSel[f.displayPath] ?: true
-                                val p = priorities[f.displayPath] ?: 0
-                                when {
-                                    !sel || p == 3 -> 0        // unchecked / SKIP
-                                    p == 1 -> 2                // HIGH
-                                    else -> 1                  // NORMAL / LOW
-                                }
-                            }
                             if (pendingBytes != null) {
+                                // .torrent — single-phase add with the tree.
+                                val tags =
+                                        tagsText.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                                val effSave = saveDir.ifBlank { Platform.defaultDownloadDir() }
                                 store.addTorrentFileEx(
                                         pendingBytes!!,
                                         pendingName,
@@ -323,71 +414,71 @@ fun AddTorrentScreen(
                                         category,
                                         tags,
                                         !startNow,
-                                        filePriorities
+                                        buildPriorities(),
                                 )
+                                added = true
+                            } else if (magnetHash != null) {
+                                // Magnet — phase 2: commit the file selection.
+                                store.commitMagnetSelection(magnetHash!!, buildPriorities())
+                                added = true
                             } else {
-                                store.addMagnetEx(magnet, effSave, category, tags, !startNow)
+                                // Magnet — phase 1: resolve metadata first,
+                                // then the file tree appears for selection.
+                                scope.launch {
+                                    resolving = true
+                                    resolveError = null
+                                    val effSave = saveDir.ifBlank { Platform.defaultDownloadDir() }
+                                    val hash = store.addMagnetResolve(magnet, effSave)
+                                    if (hash == null) {
+                                        resolving = false
+                                        return@launch
+                                    }
+                                    magnetHash = hash
+                                    val info = store.waitMetadata(hash, 90_000)
+                                    resolving = false
+                                    if (info == null) {
+                                        resolveError = "元数据获取超时（请确认网络可用、DHT/Tracker 可达）"
+                                        return@launch
+                                    }
+                                    preview = info
+                                    info.files.forEachIndexed { i, _ ->
+                                        fileSel[i] = true
+                                        priorities[i] = 1
+                                    }
+                                }
                             }
-                            added = true
                         },
-                        enabled = canAdd,
+                        enabled = canAdd && !resolving,
                         modifier = Modifier.weight(1f),
                 ) {
-                    Icon(Icons.Default.Link, contentDescription = null)
+                    if (resolving) {
+                        CircularProgressIndicator(
+                                modifier = Modifier.width(18.dp).height(18.dp),
+                                strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                                if (pendingBytes == null && magnetHash == null)
+                                        Icons.Default.Downloading
+                                else Icons.Default.Link,
+                                contentDescription = null,
+                        )
+                    }
                     Spacer(Modifier.width(8.dp))
-                    Text("添加")
+                    Text(
+                            when {
+                                resolving -> "解析中…"
+                                pendingBytes != null -> "添加"
+                                magnetHash != null -> "添加"
+                                else -> "解析并选择文件"
+                            }
+                    )
                 }
-                OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("取消") }
+                OutlinedButton(onClick = { leaveDialog() }, modifier = Modifier.weight(1f)) {
+                    Text("取消")
+                }
             }
             Spacer(Modifier.height(16.dp))
         }
-    }
-}
-
-/** One file row in the add dialog: checkbox + name + size + priority menu. */
-@Composable
-private fun FilePickRow(
-        path: String,
-        size: Long,
-        selected: Boolean,
-        priority: Int,
-        onToggle: (Boolean) -> Unit,
-        onPriority: (Int) -> Unit,
-) {
-    Row(
-            Modifier.fillMaxWidth()
-                    .clip(MaterialTheme.shapes.medium)
-                    .clickable { onToggle(!selected) }
-                    .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Checkbox(checked = selected, onCheckedChange = onToggle)
-        Icon(
-                Icons.AutoMirrored.Filled.InsertDriveFile,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.width(18.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                    path,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                    Format.bytes(size),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        com.typebit.ui.screens.settings.CompactDropdown(
-                options = FilePriority.entries.toList(),
-                selected = FilePriority.entries.first { it.value == priority },
-                onSelect = { onPriority(it.value) },
-                labelOf = { it.label },
-        )
     }
 }

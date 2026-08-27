@@ -20,10 +20,13 @@ actual external fun nativePause(handle: Long, hash: String): Int
 actual external fun nativeResume(handle: Long, hash: String): Int
 actual external fun nativeRemove(handle: Long, hash: String): Int
 actual external fun nativeRenameFile(handle: Long, hash: String, file: Int, name: String): Int
+actual external fun nativeRenameTorrent(handle: Long, hash: String, name: String): Int
 actual external fun nativeProgress(handle: Long, hash: String): Double
 actual external fun nativeDownloaded(handle: Long, hash: String): Long
 actual external fun nativeIsComplete(handle: Long, hash: String): Boolean
 actual external fun nativeTorrentInfo(handle: Long, hash: String): String?
+
+actual external fun nativeTorrentInfoRaw(handle: Long, hash: String): String?
 actual external fun nativeTorrentStates(handle: Long): String
 actual external fun nativePeers(handle: Long, hash: String): String
 actual external fun nativeSnapshot(handle: Long): String
@@ -31,6 +34,8 @@ actual external fun nativeTorrentCount(handle: Long): Int
 actual external fun nativeDhtNodeCount(handle: Long): Int
 actual external fun nativePeerId(handle: Long): String
 actual external fun nativeTotals(handle: Long): String
+
+actual external fun nativeStats(handle: Long): String
 actual external fun nativeSetGlobalLimits(handle: Long, downBytesPerSec: Long, upBytesPerSec: Long): Int
 actual external fun nativeSetSessionConfig(handle: Long, configJson: String): Int
 actual external fun nativeSetFilePriority(handle: Long, hash: String, file: Int, priority: Int): Int

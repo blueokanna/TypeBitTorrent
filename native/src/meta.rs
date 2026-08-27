@@ -316,6 +316,23 @@ impl MetaRegistry {
         Ok(clean)
     }
 
+    /// Rename the torrent itself (display name). This is a pure display
+    /// rename: the engine keeps writing files under their original paths;
+    /// the new name is what the UI and share dialogs show. A name may not
+    /// contain path separators (the torrent name is a single label).
+    pub fn rename_torrent(&mut self, hash: &str, name: &str) -> Result<String, &'static str> {
+        let m = self.by_hash.get_mut(hash).ok_or("no such torrent")?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("name is empty");
+        }
+        if name.contains(['/', '\\', '\0']) {
+            return Err("invalid name");
+        }
+        m.name = name.to_string();
+        Ok(m.name.clone())
+    }
+
     /// Effective display path of a file (rename or original), for the UI.
     pub fn file_display_path(&self, hash: &str, index: usize) -> Option<String> {
         let m = self.by_hash.get(hash)?;

@@ -22,4 +22,18 @@ expect object Platform {
 
     /** Whether a system tray is available (desktop only). */
     fun isTraySupported(): Boolean
+
+    /**
+     * Ensures background execution mode for live transfers. On Android this
+     * runs a `dataSync` foreground service (plus a partial wake lock) so
+     * downloads continue with the screen locked or the app backgrounded;
+     * desktop needs nothing. `active` = at least one torrent is running.
+     */
+    fun ensureBackgroundMode(active: Boolean)
+
+    /** Whether background transfers currently survive app/OS limits. */
+    fun backgroundModeEnabled(): Boolean
+
+    /** Opens the system dialog to exempt the app from battery optimization. */
+    fun openBatteryOptimizationSettings()
 }

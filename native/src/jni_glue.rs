@@ -12,6 +12,7 @@
 //! JNI error or Rust panic — panics never unwind across the FFI boundary.
 
 use std::sync::mpsc::channel;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use jni::objects::{JByteArray, JClass, JString};
@@ -19,6 +20,21 @@ use jni::sys::{jboolean, jbyteArray, jdouble, jint, jlong, jstring};
 use jni::{Env, EnvUnowned};
 
 use crate::engine::{parse_session_config, Cmd, EngineHandle};
+
+/// Serializes `nativeCreateEngine` against `nativeDestroyEngine` so a
+/// recreated Activity/store tearing the engine down while another boot is
+/// still creating it can never race the two.
+static ENGINE_MTX: Mutex<()> = Mutex::new(());
+
+/// The live engine handle's raw pointer (`Box::into_raw`), or `None` when no
+/// engine is running. Makes create/destroy idempotent at the process level:
+/// a second `nativeCreateEngine` reuses the live handle instead of throwing
+/// (the old behaviour crashed the app with "an engine is already running in
+/// this process" whenever an Activity recreate raced a slow teardown). The
+/// Box behind the pointer is intentionally LEAKED on shutdown (see
+/// `nativeDestroyEngine`) so a concurrent in-flight JNI call on the stale
+/// pointer can never hit freed memory.
+static ENGINE_PTR: Mutex<Option<usize>> = Mutex::new(None);
 
 /// Upper bound for one blocking engine call (add/start/progress/…).
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -67,6 +83,32 @@ fn throw(env: &mut Env, msg: &str) {
     );
 }
 
+/// Standard base64 (RFC 4648, with padding) for the metadata persistence
+/// round-trip (`nativeTorrentInfoRaw` → Kotlin `TorrentRecord` → back).
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // lifecycle
 // ---------------------------------------------------------------------------
@@ -79,12 +121,25 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeCreateEngine
     save_dir: JString,
 ) -> jlong {
     crate::android_log::log("nativeCreateEngine called");
+    // Serialize create against destroy (a recreated Activity can tear one
+    // store down while another is still booting its engine).
+    let _mtx = ENGINE_MTX.lock().unwrap_or_else(|e| e.into_inner());
+    // Idempotent: reuse a live engine instead of spawning a second one — the
+    // process-wide singleton guard would refuse it and crash the app.
+    if let Some(p) = *ENGINE_PTR.lock().unwrap_or_else(|e| e.into_inner()) {
+        crate::android_log::log("nativeCreateEngine: reusing live engine handle");
+        return p as jlong;
+    }
     with_env(unowned, |env| {
         let cfg = jstr(env, &config_json);
         let dir = jstr(env, &save_dir);
         let logs = crate::host::LogBuffer::default();
         match crate::engine::spawn_engine(&cfg, &dir, logs) {
-            Ok(handle) => Ok(Box::into_raw(Box::new(handle)) as jlong),
+            Ok(handle) => {
+                let ptr = Box::into_raw(Box::new(handle)) as usize;
+                *ENGINE_PTR.lock().unwrap_or_else(|e| e.into_inner()) = Some(ptr);
+                Ok(ptr as jlong)
+            }
             Err(e) => {
                 throw(env, &format!("nativeCreateEngine: {e}"));
                 Ok(0)
@@ -103,10 +158,27 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeDestroyEngin
     if handle == 0 {
         return;
     }
-    // Safety: paired with nativeCreateEngine's Box::into_raw.
-    let h = unsafe { Box::from_raw(handle as *mut EngineHandle) };
-    h.shutdown();
-    drop(h);
+    let _mtx = ENGINE_MTX.lock().unwrap_or_else(|e| e.into_inner());
+    let mut ptr = ENGINE_PTR.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = *ptr {
+        if p == handle as usize {
+            // Safety: `p` is the live handle produced by nativeCreateEngine's
+            // `Box::into_raw` and is still current (guarded by ENGINE_MTX).
+            // `shutdown` joins the worker thread (releasing the ENGINE_LIVE
+            // guard) so a later create can spawn afresh. The Box is
+            // intentionally LEAKED: a concurrent in-flight JNI call on this
+            // pointer (e.g. a cancelled boot still finishing a blocking
+            // request) can never hit freed memory — one tiny allocation per
+            // process, never reclaimed, is the price of eliminating the
+            // use-after-free class entirely.
+            let h = unsafe { &*(p as *const EngineHandle) };
+            h.shutdown();
+            *ptr = None;
+            crate::android_log::log("nativeDestroyEngine: engine shut down");
+        } else {
+            crate::android_log::log("nativeDestroyEngine: stale handle ignored (idempotent)");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +500,38 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRenameFile(
     })
 }
 
+/// Rename the torrent itself (display name). 0 = ok, -1 = invalid rename,
+/// -2 = timeout, -4 = engine missing.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRenameTorrent(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+    name: JString,
+) -> jint {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(-4),
+        };
+        let hash = jstr(env, &hash);
+        let name = jstr(env, &name);
+        let (tx, rx) = channel();
+        Ok(
+            match h.request(
+                Cmd::RenameTorrent { hash, name, tx },
+                rx,
+                REPLY_TIMEOUT,
+            ) {
+                Some(Ok(_)) => 0,
+                Some(Err(_)) => -1,
+                None => -2,
+            },
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // per-torrent queries
 // ---------------------------------------------------------------------------
@@ -509,6 +613,31 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentInfo(
                 _ => std::ptr::null_mut(),
             },
         )
+    })
+}
+
+/// The raw bencoded `info` dict of a torrent, base64-encoded (for
+/// persistence so magnets never re-fetch metadata after a restart). Returns
+/// null when the torrent has no metadata yet.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTorrentInfoRaw(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+) -> jstring {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(std::ptr::null_mut()),
+        };
+        let hash = jstr(env, &hash);
+        let (tx, rx) = channel();
+        let raw = h.request(Cmd::TorrentInfoRaw { hash, tx }, rx, REPLY_TIMEOUT);
+        match raw {
+            Some(Some(bytes)) => Ok(new_jstring(env, &base64_encode(&bytes))),
+            _ => Ok(std::ptr::null_mut()),
+        }
     })
 }
 
@@ -646,6 +775,26 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeTotals(
             .request(Cmd::Totals { tx }, rx, REPLY_TIMEOUT)
             .unwrap_or((0, 0));
         let json = format!("{{\"d\":{d},\"u\":{u}}}");
+        Ok(new_jstring(env, &json))
+    })
+}
+
+/// Engine-wide statistics JSON for the stats dialog (see `stats_to_json`).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeStats(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(new_jstring(env, "{}")),
+        };
+        let (tx, rx) = channel();
+        let json = h
+            .request(Cmd::Stats { tx }, rx, REPLY_TIMEOUT)
+            .unwrap_or_else(|| String::from("{}"));
         Ok(new_jstring(env, &json))
     })
 }

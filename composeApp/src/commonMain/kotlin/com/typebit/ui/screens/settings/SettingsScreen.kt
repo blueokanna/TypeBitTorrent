@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -65,6 +66,7 @@ private enum class SettingsCategory(val label: String) {
     CONNECTION("连接"),
     SPEED("速度"),
     BIT_TORRENT("BitTorrent"),
+    BACKGROUND("后台"),
     WEBUI("WebUI"),
     ADVANCED("高级"),
     RSS("RSS"),
@@ -246,6 +248,7 @@ private fun CategoryContent(
         SettingsCategory.CONNECTION -> ConnectionSection(settings, onChange)
         SettingsCategory.SPEED -> SpeedSection(settings, onChange)
         SettingsCategory.BIT_TORRENT -> BitTorrentSection(settings, onChange)
+        SettingsCategory.BACKGROUND -> BackgroundSection(settings, onChange)
         SettingsCategory.WEBUI -> WebUiSection(settings, onChange)
         SettingsCategory.ADVANCED -> AdvancedSection(settings, onChange)
         SettingsCategory.RSS -> RssSection(settings, onChange)
@@ -259,6 +262,7 @@ private fun categoryIcon(c: SettingsCategory): androidx.compose.ui.graphics.vect
     SettingsCategory.CONNECTION -> Icons.Default.Dns
     SettingsCategory.SPEED -> Icons.Default.Speed
     SettingsCategory.BIT_TORRENT -> Icons.Default.Link
+    SettingsCategory.BACKGROUND -> Icons.Default.Sync
     SettingsCategory.WEBUI -> Icons.Default.Language
     SettingsCategory.ADVANCED -> Icons.Default.Settings
     SettingsCategory.RSS -> Icons.Default.RssFeed

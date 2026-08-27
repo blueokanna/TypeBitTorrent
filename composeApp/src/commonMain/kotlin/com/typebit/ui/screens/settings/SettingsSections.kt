@@ -163,27 +163,29 @@ fun ConnectionSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     SectionCard("代理") {
         SettingDropdown(
             label = "代理类型",
-            options = ProxyType.entries,
-            selected = s.proxyType,
+            // The engine implements SOCKS5 only. Clash / v2rayN / sing-box
+            // expose a SOCKS5 (or mixed HTTP+SOCKS5) port — use that one.
+            options = listOf(ProxyType.NONE, ProxyType.SOCKS5),
+            selected = if (s.proxyType == ProxyType.SOCKS5) ProxyType.SOCKS5 else ProxyType.NONE,
             onSelect = { update(s.copy(proxyType = it)) },
             labelOf = { when (it) {
                 ProxyType.NONE -> "无"
-                ProxyType.SOCKS4 -> "SOCKS4"
                 ProxyType.SOCKS5 -> "SOCKS5"
-                ProxyType.HTTP -> "HTTP"
+                else -> "无"
             } },
         )
-        if (s.proxyType != ProxyType.NONE) {
-            SettingTextField("代理地址", s.proxyHost, { update(s.copy(proxyHost = it)) })
+        if (s.proxyType == ProxyType.SOCKS5) {
+            SettingTextField("代理地址", s.proxyHost, { update(s.copy(proxyHost = it)) }, placeholder = "如 127.0.0.1")
             SettingNumberField("代理端口", s.proxyPort.toString(), { update(s.copy(proxyPort = it.toIntOrNull() ?: s.proxyPort)) })
             SettingSwitch("代理需要认证", "", s.proxyAuthEnabled, { update(s.copy(proxyAuthEnabled = it)) })
             if (s.proxyAuthEnabled) {
                 SettingTextField("用户名", s.proxyUsername, { update(s.copy(proxyUsername = it)) })
                 SettingTextField("密码", s.proxyPassword, { update(s.copy(proxyPassword = it)) })
             }
-            SettingSwitch("用于 Tracker", "", s.proxyUseForTracker, { update(s.copy(proxyUseForTracker = it)) })
-            SettingSwitch("用于 Peers", "", s.proxyUseForPeers, { update(s.copy(proxyUseForPeers = it)) })
-            SettingSwitch("用于 DHT", "", s.proxyUseForDht, { update(s.copy(proxyUseForDht = it)) })
+            SettingNote(
+                "代理模式下引擎为纯出站模式：Tracker、Peer 连接与 Web 种经 SOCKS5 隧道转发，DNS 交由代理解析；" +
+                    "DHT、UDP Tracker、LSD 与入站连接会自动禁用。"
+            )
         }
     }
 

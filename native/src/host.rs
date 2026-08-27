@@ -146,10 +146,7 @@ impl NativeHost {
     /// the requested one is taken — logged as a warning).
     pub fn bind_tcp(&mut self, port: u16) -> u16 {
         if let Some(listener) = &self.listener {
-            return listener
-                .local_addr()
-                .map(|a| a.port())
-                .unwrap_or(port);
+            return listener.local_addr().map(|a| a.port()).unwrap_or(port);
         }
         let bind = || -> std::io::Result<TcpListener> {
             let addr = format!("0.0.0.0:{port}")
@@ -226,7 +223,7 @@ impl NativeHost {
                     let _ = stream.set_nonblocking(true);
                     self.conns.insert(id, ConnSlot::Established(stream));
                 }
-                Err(_) => {
+                Err(e) => {
                     // Failed: remove the slot so tcp_connect_done reports Io.
                     self.conns.remove(&id);
                 }
@@ -768,8 +765,26 @@ impl Host for NativeHost {
         let target = netaddr_to_sockaddr(*addr).ok_or(Error::InvalidInput)?;
         match sock.send_to(data, target) {
             Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
-            Err(_) => Err(Error::Io),
+            // Windows: after a destination sends an ICMP unreachable, the
+            // SAME socket starts reporting `ConnectionReset` (WSAECONNRESET
+            // 10054) on unrelated sends/recvs. Treating it as a hard error
+            // permanently wedges the UDP socket (DHT goes dead even for
+            // reachable routers). It is transient: the next operation on an
+            // unconnected socket proceeds normally.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                Ok(())
+            }
+            Err(e) => {
+                self.log_internal(
+                    LogLevel::Debug,
+                    &format!("udp_send to {addr} failed: {e} ({:?})", e.kind()),
+                );
+                Err(Error::Io)
+            }
         }
     }
 
@@ -785,7 +800,14 @@ impl Host for NativeHost {
         let target = netaddr_to_sockaddr(*addr).ok_or(Error::InvalidInput)?;
         match sock.send_to(data, target) {
             Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            // Transient Windows ICMP-reset noise; see `udp_send`.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                Ok(())
+            }
             Err(_) => Err(Error::Io),
         }
     }
@@ -820,7 +842,16 @@ impl Host for NativeHost {
         };
         match sock.recv_from(buf) {
             Ok((n, addr)) => Ok((sock_to_netaddr(addr), n)),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(Error::WouldBlock),
+            // Transient Windows ICMP-reset noise: an unreachable peer's ICMP
+            // error surfaces here as ConnectionReset on the next recv; the
+            // socket is fine and must keep receiving for reachable peers.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                Err(Error::WouldBlock)
+            }
             Err(_) => Err(Error::Io),
         }
     }

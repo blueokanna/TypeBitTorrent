@@ -126,6 +126,12 @@ data class DownloadSettings(
 @Serializable
 enum class ProtocolMode { TCP_AND_UDP, TCP_ONLY, UDP_ONLY }
 
+/**
+ * Proxy kind. The Rust engine (`typebit`) currently implements **SOCKS5**
+ * only; the `SOCKS4`/`HTTP` values are retained solely so old persisted
+ * settings files still decode — they are treated as "not usable" and never
+ * enable a proxy (see [EngineConfigJson]).
+ */
 @Serializable
 enum class ProxyType { NONE, SOCKS4, SOCKS5, HTTP }
 
@@ -146,9 +152,6 @@ data class ConnectionSettings(
     val proxyAuthEnabled: Boolean = false,
     val proxyUsername: String = "",
     val proxyPassword: String = "",
-    val proxyUseForTracker: Boolean = true,
-    val proxyUseForPeers: Boolean = true,
-    val proxyUseForDht: Boolean = false,
     val ipFilterEnabled: Boolean = false,
     val ipFilterPath: String = "",
     val anonymizationEnabled: Boolean = false,

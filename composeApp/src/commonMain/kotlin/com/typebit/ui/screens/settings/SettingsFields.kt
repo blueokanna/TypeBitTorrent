@@ -130,6 +130,17 @@ fun SettingNumberField(
     }
 }
 
+/** Read-only explanatory note rendered inside a settings card. */
+@Composable
+fun SettingNote(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    )
+}
+
 /** Material 3 dropdown row. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

@@ -25,4 +25,15 @@ actual object Platform {
         ServerSocket(0).use { it.localPort }
 
     actual fun isTraySupported(): Boolean = true
+
+    actual fun ensureBackgroundMode(active: Boolean) {
+        // Desktop processes keep running while the window is open; nothing
+        // extra is needed.
+    }
+
+    actual fun backgroundModeEnabled(): Boolean = true
+
+    actual fun openBatteryOptimizationSettings() {
+        // Desktop has no battery restrictions.
+    }
 }

@@ -60,6 +60,11 @@ expect fun nativeRemove(handle: Long, hash: String): Int
  */
 expect fun nativeRenameFile(handle: Long, hash: String, file: Int, name: String): Int
 
+/**
+ * Renames the torrent itself (display name only). 0 = ok, negative = error.
+ */
+expect fun nativeRenameTorrent(handle: Long, hash: String, name: String): Int
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -75,6 +80,8 @@ expect fun nativeIsComplete(handle: Long, hash: String): Boolean
 
 /** Mirrored metainfo JSON for a torrent, or null when unknown (magnet). */
 expect fun nativeTorrentInfo(handle: Long, hash: String): String?
+
+expect fun nativeTorrentInfoRaw(handle: Long, hash: String): String?
 
 /** All torrents' persisted state as a JSON array. */
 expect fun nativeTorrentStates(handle: Long): String
@@ -100,6 +107,8 @@ expect fun nativePeerId(handle: Long): String
 
 /** Global wire counters JSON: `{"d":down,"u":up}`. */
 expect fun nativeTotals(handle: Long): String
+
+expect fun nativeStats(handle: Long): String
 
 // ---------------------------------------------------------------------------
 // Configuration

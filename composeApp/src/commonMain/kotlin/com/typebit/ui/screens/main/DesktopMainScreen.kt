@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -73,6 +74,7 @@ import androidx.compose.material3.PermanentNavigationDrawer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -90,10 +92,9 @@ import com.typebit.model.TorrentStatus
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
-import com.typebit.ui.components.SpeedPair
+import com.typebit.ui.components.StatsDialog
 import com.typebit.ui.components.TorrentGrid
 import com.typebit.ui.screens.detail.DetailPanel
-import com.typebit.ui.util.Format
 
 /**
  * MD3-Expressive desktop layout: a permanent sidebar (brand + filters +
@@ -109,6 +110,19 @@ fun DesktopMainScreen(
     onRoute: (Route) -> Unit,
 ) {
     var gridMode by remember { mutableStateOf(false) }
+    var showStats by remember { mutableStateOf(false) }
+    var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
+
+    // Poll engine statistics while the dialog is open (once per second).
+    LaunchedEffect(showStats) {
+        if (showStats) {
+            while (true) {
+                stats = store.fetchStats()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
     PermanentNavigationDrawer(
         drawerContent = {
             Sidebar(state = state, store = store)
@@ -122,6 +136,7 @@ fun DesktopMainScreen(
                 onRoute = onRoute,
                 gridMode = gridMode,
                 onToggleGrid = { gridMode = !gridMode },
+                onStats = { showStats = true },
             )
 
             // Content switches between empty state and the table card.
@@ -179,6 +194,12 @@ fun DesktopMainScreen(
             }
 
             StatusBar(state = state, store = store)
+        }
+    }
+
+    if (showStats) {
+        stats?.let { s ->
+            StatsDialog(stats = s, onDismiss = { showStats = false })
         }
     }
 }
@@ -364,13 +385,11 @@ private fun AppTopBar(
     onRoute: (Route) -> Unit,
     gridMode: Boolean,
     onToggleGrid: () -> Unit,
+    onStats: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // On narrow windows the live speeds are the first thing to give
-            // up space — the search field and actions never squash.
-            val compact = maxWidth < 1080.dp
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -413,13 +432,6 @@ private fun AppTopBar(
                     modifier = Modifier.weight(1f).widthIn(min = 180.dp),
                 )
                 Spacer(Modifier.width(12.dp))
-                if (!compact) {
-                    SpeedPair(
-                        down = state.globalDownRate,
-                        up = state.globalUpRate,
-                        modifier = Modifier.padding(end = 8.dp),
-                    )
-                }
                 FilledTonalIconButton(onClick = {
                     // “全部开始” resumes paused torrents too — the old filter
                     // excluded PAUSED, so after 全部暂停 the play button could
@@ -442,6 +454,9 @@ private fun AppTopBar(
             }
             IconButton(onClick = { onRoute(Route.SEARCH) }) {
                 Icon(Icons.Default.Search, contentDescription = "搜索")
+            }
+            IconButton(onClick = onStats) {
+                Icon(Icons.Default.BarChart, contentDescription = "统计")
             }
             IconButton(onClick = { onRoute(Route.SETTINGS) }) {
                 Icon(Icons.Default.Settings, contentDescription = "设置")
@@ -490,8 +505,6 @@ private fun StatusBar(state: AppState, store: AppStore) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text("下载 ${Format.speed(state.globalDownRate)}", style = MaterialTheme.typography.labelMedium)
-                Text("上传 ${Format.speed(state.globalUpRate)}", style = MaterialTheme.typography.labelMedium)
                 Text("DHT ${state.dhtNodes} 节点", style = MaterialTheme.typography.labelMedium)
                 if (state.extIp.isNotEmpty()) {
                     Text(

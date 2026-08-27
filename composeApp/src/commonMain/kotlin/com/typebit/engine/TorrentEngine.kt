@@ -62,6 +62,9 @@ interface TorrentEngine {
     /** Renames one file of a torrent; false when the name is invalid. */
     fun renameFile(hash: String, file: Int, name: String): Boolean
 
+    /** Renames the torrent itself (display name); false when the name is invalid. */
+    fun renameTorrent(hash: String, name: String): Boolean
+
     // -- selective download + runtime trackers (typebit 0.1.1) --------------
 
     /** Sets one file's priority: 0=Skip, 1=Normal, 2=High. */
@@ -92,6 +95,9 @@ interface TorrentEngine {
 
     fun torrentInfo(hash: String): TorrentInfoDto?
 
+    /** Raw bencoded `info` dict (base64) for metadata persistence; null when unknown. */
+    fun torrentInfoRaw(hash: String): String?
+
     /** All torrents' persisted have/paused state. */
     fun torrentStates(): List<TorrentStateDto>
 
@@ -110,6 +116,9 @@ interface TorrentEngine {
 
     /** Cumulative wire bytes: (downloaded, uploaded). */
     fun totals(): Pair<Long, Long>
+
+    /** Engine-wide statistics (wire totals, cache, peers, discarded). */
+    fun stats(): EngineStatsDto
 
     // -- configuration ------------------------------------------------------
 
@@ -208,6 +217,9 @@ class NativeTorrentEngine : TorrentEngine {
     override fun renameFile(hash: String, file: Int, name: String): Boolean =
         requireEngine().let { nativeRenameFile(it, hash, file, name) == 0 }
 
+    override fun renameTorrent(hash: String, name: String): Boolean =
+        requireEngine().let { nativeRenameTorrent(it, hash, name) == 0 }
+
     override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean =
         requireEngine().let { nativeSetFilePriority(it, hash, file, priority) == 0 }
 
@@ -249,6 +261,9 @@ class NativeTorrentEngine : TorrentEngine {
         return runCatching { BRIDGE_JSON.decodeFromString<TorrentInfoDto>(json) }.getOrNull()
     }
 
+    override fun torrentInfoRaw(hash: String): String? =
+        requireEngine().let { nativeTorrentInfoRaw(it, hash) }
+
     override fun torrentStates(): List<TorrentStateDto> {
         val json = requireEngine().let { nativeTorrentStates(it) }
         return runCatching {
@@ -275,6 +290,13 @@ class NativeTorrentEngine : TorrentEngine {
             val o = BRIDGE_JSON.parseToJsonElement(json).jsonObject
             (o["d"]?.jsonPrimitive?.longOrNull ?: 0L) to (o["u"]?.jsonPrimitive?.longOrNull ?: 0L)
         }.getOrDefault(0L to 0L)
+    }
+
+    override fun stats(): EngineStatsDto {
+        val json = requireEngine().let { nativeStats(it) }
+        return runCatching {
+            BRIDGE_JSON.decodeFromString<EngineStatsDto>(json)
+        }.getOrDefault(EngineStatsDto())
     }
 
     override fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long) {

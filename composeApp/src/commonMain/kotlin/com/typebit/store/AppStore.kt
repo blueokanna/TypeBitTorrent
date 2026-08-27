@@ -79,12 +79,20 @@ class AppStore(
     /** Full metainfo mirror cache; refetched only when metadata arrives. */
     private val infoCache = HashMap<String, TorrentInfoDto>()
 
-    // Speed bookkeeping: (poll time, downloaded bytes) per hash.
+    // Speed bookkeeping: (poll time, downloaded/uploaded bytes) per hash.
     private val lastSeen = HashMap<String, Pair<Long, Long>>()
+    private val lastUpSeen = HashMap<String, Pair<Long, Long>>()
     private var lastTotals: Pair<Long, Long>? = null
     private var lastGlobalPoll = 0L
 
     private var pollJob: Job? = null
+
+    // The boot coroutine itself. Guards `start()` against racing itself:
+    // `engineRunning` only flips true at the END of boot, so two rapid
+    // `start()` calls (e.g. an Activity recreate during a slow restore)
+    // would otherwise boot TWICE — double re-adds and two poll loops.
+    private var bootJob: Job? = null
+
     private var lastSaveAt = 0L
 
     // Native-applied settings, diffed so a settings edit only crosses the
@@ -106,9 +114,10 @@ class AppStore(
     /** Boots the engine, restores state and starts the poll loop. */
     fun start() {
         if (_state.value.engineRunning) return
+        if (bootJob?.isActive == true) return
         if (!engineScope.isActive) engineScope = newEngineScope()
         if (!peersScope.isActive) peersScope = newPeersScope()
-        onEngine { boot() }
+        bootJob = onEngineJob { boot() }
     }
 
     private suspend fun boot() {
@@ -150,7 +159,12 @@ class AppStore(
         }
         refreshStats()
 
-        pollJob = onEngineJob { pollLoop() }
+        // A cancelled boot (activity torn down mid-restore) must not launch a
+        // poll loop on the dead scope — it would be cancelled instantly and
+        // leave the app with no stats updates at all.
+        if (engineScope.isActive) {
+            pollJob = onEngineJob { pollLoop() }
+        }
     }
 
     private fun onEngineJob(block: suspend () -> Unit): Job = engineScope.launch { block() }
@@ -166,6 +180,7 @@ class AppStore(
      * port and the same `.part` files silently corrupts downloads.
      */
     fun stop() {
+        bootJob?.cancel()
         pollJob?.cancel()
         engineScope.cancel()
         peersScope.cancel()
@@ -177,6 +192,7 @@ class AppStore(
             }
             engine.stop()
         }
+        com.typebit.platform.Platform.ensureBackgroundMode(false)
         _state.update { it.copy(engineRunning = false) }
     }
 
@@ -374,6 +390,7 @@ class AppStore(
             engine.remove(hash)
             infoCache.remove(hash)
             lastSeen.remove(hash)
+            lastUpSeen.remove(hash)
             records = records.filterNot { it.hash == hash }
             persistRecords()
             // Authoritative removal — also re-covers the (rare) case where a
@@ -390,6 +407,132 @@ class AppStore(
 
     fun select(hash: String?) {
         _state.update { it.copy(selectedHash = hash) }
+    }
+
+    /**
+     * Renames the torrent itself (display name). The engine keeps writing
+     * files under their original paths; the new name is what the UI shows
+     * and what share dialogs carry (`dn=`). Persisted across restarts.
+     */
+    fun renameTorrent(hash: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        onEngine {
+            if (engine.renameTorrent(hash, trimmed)) {
+                engine.torrentInfo(hash)?.let { infoCache[hash] = it }
+                records = records.map { if (it.hash == hash) it.copy(name = trimmed) else it }
+                persistRecords()
+                refreshStats()
+            } else {
+                _state.update { it.copy(lastError = "重命名失败：名称不能包含路径分隔符") }
+            }
+        }
+    }
+
+    /**
+     * Magnet magnet-link helper: `magnet:?xt=urn:btih:<hash>&dn=<name>`.
+     */
+    fun magnetLink(hash: String, name: String): String {
+        val dn = name.ifBlank { hash }
+        return "magnet:?xt=urn:btih:$hash&dn=$dn"
+    }
+
+    /**
+     * Two-phase magnet add, phase 1: adds the magnet (already STARTED so the
+     * engine fetches metadata) and returns its hash, or null on parse
+     * failure. The dialog then calls [waitMetadata] to show the file tree
+     * and [commitMagnetSelection] / [cancelMagnetPending] to finish. Runs on
+     * the engine executor; the record is persisted before returning.
+     */
+    suspend fun addMagnetResolve(uri: String, saveDir: String): String? =
+            withContext(engineScope.coroutineContext) {
+                val trimmed = uri.trim()
+                if (trimmed.isEmpty()) return@withContext null
+                val hash =
+                        engine.addMagnet(trimmed, saveDir)
+                                ?: run {
+                                    _state.update { it.copy(lastError = "无法解析磁力链接") }
+                                    return@withContext null
+                                }
+                val record =
+                        TorrentRecord(
+                                hash = hash,
+                                name = "magnet",
+                                kind = "MAGNET",
+                                saveDir = saveDir,
+                                data = trimmed,
+                                addedAt = System.currentTimeMillis(),
+                                paused = false,
+                        )
+                records = records + record
+                persistRecords()
+                engine.start(hash)
+                refreshStats()
+                hash
+            }
+
+    /**
+     * Two-phase magnet add, phase 2a: waits (off the engine executor) until
+     * the magnet's metadata mirror is ready or [timeoutMs] elapses. Returns
+     * the full metainfo (file table) so the dialog can render the selection
+     * tree, or null on timeout.
+     */
+    suspend fun waitMetadata(hash: String, timeoutMs: Long): com.typebit.engine.TorrentInfoDto? =
+            withContext(peersScope.coroutineContext) {
+                val deadline = System.currentTimeMillis() + timeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    val info = engine.torrentInfo(hash)
+                    if (info?.metadata_ready == true) {
+                        infoCache[hash] = info
+                        return@withContext info
+                    }
+                    delay(500)
+                }
+                engine.torrentInfo(hash)
+            }
+
+    /**
+     * Two-phase magnet add, phase 2b: applies the user's per-file priorities
+     * (0=Skip, 1=Normal, 2=High) to the now-resolved magnet and persists the
+     * raw `info` dict so a restart never re-fetches metadata. The torrent is
+     * already running (phase 1 started it), so this only reshapes which
+     * files are requested.
+     */
+    fun commitMagnetSelection(hash: String, filePriorities: List<Int>) = onEngine {
+        records =
+                records.map { rec ->
+                    if (rec.hash == hash) rec.copy(filePriorities = filePriorities) else rec
+                }
+        persistRecords()
+        applyPriorities(hash, filePriorities)
+        engine.torrentInfoRaw(hash)?.let { raw ->
+            if (raw.isNotBlank()) {
+                records =
+                        records.map {
+                            if (it.hash == hash && it.infoBase64 != raw) {
+                                it.copy(infoBase64 = raw)
+                            } else it
+                        }
+                persistRecords()
+            }
+        }
+        refreshStats()
+    }
+
+    /** Removes a magnet the user cancelled in the add dialog (phase 2 cancel). */
+    fun cancelMagnetPending(hash: String) = onEngine {
+        engine.remove(hash)
+        infoCache.remove(hash)
+        lastSeen.remove(hash)
+        lastUpSeen.remove(hash)
+        records = records.filterNot { it.hash == hash }
+        persistRecords()
+        _state.update {
+            it.copy(
+                    torrents = it.torrents.filterNot { t -> t.hash == hash },
+                    selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
+            )
+        }
     }
 
     /**
@@ -717,9 +860,10 @@ class AppStore(
         lastTotals = totals
         lastGlobalPoll = now
 
-        // Metadata arrived for a magnet → refresh the full mirror once, and
-        // apply the persisted per-file priorities + renames now that files
-        // are known (their indices only exist after the file table arrives).
+        // Metadata arrived for a magnet → refresh the full mirror once, apply
+        // the persisted per-file priorities + renames (their indices only
+        // exist after the file table arrives), and PERSIST the raw info dict
+        // so a future restart never re-fetches metadata.
         for (row in snap.torrents) {
             if (row.meta && infoCache[row.h]?.metadata_ready != true) {
                 engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
@@ -728,6 +872,15 @@ class AppStore(
                     if (rec.filePriorities.isNotEmpty()) applyPriorities(row.h, rec.filePriorities)
                     if (rec.renames.isNotEmpty()) applyRenames(row.h, rec.renames)
                     engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
+                    // Persist the fetched metadata once (never refetch).
+                    val raw = engine.torrentInfoRaw(row.h)
+                    if (raw != null && raw != rec.infoBase64) {
+                        records =
+                                records.map {
+                                    if (it.hash == row.h) it.copy(infoBase64 = raw) else it
+                                }
+                        persistRecords()
+                    }
                 }
             }
         }
@@ -750,6 +903,18 @@ class AppStore(
                     extPort = snap.extPort,
             )
         }
+
+        // Background mode: keep the Android foreground service (and the
+        // process alive) exactly while any torrent is running, so downloads
+        // survive locking the screen. The service is idempotent — cheap to
+        // call every poll.
+        val anyActive =
+                _state.value.torrents.any {
+                    it.status == TorrentStatus.DOWNLOADING ||
+                            it.status == TorrentStatus.SEEDING ||
+                            it.status == TorrentStatus.FETCHING_METADATA
+                }
+        com.typebit.platform.Platform.ensureBackgroundMode(anyActive)
     }
 
     /**
@@ -780,12 +945,18 @@ class AppStore(
                     else -> TorrentStatus.DOWNLOADING
                 }
 
-        // Per-torrent download rate from byte deltas.
+        val uploaded = row?.u ?: base?.uploadedBytes ?: 0L
+        // Per-torrent download/upload rates from byte deltas.
         val prev = lastSeen[rec.hash]
         val dt = (now - (prev?.first ?: now)).coerceAtLeast(1L)
         val downRate =
                 if (prev == null) 0L else (downloaded - prev.second).coerceAtLeast(0) * 1000 / dt
         lastSeen[rec.hash] = now to downloaded
+        val prevUp = lastUpSeen[rec.hash]
+        val upRate =
+                if (prevUp == null) 0L
+                else (uploaded - prevUp.second).coerceAtLeast(0) * 1000 / dt
+        lastUpSeen[rec.hash] = now to uploaded
 
         val snapName = row?.name?.takeIf { it.isNotBlank() }
         return Torrent(
@@ -796,8 +967,7 @@ class AppStore(
                 sizeBytes = (row?.size ?: 0L).takeIf { it > 0L }
                                 ?: info?.size ?: base?.sizeBytes ?: 0L,
                 downloadedBytes = downloaded,
-                uploadedBytes =
-                        0L, // typebit 0.1.1 does not expose per-torrent uploads — see README
+                uploadedBytes = uploaded,
                 progress = progress,
                 pieceCount = (row?.pieces?.toInt() ?: 0).takeIf { it > 0 }
                                 ?: info?.piece_count?.toInt() ?: base?.pieceCount ?: 0,
@@ -818,7 +988,7 @@ class AppStore(
                 seeds = base?.seeds ?: 0,
                 peers = base?.peers ?: 0,
                 downSpeed = downRate,
-                upSpeed = 0L,
+                upSpeed = upRate,
                 completedAt = base?.completedAt,
                 category = rec.category,
                 tags = rec.tags,
@@ -849,8 +1019,16 @@ class AppStore(
 
     private fun reAddRecord(rec: TorrentRecord) {
         val hash =
-                when (rec.kind) {
-                    "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir)
+                when {
+                    // A magnet whose metadata was already fetched is re-added
+                    // WITH its info dict (wrapped into a full torrent file) —
+                    // it never re-fetches metadata.
+                    rec.kind == "MAGNET" && rec.infoBase64.isNotBlank() -> {
+                        val bytes = B64.decode(rec.infoBase64)
+                        if (bytes == null) null
+                        else engine.addTorrent(wrapInfoDict(bytes), rec.saveDir, rec.filePriorities)
+                    }
+                    rec.kind == "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir)
                     else -> {
                         val bytes = B64.decode(rec.data)
                         if (bytes == null) null
@@ -877,6 +1055,20 @@ class AppStore(
         }
         // Refresh the mirror so renamed names show immediately.
         engine.torrentInfo(hash)?.let { infoCache[hash] = it }
+    }
+
+    /**
+     * Wraps a raw bencoded `info` dict into a full single-file torrent
+     * (`d4:info<info>e`) so it can be re-added via [TorrentEngine.addTorrent].
+     * This is exactly how `typebit::metainfo::Torrent::from_info` builds it.
+     */
+    private fun wrapInfoDict(info: ByteArray): ByteArray {
+        val prefix = "d4:info".toByteArray(Charsets.ISO_8859_1)
+        val out = ByteArray(prefix.size + info.size + 1)
+        prefix.copyInto(out)
+        info.copyInto(out, prefix.size)
+        out[out.size - 1] = 'e'.code.toByte()
+        return out
     }
 
     /** Re-applies persisted per-file renames to an engine torrent. */
@@ -909,6 +1101,15 @@ class AppStore(
     suspend fun peers(hash: String): List<com.typebit.engine.PeerDto> =
             withContext(peersScope.coroutineContext) {
                 if (engine.isRunning) engine.peers(hash) else emptyList()
+            }
+
+    /**
+     * Engine-wide statistics for the stats dialog. Like [peers], runs off the
+     * dedicated executor so a slow reply never blocks the poll loop.
+     */
+    suspend fun fetchStats(): com.typebit.engine.EngineStatsDto =
+            withContext(peersScope.coroutineContext) {
+                if (engine.isRunning) engine.stats() else com.typebit.engine.EngineStatsDto()
             }
 
     fun renameFile(hash: String, file: Int, name: String) = onEngine {

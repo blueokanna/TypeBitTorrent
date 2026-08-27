@@ -60,7 +60,7 @@ private const val DEFAULT_SEED = 0xFF0061A4.toInt()
 
 @Composable
 fun App() {
-        val store = remember { createAppStore() }
+        val store = remember { appStore }
         DisposableEffect(Unit) {
                 store.start()
                 onDispose { store.stop() }
@@ -130,6 +130,17 @@ internal fun createAppStore(): AppStore =
                 settingsRepo = SettingsRepository(),
                 torrentRepo = TorrentRepository(),
         )
+
+/**
+ * Process-wide singleton store. The native engine is a strict per-process
+ * singleton (exactly one worker — two would bind the same ports and write the
+ * same `.part` files), so the Kotlin side MUST never build a second one.
+ * `remember { createAppStore() }` used to create a fresh store whenever the
+ * Activity was recreated (rotation, crash recovery, reinstall-while-running),
+ * and the orphaned first engine made the second `nativeCreateEngine` throw —
+ * the app crash this singleton exists to prevent.
+ */
+internal val appStore: AppStore by lazy { createAppStore() }
 
 @Composable
 internal fun AppRoot(store: AppStore) {
