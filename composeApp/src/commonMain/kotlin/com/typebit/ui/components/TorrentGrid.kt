@@ -117,9 +117,9 @@ private fun GridTorrentCard(torrent: Torrent, onClick: () -> Unit) {
             }
             if (torrent.status == TorrentStatus.SEEDING) {
                 Text(
-                    "做种完成 · 分享率 ${Format.ratio(torrent.ratio)}",
+                    "做种 · 分享率 ${Format.ratio(torrent.ratio)}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = TypeBitThemeColors.status.seed,
                 )
             }
         }

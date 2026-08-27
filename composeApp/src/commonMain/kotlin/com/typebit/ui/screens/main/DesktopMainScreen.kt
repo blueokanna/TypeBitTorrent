@@ -85,7 +85,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.typebit.app.Route
 import com.typebit.model.TorrentFilter
 import com.typebit.model.TorrentStatus
@@ -305,18 +307,22 @@ private fun Sidebar(state: AppState, store: AppStore) {
             }
             Spacer(Modifier.width(10.dp))
             Column {
+                // 18sp keeps the 13-char brand on ONE line in the narrow
+                // sidebar (titleLarge 22sp used to clip "…Torre").
                 Text(
                     "TypeBitTorrent",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "BitTorrent 客户端",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

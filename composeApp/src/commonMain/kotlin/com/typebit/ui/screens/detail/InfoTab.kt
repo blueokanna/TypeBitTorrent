@@ -35,11 +35,11 @@ fun InfoTab(torrent: Torrent, modifier: Modifier = Modifier) {
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             LabelValueRow("已下载", Format.bytes(torrent.downloadedBytes), Modifier.weight(1f))
-            LabelValueRow("已上传", "— (typebit 0.1.0 未暴露)", Modifier.weight(1f))
+            LabelValueRow("已上传", Format.bytes(torrent.uploadedBytes), Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             LabelValueRow("下载速率", Format.speed(torrent.downSpeed), Modifier.weight(1f))
-            LabelValueRow("上传速率", "—", Modifier.weight(1f))
+            LabelValueRow("上传速率", Format.speed(torrent.upSpeed), Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             LabelValueRow("分享率", Format.ratio(torrent.ratio), Modifier.weight(1f))

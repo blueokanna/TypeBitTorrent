@@ -242,6 +242,12 @@ data class BitTorrentSettings(
     val smartScheduling: Boolean = true,
     val useDefaultTrackers: Boolean = true,
     val antiLeechEnabled: Boolean = true,
+    /**
+     * qBittorrent-Enhanced-style hard anti-leech: known leech clients
+     * (Xunlei, Thunder, FlashGet, …) are never unchoked, so they cannot
+     * download from us while still being able to upload to us.
+     */
+    val blockLeechClients: Boolean = true,
     /** Extra tracker announce URLs, one per line. */
     val extraTrackers: String = "",
     /** Disk write-back cache budget in bytes. */

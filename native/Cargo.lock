@@ -250,9 +250,7 @@ dependencies = [
 
 [[package]]
 name = "typebit"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5823a40dfff811488c302b8ac61c836b7d2018f63bcc233e644984695bde121"
+version = "0.1.7"
 dependencies = [
  "courierust",
  "nextjson",

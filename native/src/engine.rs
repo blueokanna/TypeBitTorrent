@@ -1375,6 +1375,7 @@ fn parse_session_fields(root: &nextjson::Value, save_dir: &str) -> Result<Sessio
         optimistic_interval_ms: num("optimistic_interval_ms", 30_000),
         snub_timeout_ms: num("snub_timeout_ms", 60_000),
         rechoke_interval_ms: num("choke_interval_ms", 10_000),
+        block_leech_clients: flag("block_leech_clients", true),
         ..Default::default()
     };
 
@@ -1453,6 +1454,7 @@ mod tests {
     /// result. Isolates whether a "DHT stuck at 1 node" report is a DNS
     /// failure or an engine-flow bug. Prints evidence; never asserts.
     #[test]
+    #[ignore = "network diagnostic; run with `cargo test -- --ignored`"]
     fn diag_dns_bootstrap_routers() {
         use typebit::host_std::StdHost;
         let routers: &[(&str, u16)] = &[
@@ -1629,6 +1631,7 @@ mod tests {
     /// Torrent file: `$env:TBT_DIAG_TORRENT` or a known Kali ISO torrent.
     /// Skip when the file is absent (e.g. CI).
     #[test]
+    #[ignore = "network diagnostic; run with `cargo test -- --ignored`"]
     fn diag_real_download_panic_hunt() {
         let _guard = engine_test_lock();
         let torrent_path = std::env::var("TBT_DIAG_TORRENT")
@@ -1759,6 +1762,7 @@ mod tests {
     /// Magnet: `$env:TBT_DIAG_MAGNET` or the Kali netinst magnet with
     /// several trackers. Duration: `$env:TBT_DIAG_MINUTES` (default 2).
     #[test]
+    #[ignore = "network diagnostic; run with `cargo test -- --ignored`"]
     fn diag_magnet_metadata() {
         let _guard = engine_test_lock();
         let magnet = std::env::var("TBT_DIAG_MAGNET").unwrap_or_else(|_| {
@@ -1921,6 +1925,7 @@ mod tests {
     /// ping responses → the table snowballs past `DHT_REBOOTSTRAP_THRESHOLD`.
     /// Prints evidence; never asserts.
     #[test]
+    #[ignore = "network diagnostic; run with `cargo test -- --ignored`"]
     fn diag_dht_bootstrap_growth() {
         let _guard = engine_test_lock();
         let seconds = std::env::var("TBT_DIAG_SECONDS")
@@ -1984,6 +1989,7 @@ mod tests {
     /// Decides whether a "DHT stuck at 1 node" report is a network/UDP
     /// problem or an engine-flow problem. Prints evidence; never asserts.
     #[test]
+    #[ignore = "network diagnostic; run with `cargo test -- --ignored`"]
     fn diag_udp_dht_roundtrip() {
         use crate::host::NativeHost as NH;
         use typebit::platform::Host;

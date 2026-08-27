@@ -124,9 +124,15 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         SettingSwitch("匿名模式", "尽量隐藏客户端特征", s.anonymousMode, { update(s.copy(anonymousMode = it)) })
         SettingSwitch(
                 "反吸血检测",
-                "识别迅雷等吸血客户端并上报统计（引擎 0.1.0 无拒绝 API，见 README）",
+                "识别迅雷/闪电/FlashGet 等吸血客户端并上报统计",
                 s.antiLeechEnabled,
                 { update(s.copy(antiLeechEnabled = it)) },
+        )
+        SettingSwitch(
+                "屏蔽吸血客户端",
+                "迅雷等吸血客户端将永远无法从本机下载（仍可上传数据给我们）——qBittorrent Enhanced 式硬封禁",
+                s.blockLeechClients,
+                { update(s.copy(blockLeechClients = it)) },
         )
     }
 

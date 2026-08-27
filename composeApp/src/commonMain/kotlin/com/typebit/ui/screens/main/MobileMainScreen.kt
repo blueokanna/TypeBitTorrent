@@ -159,8 +159,17 @@ fun MobileMainScreen(
         topBar = {
             TopAppBar(
                 title = {
+                    // maxLines=1 + ellipsis keeps "TypeBitTorrent" on ONE line
+                    // even when the 5 action icons squeeze the title area on a
+                    // narrow phone (the last 't' used to wrap to line 2).
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("TypeBitTorrent", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "TypeBitTorrent",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 },
                 actions = {

@@ -17,6 +17,7 @@ local.properties
 # Rust / native
 native/target/
 native/.cargo-cache/
+native/.cargo/config.toml
 composeApp/src/desktopMain/resources/native/*.dll
 composeApp/src/androidMain/jniLibs/
 *.dll
