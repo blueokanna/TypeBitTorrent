@@ -1268,6 +1268,7 @@ pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, Session
     let global_max_connections = num("global_max_connections", 512) as usize;
     let max_connections_per_ip = num("max_connections_per_ip", 8) as u32;
     let port_mapping = flag("port_mapping", false);
+    let lsd_enabled = flag("lsd_enabled", true);
     let verify_workers = num("verify_workers", 0) as usize;
     let connect_timeout_ms = num("connect_timeout_ms", 30_000);
     let proxy = parse_proxy(&root);
@@ -1285,6 +1286,7 @@ pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, Session
         global_max_connections,
         max_connections_per_ip,
         port_mapping,
+        lsd_enabled,
         verify_workers,
         proxy,
         connect_timeout_ms,

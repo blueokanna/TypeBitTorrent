@@ -25,6 +25,7 @@ object EngineConfigJson {
             put("listen_port", port)
             put("cache_bytes", bt.cacheBytes)
             put("dht_enabled", bt.enableDht)
+            put("lsd_enabled", bt.enableLsd)
             // typebit 0.1.1 built-in token-bucket global limits (bytes/sec).
             put("global_download_limit_bps", speed.globalDownloadLimitKib * 1024)
             put("global_upload_limit_bps", speed.globalUploadLimitKib * 1024)

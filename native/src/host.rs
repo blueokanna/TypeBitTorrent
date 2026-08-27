@@ -92,6 +92,10 @@ struct ResolveWorkerHandle {
 pub struct NativeHost {
     listener: Option<TcpListener>,
     udp: Option<UdpSocket>,
+    /// Dedicated LSD (BEP-14) socket bound to port 6771 so LAN multicast
+    /// announces are actually received (the shared UDP socket is bound to
+    /// the BT listen port and can never hear them).
+    lsd_udp: Option<UdpSocket>,
     conns: HashMap<ConnId, ConnSlot>,
     next_conn: ConnId,
     next_disk: DiskId,
@@ -122,6 +126,7 @@ impl NativeHost {
         NativeHost {
             listener: None,
             udp: None,
+            lsd_udp: None,
             conns: HashMap::new(),
             next_conn: 1,
             next_disk: 1,
@@ -825,6 +830,77 @@ impl Host for NativeHost {
             }
             Err(_) => Err(Error::Io),
         }
+    }
+
+    fn udp_open_lsd(&mut self, port: u16) -> Result<()> {
+        if self.lsd_udp.is_some() {
+            return Ok(());
+        }
+        let addr = format!("0.0.0.0:{port}")
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| Error::InvalidInput)?;
+        match std::net::UdpSocket::bind(addr) {
+            Ok(s) => {
+                let _ = s.set_nonblocking(true);
+                let _ = s.set_multicast_ttl_v4(16);
+                let _ = s.set_multicast_loop_v4(true);
+                self.log_internal(
+                    LogLevel::Info,
+                    &format!(
+                        "LSD socket bound on port {}",
+                        s.local_addr().map(|a| a.port()).unwrap_or(port)
+                    ),
+                );
+                self.lsd_udp = Some(s);
+                Ok(())
+            }
+            // Port 6771 in use (another local client, or the OS) — LSD
+            // receive degrades gracefully; outgoing announces still work.
+            Err(e) => Err(Error::Io),
+        }
+    }
+
+    fn udp_join_multicast_lsd(&mut self, addr: NetAddr) -> Result<()> {
+        let Some(sock) = self.lsd_udp.as_ref() else {
+            return Err(Error::NotSupported);
+        };
+        match addr {
+            NetAddr::V4(ip, _) => {
+                let group = std::net::Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]);
+                match sock.join_multicast_v4(&group, &std::net::Ipv4Addr::UNSPECIFIED) {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(Error::Io),
+                }
+            }
+            NetAddr::V6(ip, _) => {
+                let group = std::net::Ipv6Addr::from(ip);
+                match sock.join_multicast_v6(&group, 0) {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(Error::Io),
+                }
+            }
+        }
+    }
+
+    fn udp_recv_lsd(&mut self, buf: &mut [u8]) -> Result<(NetAddr, usize)> {
+        let Some(sock) = self.lsd_udp.as_ref() else {
+            return Err(Error::WouldBlock);
+        };
+        match sock.recv_from(buf) {
+            Ok((n, addr)) => Ok((sock_to_netaddr(addr), n)),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                Err(Error::WouldBlock)
+            }
+            Err(_) => Err(Error::Io),
+        }
+    }
+
+    fn udp_close_lsd(&mut self) {
+        self.lsd_udp = None;
     }
 
     fn disk_open(&mut self, path: &str) -> Result<DiskId> {

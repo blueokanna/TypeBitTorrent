@@ -111,7 +111,7 @@ fun BitTorrentSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         SettingSwitch("启用 PEX", "Peer 交换（BEP-11）", s.enablePex, { update(s.copy(enablePex = it)) })
         SettingSwitch(
                 "启用本地对等发现 (LSD)",
-                "局域网内发现对等（存储项）",
+                "在局域网内广播当前种子并发现同网段的对等节点（BEP-14，重启引擎后生效）",
                 s.enableLsd,
                 { update(s.copy(enableLsd = it)) }
         )
