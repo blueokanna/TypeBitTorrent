@@ -61,6 +61,8 @@ fun RssScreen(
     state: AppState,
     store: AppStore,
     onBack: () -> Unit,
+    /** Hidden when embedded in the mobile bottom-nav shell. */
+    showBack: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val repo = remember { RssRepository() }
@@ -100,8 +102,10 @@ fun RssScreen(
             TopAppBar(
                 title = { Text("RSS 阅读器") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
                     }
                 },
                 actions = {

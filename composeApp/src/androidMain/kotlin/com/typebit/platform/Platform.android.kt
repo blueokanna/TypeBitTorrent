@@ -46,6 +46,18 @@ actual object Platform {
         }
     }
 
+    /**
+     * Public entry: acquire the WiFi multicast lock as early as possible —
+     * the Application.onCreate path runs BEFORE the engine creates its UDP
+     * sockets, and on some OEM ROMs (OPPO/ColorOS…) a lock acquired only
+     * after socket creation does not retroactively enable multicast. With
+     * the lock held from process start, LSD (BEP-14) LAN discovery works
+     * from the very first announce. Idempotent.
+     */
+    fun ensureLsdMulticastEarly() {
+        acquireMulticastLock()
+    }
+
     private fun acquireMulticastLock() {
         try {
             val wifi =

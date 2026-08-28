@@ -20,4 +20,10 @@ expect object FileIO {
 
     /** Writes via a temp file + rename so readers never see a torn file. */
     fun writeBytesAtomic(path: String, bytes: ByteArray)
+
+    /** Lists directory entry names (files and folders), or null when absent. */
+    fun listDir(path: String): List<String>?
+
+    /** Deletes a file. Returns false when it did not exist (or failed). */
+    fun delete(path: String): Boolean
 }

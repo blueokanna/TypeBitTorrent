@@ -807,6 +807,33 @@ impl Host for NativeHost {
         }
     }
 
+    /// Send to a multicast group **from the dedicated LSD (port-6771)
+    /// socket** when one exists — the symmetric BEP-14 flow (a neighbour's
+    /// unicast reply returns to 6771, the socket always drained for LSD).
+    /// Falls back to the shared socket.
+    fn udp_multicast_send_lsd(&mut self, addr: &NetAddr, data: &[u8]) -> Result<()> {
+        let sock = match self.lsd_udp.as_ref() {
+            Some(s) => s,
+            None => return self.udp_multicast_send(addr, data),
+        };
+        if matches!(*addr, NetAddr::V4(..)) {
+            let _ = sock.set_multicast_ttl_v4(16);
+            let _ = sock.set_multicast_loop_v4(true);
+        }
+        let target = netaddr_to_sockaddr(*addr).ok_or(Error::InvalidInput)?;
+        match sock.send_to(data, target) {
+            Ok(_) => Ok(()),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                Ok(())
+            }
+            Err(_) => Err(Error::Io),
+        }
+    }
+
     /// Join a multicast group on the bound UDP socket so LAN datagrams to
     /// the group (LSD announces, SSDP responses) reach `udp_recv`.
     fn udp_join_multicast(&mut self, addr: NetAddr) -> Result<()> {

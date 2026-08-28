@@ -45,6 +45,7 @@ kotlin {
 
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
+            implementation(libs.androidx.core.ktx)
             implementation(compose.preview)
         }
         androidMain.get().dependsOn(jvmShared)

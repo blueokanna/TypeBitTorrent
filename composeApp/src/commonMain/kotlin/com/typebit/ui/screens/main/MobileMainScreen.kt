@@ -80,6 +80,10 @@ import com.typebit.ui.components.StatusBadge
 import com.typebit.ui.components.TorrentActions
 import com.typebit.ui.components.TorrentActionsSheet
 import com.typebit.ui.components.TorrentProgressBar
+import com.typebit.ui.screens.add.AddTorrentScreen
+import com.typebit.ui.screens.rss.RssScreen
+import com.typebit.ui.screens.search.SearchScreen
+import com.typebit.ui.screens.settings.SettingsScreen
 import com.typebit.ui.theme.TypeBitThemeColors
 import com.typebit.ui.util.Format
 
@@ -102,6 +106,20 @@ private enum class MobileSort(val label: String) {
     }
 }
 
+/**
+ * Mobile bottom-navigation sections. ADD / SEARCH / RSS / SETTINGS are
+ * IN-PLACE sections (the NavigationBar stays visible and switches content —
+ * no pushed route, no back arrow). Only the torrent detail page and the
+ * create-torrent screen are pushed full-screen routes.
+ */
+enum class MobileSection(val label: String) {
+    TORRENTS("种子"),
+    ADD("添加"),
+    SEARCH("搜索"),
+    RSS("RSS"),
+    SETTINGS("设置"),
+}
+
 /** Android layout: top bar + torrent card list + bottom navigation. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -111,11 +129,16 @@ fun MobileMainScreen(
     onRoute: (Route) -> Unit,
 ) {
     var detailHash by remember { mutableStateOf<String?>(null) }
+    var section by remember { mutableStateOf(MobileSection.TORRENTS) }
 
     // Android back gesture: while a detail page is open, back closes it
     // (one level up) instead of leaving the app. This inner handler wins
-    // over the route-level one.
+    // over the route-level one. On a non-torrent section, back returns to
+    // the torrents section (the NavigationBar is the section switch).
     PlatformBackHandler(enabled = detailHash != null) { detailHash = null }
+    PlatformBackHandler(enabled = detailHash == null && section != MobileSection.TORRENTS) {
+        section = MobileSection.TORRENTS
+    }
 
     if (detailHash != null) {
         val t = state.torrents.firstOrNull { it.hash == detailHash }
@@ -157,7 +180,11 @@ fun MobileMainScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            // Only the torrents section owns the global toolbar; every other
+            // section renders its own top bar (embedded screen) with no back
+            // arrow — the NavigationBar below is the section switch.
+            if (section == MobileSection.TORRENTS) {
+                TopAppBar(
                 title = {
                     // maxLines=1 + ellipsis keeps "TypeBitTorrent" on ONE line
                     // even when the 5 action icons squeeze the title area on a
@@ -229,72 +256,94 @@ fun MobileMainScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
+            }
         },
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(
-                    selected = true,
-                    onClick = {},
-                    icon = { Icon(Icons.Default.Download, contentDescription = null) },
-                    label = { Text("种子") },
-                )
-                NavigationBarItem(
-                    selected = false,
-                    onClick = { onRoute(Route.ADD) },
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    label = { Text("添加") },
-                )
-                NavigationBarItem(
-                    selected = false,
-                    onClick = { onRoute(Route.SEARCH) },
-                    icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    label = { Text("搜索") },
-                )
-                NavigationBarItem(
-                    selected = false,
-                    onClick = { onRoute(Route.RSS) },
-                    icon = { Icon(Icons.Default.RssFeed, contentDescription = null) },
-                    label = { Text("RSS") },
-                )
-                NavigationBarItem(
-                    selected = false,
-                    onClick = { onRoute(Route.SETTINGS) },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("设置") },
-                )
+                MobileSection.entries.forEach { s ->
+                    NavigationBarItem(
+                        selected = section == s,
+                        onClick = { section = s },
+                        icon = {
+                            Icon(
+                                when (s) {
+                                    MobileSection.TORRENTS -> Icons.Default.Download
+                                    MobileSection.ADD -> Icons.Default.Add
+                                    MobileSection.SEARCH -> Icons.Default.Search
+                                    MobileSection.RSS -> Icons.Default.RssFeed
+                                    MobileSection.SETTINGS -> Icons.Default.Settings
+                                },
+                                contentDescription = s.label,
+                            )
+                        },
+                        label = { Text(s.label) },
+                    )
+                }
             }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            if (state.torrents.isEmpty()) {
-                EmptyState(
-                    title = "暂无种子",
-                    subtitle = "点击底部「添加」导入 .torrent 或磁力链接",
-                )
-            } else if (gridMode) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(176.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(sorted, key = { it.hash }) { t ->
-                        GridTorrentCard(
-                            torrent = t,
-                            onClick = { detailHash = t.hash },
-                            onLongPress = { actionsFor = t },
+            when (section) {
+                MobileSection.ADD ->
+                    AddTorrentScreen(
+                        state = state,
+                        store = store,
+                        onBack = { section = MobileSection.TORRENTS },
+                        showBack = false,
+                    )
+                MobileSection.SEARCH ->
+                    SearchScreen(
+                        state = state,
+                        store = store,
+                        onBack = { section = MobileSection.TORRENTS },
+                        showBack = false,
+                    )
+                MobileSection.RSS ->
+                    RssScreen(
+                        state = state,
+                        store = store,
+                        onBack = { section = MobileSection.TORRENTS },
+                        showBack = false,
+                    )
+                MobileSection.SETTINGS ->
+                    SettingsScreen(
+                        state = state,
+                        store = store,
+                        onBack = { section = MobileSection.TORRENTS },
+                        showBack = false,
+                    )
+                MobileSection.TORRENTS -> {
+                    if (state.torrents.isEmpty()) {
+                        EmptyState(
+                            title = "暂无种子",
+                            subtitle = "点击底部「添加」导入 .torrent 或磁力链接",
                         )
-                    }
-                }
-            } else {
-                LazyColumn(Modifier.fillMaxSize()) {
-                    items(sorted, key = { it.hash }) { t ->
-                        TorrentCard(
-                            torrent = t,
-                            onClick = { detailHash = t.hash },
-                            onLongPress = { actionsFor = t },
-                        )
+                    } else if (gridMode) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(176.dp),
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items(sorted, key = { it.hash }) { t ->
+                                GridTorrentCard(
+                                    torrent = t,
+                                    onClick = { detailHash = t.hash },
+                                    onLongPress = { actionsFor = t },
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(sorted, key = { it.hash }) { t ->
+                                TorrentCard(
+                                    torrent = t,
+                                    onClick = { detailHash = t.hash },
+                                    onLongPress = { actionsFor = t },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -360,6 +409,9 @@ fun MobileMainScreen(
                 trackerCount = state.trackerCount,
                 extIp = state.extIp,
                 extPort = state.extPort,
+                lsdSent = state.lsdSent,
+                lsdRecv = state.lsdRecv,
+                lsdPeers = state.lsdPeers,
             )
         }
     }

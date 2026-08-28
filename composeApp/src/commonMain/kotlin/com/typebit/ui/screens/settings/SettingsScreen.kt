@@ -83,6 +83,8 @@ fun SettingsScreen(
     state: AppState,
     store: AppStore,
     onBack: () -> Unit,
+    /** Hidden when embedded in the mobile bottom-nav shell. */
+    showBack: Boolean = true,
 ) {
     var category by remember { mutableIntStateOf(0) }
     val categories = SettingsCategory.entries
@@ -94,8 +96,10 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

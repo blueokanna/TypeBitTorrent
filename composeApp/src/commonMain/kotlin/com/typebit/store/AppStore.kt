@@ -2,9 +2,14 @@ package com.typebit.store
 
 import com.typebit.data.AppSettings
 import com.typebit.data.EngineConfigJson
+import com.typebit.data.ReceiptExportResult
+import com.typebit.data.ReceiptFile
+import com.typebit.data.ReceiptRepository
 import com.typebit.data.SettingsRepository
 import com.typebit.data.TorrentRepository
 import com.typebit.engine.EngineEventDto
+import com.typebit.engine.ReceiptDto
+import com.typebit.engine.ReceiptVerifyResultDto
 import com.typebit.engine.TorrentEngine
 import com.typebit.engine.TorrentInfoDto
 import com.typebit.engine.TorrentSnapshotDto
@@ -13,6 +18,7 @@ import com.typebit.model.TorrentFilter
 import com.typebit.model.TorrentRecord
 import com.typebit.model.TorrentStatus
 import com.typebit.model.TrackerInfo
+import com.typebit.platform.FileIO
 import com.typebit.platform.Platform
 import com.typebit.util.B64
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +38,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.isoDayNumber
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Community tracker list fetched at startup (before any torrent starts) so
@@ -90,6 +100,9 @@ class AppStore(
     // Persisted app-level records (engine cannot carry category/tags/source).
     // Only touched from [engineScope] — never from the UI thread.
     private var records: List<TorrentRecord> = emptyList()
+
+    /** Proof-of-download receipts persisted in `<appData>/receipts/`. */
+    private val receiptRepo = ReceiptRepository()
 
     /** Full metainfo mirror cache; refetched only when metadata arrives. */
     private val infoCache = HashMap<String, TorrentInfoDto>()
@@ -539,6 +552,64 @@ class AppStore(
         val dn = name.ifBlank { hash }
         return "magnet:?xt=urn:btih:$hash&dn=$dn"
     }
+
+    // -- proof-of-download receipts ------------------------------------------
+
+    /**
+     * Exports a signed proof-of-download receipt for `hash` over
+     * `[0, downloadedBytes]`, attested to the wall-clock window
+     * `[addedAtMs, now]` (unix seconds). On success the receipt JSON is
+     * persisted to `<appData>/receipts/<hash>.receipt.json` and the path is
+     * returned. Runs on the engine executor (blocking JNI round-trip).
+     */
+    suspend fun exportReceipt(
+        hash: String,
+        downloadedBytes: Long,
+        addedAtMs: Long,
+    ): ReceiptExportResult = withContext(engineScope.coroutineContext) {
+        val nowSec = System.currentTimeMillis() / 1000
+        // A sane attestation window: never negative, never before the
+        // torrent was added.
+        val addedSec = (addedAtMs / 1000).coerceIn(nowSec - 365L * 24 * 3600, nowSec)
+        val start = 0L
+        val end = downloadedBytes.coerceAtLeast(0L)
+        val json = engine.exportReceipt(hash, start, end, addedSec, nowSec)
+            ?: return@withContext ReceiptExportResult(error = "引擎未运行")
+        val err = runCatching {
+            Json.parseToJsonElement(json).jsonObject["error"]?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+        if (err != null) return@withContext ReceiptExportResult(error = err)
+        val receipt = runCatching {
+            Json.decodeFromString<ReceiptDto>(json)
+        }.getOrNull()
+        if (receipt == null) {
+            return@withContext ReceiptExportResult(error = "回执响应无法解析")
+        }
+        val path = receiptRepo.save(hash, json)
+        ReceiptExportResult(receipt = receipt, path = path)
+    }
+
+    /**
+     * Verifies a receipt JSON (Ed25519 signature + structural integrity)
+     * through the engine. Runs on the engine executor. Returns a truthful
+     * result — `ok=false` for forged, tampered or malformed receipts.
+     */
+    suspend fun verifyReceiptJson(json: String): ReceiptVerifyResultDto =
+        withContext(engineScope.coroutineContext) {
+            engine.verifyReceipt(json)
+        }
+
+    /** All saved receipts, newest first. */
+    fun listReceipts(): List<ReceiptFile> = receiptRepo.list()
+
+    /** Saved receipts whose content root (infohash) matches `hash`. */
+    fun listReceiptsFor(hash: String): List<ReceiptFile> = receiptRepo.listFor(hash)
+
+    /** Deletes a saved receipt file. Returns false when it did not exist. */
+    fun deleteReceipt(path: String): Boolean = receiptRepo.delete(path)
+
+    /** Raw JSON of a saved receipt, or null when the file is gone. */
+    fun readReceipt(path: String): String? = receiptRepo.read(path)
 
     /**
      * Two-phase magnet add, phase 1: adds the magnet (already STARTED so the
@@ -1124,6 +1195,9 @@ class AppStore(
                     portMapPhase = snap.pmPhase,
                     portMapPort = snap.pmPort,
                     listenPort = snap.listenPort,
+                    lsdSent = snap.lsd_sent,
+                    lsdRecv = snap.lsd_recv,
+                    lsdPeers = snap.lsd_peers,
             )
         }
 

@@ -124,6 +124,19 @@ expect fun nativeTotals(handle: Long): String
 
 expect fun nativeStats(handle: Long): String
 
+/** Export a signed proof-of-download receipt (JSON) or `{"error":"…"}`. */
+expect fun nativeExportReceipt(
+    handle: Long,
+    hash: String,
+    rangeStart: Long,
+    rangeEnd: Long,
+    epochStart: Long,
+    epochEnd: Long,
+): String?
+
+/** Verify a receipt JSON; returns a `ReceiptVerifyResultDto` JSON. */
+expect fun nativeVerifyReceipt(handle: Long, json: String): String?
+
 // ---------------------------------------------------------------------------
 // Windows system integration (firewall / ICS) — no engine handle needed
 // ---------------------------------------------------------------------------

@@ -97,9 +97,16 @@ fn udp_rule_name(port: u16) -> String {
     format!("{RULE_BASE} {port} UDP")
 }
 
+/// The fixed LSD (BEP-14) UDP receive port. Inbound LAN multicast announces
+/// arrive on `239.192.152.143:6771`, so Windows Firewall must allow UDP 6771
+/// in addition to the BT listen port — otherwise LSD receive is silently
+/// blocked and LAN peers can never find each other on the same router.
+pub const LSD_UDP_PORT: u16 = 6771;
+
 /// Add inbound TCP+UDP allow rules for `port` on all profiles (direct, no
-/// elevation). The UI calls [`firewall_add_elevated`] when this reports an
-/// elevation failure.
+/// elevation). Also allows UDP 6771 so LSD (BEP-14) multicast announces
+/// from LAN neighbours are not dropped by the firewall. The UI calls
+/// [`firewall_add_elevated`] when this reports an elevation failure.
 pub fn firewall_add(port: u16) -> SysResult {
     let tcp = with_elevation_hint(run(
         "netsh",
@@ -131,8 +138,27 @@ pub fn firewall_add(port: u16) -> SysResult {
             "profile=any",
         ],
     ));
-    if tcp.ok && udp.ok {
-        SysResult::ok(format!("已添加 Windows 防火墙规则（入站 TCP+UDP {port}）"))
+    // LSD (BEP-14): inbound LAN multicast on the fixed 6771 port. Best
+    // effort — a bind failure or already-present rule is not fatal.
+    let lsd = with_elevation_hint(run(
+        "netsh",
+        &[
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            &format!("name={}", udp_rule_name(LSD_UDP_PORT)),
+            "dir=in",
+            "action=allow",
+            "protocol=UDP",
+            &format!("localport={LSD_UDP_PORT}"),
+            "profile=any",
+        ],
+    ));
+    if tcp.ok && udp.ok && lsd.ok {
+        SysResult::ok(format!(
+            "已添加 Windows 防火墙规则（入站 TCP+UDP {port}，LSD UDP {LSD_UDP_PORT}）"
+        ))
     } else {
         let mut parts = Vec::new();
         if !tcp.ok {
@@ -140,6 +166,9 @@ pub fn firewall_add(port: u16) -> SysResult {
         }
         if !udp.ok {
             parts.push(format!("UDP: {}", udp.message));
+        }
+        if !lsd.ok {
+            parts.push(format!("LSD UDP: {}", lsd.message));
         }
         SysResult::fail(format!("添加防火墙规则失败：{}", parts.join("；")))
     }
@@ -167,7 +196,17 @@ pub fn firewall_remove(port: u16) -> SysResult {
             &format!("name={}", udp_rule_name(port)),
         ],
     ));
-    if tcp.ok && udp.ok {
+    let lsd = with_elevation_hint(run(
+        "netsh",
+        &[
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            &format!("name={}", udp_rule_name(LSD_UDP_PORT)),
+        ],
+    ));
+    if tcp.ok && udp.ok && lsd.ok {
         SysResult::ok(format!("已移除 Windows 防火墙规则（{port}）"))
     } else {
         let mut parts = Vec::new();
@@ -176,6 +215,9 @@ pub fn firewall_remove(port: u16) -> SysResult {
         }
         if !udp.ok {
             parts.push(format!("UDP: {}", udp.message));
+        }
+        if !lsd.ok {
+            parts.push(format!("LSD UDP: {}", lsd.message));
         }
         SysResult::fail(format!("移除防火墙规则失败：{}", parts.join("；")))
     }

@@ -14,6 +14,8 @@ import com.typebit.engine.EngineSnapshotDto
 import com.typebit.engine.EngineStatsDto
 import com.typebit.engine.LogEntryDto
 import com.typebit.engine.PeerDto
+import com.typebit.engine.ReceiptVerifyResultDto
+import com.typebit.engine.SystemResultDto
 import com.typebit.engine.TorrentEngine
 import com.typebit.engine.TorrentInfoDto
 import com.typebit.engine.TorrentStateDto
@@ -164,6 +166,15 @@ private class FakeEngine : TorrentEngine {
     override fun peerId(): String = ""
     override fun totals(): Pair<Long, Long> = 0L to 0L
     override fun stats(): EngineStatsDto = EngineStatsDto()
+    override fun exportReceipt(
+        hash: String,
+        rangeStart: Long,
+        rangeEnd: Long,
+        epochStart: Long,
+        epochEnd: Long,
+    ): String? = null
+    override fun verifyReceipt(json: String): ReceiptVerifyResultDto =
+        ReceiptVerifyResultDto(ok = false, error = "engine not running")
     override fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long) {}
     override fun setSessionConfig(configJson: String) {}
     override fun setFilePriority(hash: String, file: Int, priority: Int): Boolean = false

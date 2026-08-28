@@ -43,4 +43,12 @@ actual object FileIO {
             target.writeBytes(bytes)
         }
     }
+
+    actual fun listDir(path: String): List<String>? {
+        val dir = File(path)
+        if (!dir.isDirectory) return null
+        return dir.list()?.sorted()
+    }
+
+    actual fun delete(path: String): Boolean = runCatching { File(path).delete() }.getOrDefault(false)
 }

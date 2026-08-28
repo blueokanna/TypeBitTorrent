@@ -33,6 +33,12 @@ data class AppState(
     val portMapPort: Int = 0,
     /** Actual bound TCP listen port (0 = not listening yet). */
     val listenPort: Int = 0,
+    /** LSD (BEP-14): LAN announces multicast out (live). */
+    val lsdSent: Long = 0,
+    /** LSD (BEP-14): BT-SEARCH datagrams received (live). */
+    val lsdRecv: Long = 0,
+    /** LSD (BEP-14): peers discovered via LAN multicast (live). */
+    val lsdPeers: Long = 0,
     /** Anti-leech: count of known leeching clients detected so far. */
     val antiLeechCount: Int = 0,
     /** Anti-leech: most recent detected client names (deduped, capped). */

@@ -2,7 +2,7 @@
 
 The settings dialog mirrors qBittorrent's category layout. This page states,
 per option, whether it is **live** (actually drives the engine/bridge),
-**stored** (persisted and shown, but not wired to the 0.1.1 engine), or
+**stored** (persisted and shown, but not wired to the 0.1.8 engine), or
 **restart** (takes effect at the next engine start).
 
 ## 行为 (Behavior)
@@ -31,7 +31,7 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | --- | --- |
 | 默认保存目录 | **live** (passed to every add) |
 | 临时目录 | stored (engine writes directly to the save dir) |
-| 预分配磁盘 | stored (the engine always `set_len`-preallocates on start) |
+| 预分配磁盘 | **live for new torrents** (Off/Sparse/Full, engine `Preallocation`) |
 | 以暂停状态添加 | **live** |
 | 最大活动下载/上传/种子数 | stored (no engine-side admission control) |
 | 自动种子管理 (TMM) + 分类路径 | stored (categories are app-level; path mapping is not applied) |
@@ -45,17 +45,17 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | 最大连接数 / 每种子连接数 / 上传槽位 | partially live — `max_peers`/pipeline feed the engine; global conn/slot caps are host-side |
 | 协议 TCP/UDP | stored (bridge always opens both) |
 | 网络接口 | stored |
-| 代理 | stored |
+| 代理 | **live — SOCKS5 only** (outbound-only; SOCKS4/HTTP values decode but never enable) |
 | IP 过滤器 | stored |
 | 匿名模式 | stored |
-| 向所有 Tracker/层级通告 | stored (engine has its own round-robin policy) |
+| 向所有 Tracker/层级通告 | **live** (engine walks BEP-12 tiers in order) |
 | Peer TOS | stored |
 
 ## 速度 (Speed)
 
 | Option | Status |
 | --- | --- |
-| 全局下载/上传限制 | **live** — token bucket in the native host, applied within one tick |
+| 全局下载/上传限制 | **live** — engine token buckets; upload follows the tolerance ceiling spec (100 KiB→10%, 200 KiB→9%, 1 MiB→1%), any 1 s window ≤ limit×(1+tol) |
 | 备用限制 + 时间表 | **live** — the store re-applies limits when the window opens/closes |
 | 慢速种子检测 | stored |
 
@@ -65,15 +65,16 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | --- | --- |
 | DHT | **live at engine start** |
 | PEX | **live** (engine enables PEX by default; the toggle is stored) |
-| LSD | stored |
-| UPnP / NAT-PMP | **live at engine start** (typebit 0.1.1 port mapping) |
-| 加密模式 | stored (plaintext wire in 0.1.1) |
+| LSD | **live at engine start** (BEP-14 multicast; Android holds a MulticastLock while active) |
+| UPnP / NAT-PMP | **live at engine start** (dual-protocol mapping) |
+| 加密模式 | stored (plaintext wire in 0.1.8) |
 | 每种子最大 Peers | **live for new torrents** |
-| 请求流水线 / Endgame | **live for new torrents** |
-| 智能分块调度 + 调度器权重 | **live for new torrents** |
-| 使用默认 Tracker + 额外 Tracker | **live for new torrents** |
-| 磁盘缓存 | **live at engine start** |
+| 请求流水线 / 请求超时 / 最大连续超时 / Endgame | **live for new torrents** |
+| 智能分块调度 + 调度器权重 | **live for new torrents** (视频=顺序下载，边下边播) |
+| 使用默认 Tracker + 额外 Tracker | **live for new torrents** (BEP-12 层级) |
+| 磁盘缓存 / 磁盘分配 | **live at engine start** / **live for new torrents** |
 | 做种/下载槽位、乐观间隔、快照超时 | **live for new torrents** |
+| 屏蔽吸血客户端 | **live** (hard block on known leech clients) |
 | 内容布局 | stored |
 
 ## WebUI

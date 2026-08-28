@@ -34,6 +34,9 @@ fun StatsDialog(
     trackerCount: Int = 0,
     extIp: String = "",
     extPort: Int = 0,
+    lsdSent: Long = 0,
+    lsdRecv: Long = 0,
+    lsdPeers: Long = 0,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -49,6 +52,13 @@ fun StatsDialog(
                         if (extPort != 0) "$extIp:$extPort" else extIp,
                     )
                 }
+                // LSD (BEP-14) LAN discovery — visible proof it is alive:
+                // announces sent, BT-SEARCH datagrams received, LAN peers
+                // discovered. All three at 0 = the LAN multicast is blocked
+                // (router AP isolation / firewall / missing multicast lock).
+                StatRow("LSD 发送 (LAN 广播)", lsdSent.toString())
+                StatRow("LSD 接收 (BT-SEARCH)", lsdRecv.toString())
+                StatRow("LSD 发现局域网 Peer", lsdPeers.toString())
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 SectionTitle("用户统计")
                 StatRow("全局上传", Format.bytes(stats.u_total))

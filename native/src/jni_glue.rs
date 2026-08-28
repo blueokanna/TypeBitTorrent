@@ -70,6 +70,24 @@ fn jstr(env: &mut Env, s: &JString) -> String {
     s.try_to_string(env).unwrap_or_default()
 }
 
+/// Minimal JSON string escaping (quotes, backslash, control chars) — used
+/// when embedding an error message into a JSON value.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn new_jstring(env: &mut Env, s: &str) -> jstring {
     env.new_string(s)
         .map(|j| j.into_raw())
@@ -792,6 +810,76 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeStats(
             .request(Cmd::Stats { tx }, rx, REPLY_TIMEOUT)
             .unwrap_or_else(|| String::from("{}"));
         Ok(new_jstring(env, &json))
+    })
+}
+
+/// Export a signed proof-of-download receipt for a torrent over an absolute
+/// byte range and wall-clock window (unix seconds). Returns the receipt JSON
+/// on success, or `{"error":"…"}` when coverage is insufficient.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeExportReceipt(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+    range_start: jlong,
+    range_end: jlong,
+    epoch_start: jlong,
+    epoch_end: jlong,
+) -> jstring {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => return Ok(new_jstring(env, "{\"error\":\"engine not running\"}")),
+        };
+        let hash = jstr(env, &hash);
+        let (tx, rx) = channel();
+        let res = h.request(
+            Cmd::ExportReceipt {
+                hash,
+                range_start: range_start.max(0) as u64,
+                range_end: range_end.max(0) as u64,
+                epoch_start: epoch_start.max(0) as u64,
+                epoch_end: epoch_end.max(0) as u64,
+                tx,
+            },
+            rx,
+            REPLY_TIMEOUT,
+        );
+        let out = match res {
+            Some(Ok(json)) => json,
+            Some(Err(e)) => format!("{{\"error\":{}}}", json_escape(&e)),
+            None => "{\"error\":\"engine busy\"}".to_string(),
+        };
+        Ok(new_jstring(env, &out))
+    })
+}
+
+/// Verify a receipt JSON (Ed25519 signature + structure). Returns a result
+/// JSON with the attested fields and `ok`.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeVerifyReceipt(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    json: JString,
+) -> jstring {
+    with_env(unowned, |env| {
+        let h = match handle_from(handle) {
+            Some(h) => h,
+            None => {
+                return Ok(new_jstring(
+                    env,
+                    "{\"ok\":false,\"error\":\"engine not running\"}",
+                ))
+            }
+        };
+        let json = jstr(env, &json);
+        let (tx, rx) = channel();
+        let out = h
+            .request(Cmd::VerifyReceipt { json, tx }, rx, REPLY_TIMEOUT)
+            .unwrap_or_else(|| "{\"ok\":false,\"error\":\"engine busy\"}".to_string());
+        Ok(new_jstring(env, &out))
     })
 }
 

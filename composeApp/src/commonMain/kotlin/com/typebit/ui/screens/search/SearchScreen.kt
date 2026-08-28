@@ -76,6 +76,8 @@ fun SearchScreen(
     state: AppState,
     store: AppStore,
     onBack: () -> Unit,
+    /** Hidden when embedded in the mobile bottom-nav shell. */
+    showBack: Boolean = true,
 ) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
@@ -145,8 +147,10 @@ fun SearchScreen(
             TopAppBar(
                 title = { Text("搜索") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),

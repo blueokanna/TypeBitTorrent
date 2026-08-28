@@ -272,9 +272,13 @@ data class BitTorrentSettings(
     val requestTimeoutMs: Long = 20_000,
     /**
      * Consecutive request timeouts on one peer before it is disconnected
-     * and blacklisted (mechanism 2).
+     * and blacklisted (mechanism 2). Deliberately forgiving: the engine's
+     * request timeout is pipeline-aware and the counter resets on ANY
+     * delivered block, so a peer must deliver nothing across 8 full
+     * timeout windows to earn a ban — this stops healthy-but-congested
+     * seeds from collapsing the swarm mid-download.
      */
-    val maxRequestTimeouts: Int = 5,
+    val maxRequestTimeouts: Int = 8,
     val endgamePieces: Int = 32,
     val smartScheduling: Boolean = true,
     val useDefaultTrackers: Boolean = true,

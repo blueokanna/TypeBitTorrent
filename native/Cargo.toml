@@ -12,14 +12,18 @@ name = "typebit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-typebit = { version = "0.1.7", path = "../../TypeBit", features = ["std"] }
+typebit = { version = "0.1.9", path = "../../TypeBit", features = ["std"] }
 jni = { version = "0.22.4" }
 getrandom = "0.4"
 nextjson = { version = "0.1", default-features = false }
 courierust = { version = "1.0", default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_System_Ioctl", "Win32_System_IO", "Win32_Foundation"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_System_Ioctl",
+    "Win32_System_IO",
+    "Win32_Foundation",
+] }
 
 [profile.release]
 lto = "thin"

@@ -45,6 +45,17 @@ actual external fun nativeFilePriorities(handle: Long, hash: String): String?
 actual external fun nativeAddTracker(handle: Long, hash: String, url: String): Int
 actual external fun nativeRemoveTracker(handle: Long, hash: String, url: String): Int
 actual external fun nativeTrackers(handle: Long, hash: String): String?
+/** Export a signed proof-of-download receipt (JSON) or `{"error":"…"}`. */
+actual external fun nativeExportReceipt(
+    handle: Long,
+    hash: String,
+    rangeStart: Long,
+    rangeEnd: Long,
+    epochStart: Long,
+    epochEnd: Long,
+): String?
+/** Verify a receipt JSON; returns a `ReceiptVerifyResultDto` JSON. */
+actual external fun nativeVerifyReceipt(handle: Long, json: String): String?
 actual external fun nativeSaveState(handle: Long): ByteArray?
 actual external fun nativeLoadState(handle: Long, data: ByteArray): Int
 actual external fun nativeTakeEvents(handle: Long): String

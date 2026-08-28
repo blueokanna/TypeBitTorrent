@@ -25,6 +25,9 @@ use crate::host::{LogBuffer, NativeHost};
 use crate::json::JsonWriter;
 use crate::meta::{FileMeta, MetaRegistry, TorrentMeta};
 
+use nextjson::NsonDeserialize;
+use typebit::receipt::{Receipt, ReceiptPayload};
+
 /// Engine tick cadence (ms). Chosen to balance CPU and UI responsiveness.
 pub const TICK_MS: u64 = 100;
 
@@ -184,6 +187,24 @@ pub enum Cmd {
     /// Engine-wide statistics (wire totals, cache counters, connected peers,
     /// discarded bytes) for the qBittorrent-style stats dialog.
     Stats {
+        tx: Sender<String>,
+    },
+    /// Export a signed proof-of-download receipt for a torrent over an
+    /// absolute byte range, attested to a wall-clock window (unix seconds).
+    /// Fails when verified coverage of the range is below 90% — receipts
+    /// cannot be fabricated from bytes the engine never verified.
+    ExportReceipt {
+        hash: String,
+        range_start: u64,
+        range_end: u64,
+        epoch_start: u64,
+        epoch_end: u64,
+        tx: Sender<Result<String, String>>,
+    },
+    /// Verify a receipt JSON (Ed25519 signature + structural integrity).
+    /// Returns a result JSON with the attested fields.
+    VerifyReceipt {
+        json: String,
         tx: Sender<String>,
     },
     SaveState {
@@ -686,6 +707,16 @@ fn handle_cmd(
             // the configured port except in random-port mode).
             w.kv_u64("listen_port", engine.host.listen_port() as u64);
             w.comma();
+            // LSD (BEP-14) diagnostics: announces sent, datagrams received,
+            // peers discovered via the LAN multicast — lets the UI verify
+            // LAN discovery is actually alive.
+            let (lsd_sent, lsd_recv, lsd_peers) = engine.lsd_stats();
+            w.kv_u64("lsd_sent", lsd_sent);
+            w.comma();
+            w.kv_u64("lsd_recv", lsd_recv);
+            w.comma();
+            w.kv_u64("lsd_peers", lsd_peers);
+            w.comma();
             w.key("totals");
             w.begin_object();
             w.kv_u64("d", d_total);
@@ -872,6 +903,48 @@ fn handle_cmd(
             let (d_total, u_total) = engine.host.totals();
             let _ = tx.send(stats_to_json(&st, d_total, u_total));
         }
+        Cmd::ExportReceipt {
+            hash,
+            range_start,
+            range_end,
+            epoch_start,
+            epoch_end,
+            tx,
+        } => {
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => match engine.export_receipt(
+                    &h,
+                    (range_start, range_end),
+                    epoch_start,
+                    epoch_end,
+                ) {
+                    Some(r) => receipt_to_json(&r).map_err(|e| e.to_string()),
+                    None => Err(
+                        "no verified coverage for this range (receipts require ≥90%)".to_string(),
+                    ),
+                },
+                Err(_) => Err("invalid hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
+        Cmd::VerifyReceipt { json, tx } => {
+            let out = match receipt_from_json(&json) {
+                Ok(r) => {
+                    let ok = r.verify();
+                    verify_result_json(&r, ok)
+                }
+                Err(e) => {
+                    let mut w = JsonWriter::new();
+                    w.begin_object();
+                    w.kv_bool("ok", false);
+                    w.comma();
+                    w.kv_string("error", &format!("invalid receipt: {e}"));
+                    w.end_object();
+                    w.into_string()
+                }
+            };
+            let _ = tx.send(out);
+        }
         Cmd::SaveState { tx } => {
             engine.flush_cache();
             let st = engine.save_state();
@@ -923,6 +996,143 @@ fn handle_cmd(
 
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode a hex string; `None` on odd length / non-hex digits.
+fn hex_from(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len() / 2);
+    for i in (0..b.len()).step_by(2) {
+        let hi = (b[i] as char).to_digit(16)?;
+        let lo = (b[i + 1] as char).to_digit(16)?;
+        out.push((hi * 16 + lo) as u8);
+    }
+    Some(out)
+}
+
+/// Wire schema of a receipt as exchanged with Kotlin (hex fields keep the
+/// JSON human-readable and binary-safe).
+#[derive(NsonDeserialize)]
+struct ReceiptJson {
+    version: u8,
+    content_root: String,
+    node_id: String,
+    range_start: u64,
+    range_end: u64,
+    epoch_start: i64,
+    epoch_end: i64,
+    bytes_received: u64,
+    challenge_digest: String,
+    data_proof: String,
+    signature: String,
+}
+
+/// Serialize a receipt to the bridge JSON schema.
+fn receipt_to_json(r: &Receipt) -> Result<String, typebit::Error> {
+    let p = &r.payload;
+    if p.content_root.len() != 32
+        || p.node_id.len() != 32
+        || p.challenge_digest.len() != 32
+        || p.data_proof.len() != 32
+        || r.signature.len() != 64
+    {
+        return Err(typebit::Error::Receipt);
+    }
+    let mut w = JsonWriter::new();
+    w.begin_object();
+    w.kv_u64("version", p.version as u64);
+    w.comma();
+    w.kv_string("content_root", &hex_of(&p.content_root));
+    w.comma();
+    w.kv_string("node_id", &hex_of(&p.node_id));
+    w.comma();
+    w.kv_u64("range_start", p.range_start);
+    w.comma();
+    w.kv_u64("range_end", p.range_end);
+    w.comma();
+    w.kv_i64("epoch_start", p.epoch_start);
+    w.comma();
+    w.kv_i64("epoch_end", p.epoch_end);
+    w.comma();
+    w.kv_u64("bytes_received", p.bytes_received);
+    w.comma();
+    w.kv_string("challenge_digest", &hex_of(&p.challenge_digest));
+    w.comma();
+    w.kv_string("data_proof", &hex_of(&p.data_proof));
+    w.comma();
+    w.kv_string("signature", &hex_of(&r.signature));
+    w.end_object();
+    Ok(w.into_string())
+}
+
+/// Parse a receipt from the bridge JSON schema (hex fields).
+fn receipt_from_json(json: &str) -> Result<Receipt, typebit::Error> {
+    let j: ReceiptJson =
+        nextjson::nextdecode(json.as_bytes()).map_err(|_| typebit::Error::Receipt)?;
+    let content_root = hex_from(&j.content_root).ok_or(typebit::Error::Receipt)?;
+    let node_id = hex_from(&j.node_id).ok_or(typebit::Error::Receipt)?;
+    let challenge_digest = hex_from(&j.challenge_digest).ok_or(typebit::Error::Receipt)?;
+    let data_proof = hex_from(&j.data_proof).ok_or(typebit::Error::Receipt)?;
+    let signature = hex_from(&j.signature).ok_or(typebit::Error::Receipt)?;
+    if content_root.len() != 32
+        || node_id.len() != 32
+        || challenge_digest.len() != 32
+        || data_proof.len() != 32
+        || signature.len() != 64
+    {
+        return Err(typebit::Error::Receipt);
+    }
+    let payload = ReceiptPayload {
+        version: j.version,
+        content_root,
+        node_id,
+        range_start: j.range_start,
+        range_end: j.range_end,
+        epoch_start: j.epoch_start,
+        epoch_end: j.epoch_end,
+        bytes_received: j.bytes_received,
+        challenge_digest,
+        data_proof,
+    };
+    let mut sig = [0u8; 64];
+    sig.copy_from_slice(&signature);
+    Ok(Receipt {
+        payload,
+        signature: sig,
+    })
+}
+
+/// Result JSON for a signature verification (fields echoed so the UI can
+/// show exactly what was attested).
+fn verify_result_json(r: &Receipt, ok: bool) -> String {
+    let p = &r.payload;
+    let mut w = JsonWriter::new();
+    w.begin_object();
+    w.kv_bool("ok", ok);
+    w.comma();
+    if !ok {
+        w.kv_string("error", "signature or structure invalid");
+        w.comma();
+    }
+    w.kv_string("node_id", &hex_of(&p.node_id));
+    w.comma();
+    w.kv_string("content_root", &hex_of(&p.content_root));
+    w.comma();
+    w.kv_u64("range_start", p.range_start);
+    w.comma();
+    w.kv_u64("range_end", p.range_end);
+    w.comma();
+    w.kv_i64("epoch_start", p.epoch_start);
+    w.comma();
+    w.kv_i64("epoch_end", p.epoch_end);
+    w.comma();
+    w.kv_u64("bytes_received", p.bytes_received);
+    w.end_object();
+    w.into_string()
 }
 
 fn count_bits(bytes: &[u8]) -> u64 {
@@ -1341,6 +1551,10 @@ pub fn parse_config(json: &str, save_dir: &str) -> Result<(EngineConfig, Session
         proxy,
         connect_timeout_ms,
         session: session.clone(),
+        // Receipt node identity: not configured here — the engine mints one
+        // at construction and persists it via SessionState, so the node
+        // keeps the same verifiable identity across restarts.
+        node_secret: None,
     };
 
     Ok((cfg, session))
@@ -2133,5 +2347,60 @@ mod tests {
                 eprintln!("diag-udp: {hostname}:{port} NO REPLY in 5s");
             }
         }
+    }
+
+    /// The bridge receipt JSON schema round-trips losslessly and survives
+    /// signature verification — the exact path Kotlin export → verify uses.
+    #[test]
+    fn receipt_json_roundtrip_preserves_signature() {
+        use typebit::receipt::{ReceiptBook, ReceiptPayload};
+        let sk = [0x5Au8; 32];
+        let mut book = ReceiptBook::new([0x11u8; 32]);
+        book.record_range(0, 4096);
+        book.record_sample(8, [0x22u8; 32]);
+        let r = book
+            .build_receipt_unix((0, 4096), 1_700_000_000, 1_700_000_060, &sk)
+            .expect("coverage ≥90%");
+        assert!(r.verify(), "fresh receipt verifies");
+
+        let json = receipt_to_json(&r).expect("serialize");
+        // Field sanity: hex lengths are exact, numbers survive.
+        assert!(json.contains("\"signature\":\""), "signature present");
+        let back = receipt_from_json(&json).expect("parse");
+        assert!(back.verify(), "round-tripped receipt verifies");
+        assert_eq!(back.payload, r.payload, "payload lossless");
+
+        // Tampering the JSON signature must fail verification (Kotlin-side
+        // forged-file path).
+        let mut forged_json = json.replace("\"bytes_received\":4096", "\"bytes_received\":4097");
+        if forged_json == json {
+            // defensive: derive the tamper another way if formatting differs
+            forged_json = json.replacen("f", "e", 1);
+        }
+        let forged = receipt_from_json(&forged_json);
+        if let Ok(f) = forged {
+            assert!(!f.verify(), "tampered receipt must not verify");
+        } // structurally rejected is also a pass
+
+        // Payload JSON (engine codec) is a different schema; the bridge
+        // schema must NOT accept it as a receipt (it lacks `signature`).
+        let payload = ReceiptPayload {
+            version: 1,
+            content_root: vec![1u8; 32],
+            node_id: typebit::crypto::ed25519::public_key(&sk).to_vec(),
+            range_start: 0,
+            range_end: 100,
+            epoch_start: 1_700_000_000,
+            epoch_end: 1_700_000_060,
+            bytes_received: 100,
+            challenge_digest: vec![2u8; 32],
+            data_proof: vec![3u8; 32],
+        };
+        let payload_json =
+            String::from_utf8(typebit::receipt::payload_to_json(&payload).unwrap()).unwrap();
+        assert!(
+            receipt_from_json(&payload_json).is_err(),
+            "payload-only JSON has no signature → rejected"
+        );
     }
 }

@@ -74,6 +74,10 @@ fun AddTorrentScreen(
         state: AppState,
         store: AppStore,
         onBack: () -> Unit,
+        /** When embedded in the mobile bottom-nav shell, hide the back
+         *  arrow — the NavigationBar switches sections. Desktop routes keep
+         *  it. */
+        showBack: Boolean = true,
 ) {
     var magnet by remember { mutableStateOf("") }
     var pendingBytes by remember { mutableStateOf<ByteArray?>(null) }
@@ -96,7 +100,6 @@ fun AddTorrentScreen(
     // directory toggle can address every descendant leaf in one call.
     val fileSel = remember { mutableStateMapOf<Int, Boolean>() }
     val priorities = remember { mutableStateMapOf<Int, Int>() }
-    var filterText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     // Whenever a new torrent is previewed (file picked OR magnet resolved),
@@ -170,8 +173,10 @@ fun AddTorrentScreen(
                 TopAppBar(
                         title = { Text("添加种子") },
                         navigationIcon = {
-                            IconButton(onClick = { leaveDialog() }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            if (showBack) {
+                                IconButton(onClick = { leaveDialog() }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                                }
                             }
                         },
                         colors =
@@ -309,14 +314,6 @@ fun AddTorrentScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            OutlinedTextField(
-                                    value = filterText,
-                                    onValueChange = { filterText = it },
-                                    placeholder = { Text("筛选文件...") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                            )
-                            Spacer(Modifier.width(8.dp))
                             // 全选 / 取消全选 iterates the REAL file list (not
                             // the sparse map), so it works even before the user
                             // touched any checkbox.
@@ -358,7 +355,6 @@ fun AddTorrentScreen(
                                                 ?.leafIndices
                                                 ?.forEach { priorities[it] = prio }
                                     },
-                                    filter = filterText,
                             )
                         }
                         Spacer(Modifier.height(4.dp))

@@ -214,6 +214,9 @@ fun DesktopMainScreen(
                 trackerCount = state.trackerCount,
                 extIp = state.extIp,
                 extPort = state.extPort,
+                lsdSent = state.lsdSent,
+                lsdRecv = state.lsdRecv,
+                lsdPeers = state.lsdPeers,
             )
         }
     }

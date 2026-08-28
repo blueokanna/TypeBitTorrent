@@ -36,5 +36,17 @@
             android:name="com.typebit.download.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 边下边播: hands a media file (or its `.part` staged twin) to the
+             system player via a temporary content URI grant. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

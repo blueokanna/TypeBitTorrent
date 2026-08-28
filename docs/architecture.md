@@ -27,7 +27,7 @@ the seams and the trade-offs.
 └──────────────────────────┬───────────────────────────────┘
                            │ static link
 ┌──────────────────────────▼───────────────────────────────┐
-│ typebit 0.1.1 (Rust, PolyForm) — the actual torrent engine │
+│ typebit 0.1.8 (Rust, PolyForm) — the actual torrent engine │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -64,7 +64,7 @@ A complete `typebit::Host` in `std`:
   `courierust` client has an in-tree TLS implementation (no system deps).
 - **Disk** — `std::fs` with `set_len` preallocation and `sync_data` flush.
 - **Global speed limits** — enforced by the engine's built-in token buckets
-  (`EngineConfig::global_*_limit_bps`, typebit 0.1.1); the host only counts
+  (`EngineConfig::global_*_limit_bps`, typebit 0.1.8); the host only counts
   wire bytes for the status bar.
 - **Web seeds** (BEP-19) — `http_get_range` delegates Range requests to the
   std host, which rejects bodies that are not exactly the requested window.
@@ -97,14 +97,14 @@ On startup the app: loads settings → starts the engine → re-adds every
 record → restores the resume blob → starts unpaused torrents → begins
 polling.
 
-## Honest data gaps (from the 0.1.1 API)
+## Honest data gaps (from the 0.1.7 API)
 
 | UI feature | Status | Why |
 | --- | --- | --- |
 | Per-torrent upload bytes / rate | `—` | no engine getter |
 | Peer table | counts only | no engine getter |
 | Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | engine emits the event without the info dict, so the bridge keeps its own mirror |
-| Encryption / uTP / LSD | stored settings | wire protocol is plaintext in 0.1.1 |
+| Encryption / uTP | stored settings | wire protocol is plaintext in 0.1.7; uTP (BEP-29) exists but peers usually negotiate TCP |
 
 These are documented in the README and marked in the UI; nothing is
 simulated.

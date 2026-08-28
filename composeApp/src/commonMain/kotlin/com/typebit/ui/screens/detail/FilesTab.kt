@@ -1,3 +1,5 @@
+@file:Suppress("OVERLOAD_RESOLUTION_AMBIGUITY")
+
 package com.typebit.ui.screens.detail
 
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.typebit.model.FileEntry
 import com.typebit.model.Torrent
+import com.typebit.platform.isVideoFile
+import com.typebit.platform.playMediaFile
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
 import com.typebit.ui.components.FileTreeView
@@ -31,7 +35,7 @@ import com.typebit.ui.components.TreeLeaf
 import com.typebit.ui.components.buildFileTree
 import com.typebit.ui.components.findNodeByKey
 
-/** 文件 tab — qBittorrent 式文件树：折叠目录、每文件优先级 + 重命名。 */
+/** 文件 tab — qBittorrent 式文件树：折叠目录、每文件优先级 + 重命名 + 边下边播。 */
 @Composable
 fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     if (torrent.files.isEmpty()) {
@@ -43,7 +47,26 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     }
     var renamingIndex by remember { mutableStateOf<Int?>(null) }
     var filterText by remember { mutableStateOf("") }
+    var previewMsg by remember { mutableStateOf<String?>(null) }
     val renamingFile = renamingIndex?.let { torrent.files.getOrNull(it) }
+
+    // 边下边播: the playable path is the staged `.part` file while the
+    // torrent is downloading (the engine verifies pieces head-first then
+    // strictly in file order, so the head of a video is playable early) and
+    // the final file once complete.
+    val previewPath: (FileEntry) -> String = { f ->
+        val base = torrent.saveDir.trimEnd('/', '\\') + "/" + f.effectivePath
+        if (torrent.isComplete) base else "$base.part"
+    }
+    val previewFile: (Int) -> Unit = { i ->
+        val f = torrent.files.getOrNull(i)
+        if (f != null) {
+            previewMsg = null
+            val opened = playMediaFile(previewPath(f))
+            previewMsg =
+                if (opened) null else "暂无可播放数据：文件头尚未下载完成（下载中自动边下边播）"
+        }
+    }
 
     if (renamingFile != null) {
         RenameFileDialog(
@@ -66,6 +89,9 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     val selectedFiles =
             torrent.files.indices.count { (torrent.filePriorities.getOrNull(it) ?: 1) != 0 }
 
+    // 边下边播 hint row: shown once a video file exists in the torrent.
+    val hasVideo = torrent.files.any { isVideoFile(it.effectivePath) }
+
     Column(modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -81,6 +107,25 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+        if (hasVideo && !torrent.isComplete) {
+            Text(
+                "▶ 视频支持边下边播：分块按文件顺序下载，文件头完成后即可播放（ts / avi / rmvb / wmv / mp4 / mkv…）",
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+        previewMsg?.let {
+            Text(
+                it,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
             )
         }
         Row(
@@ -123,6 +168,8 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             onRename = { renamingIndex = it },
             filter = filterText,
             showSelection = false,
+            onPreview = previewFile,
+            isVideo = { i -> torrent.files.getOrNull(i)?.let { isVideoFile(it.effectivePath) } == true },
         )
     }
 }

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -202,6 +203,10 @@ fun FileTreeView(
     onRename: ((Int) -> Unit)? = null,
     filter: String = "",
     showSelection: Boolean = true,
+    /** 边下边播: play callback (leaf index) — shown for [isVideo] leaves. */
+    onPreview: ((Int) -> Unit)? = null,
+    /** Whether a leaf index is a playable video (drives the preview button). */
+    isVideo: ((Int) -> Boolean)? = null,
 ) {
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val q = filter.trim()
@@ -293,6 +298,18 @@ fun FileTreeView(
                             Format.bytes(node.size),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (!node.isDir && onPreview != null &&
+                    isVideo?.invoke(node.leafIndex ?: -1) == true
+                ) {
+                    IconButton(onClick = { node.leafIndex?.let(onPreview) },
+                        modifier = Modifier.width(28.dp)) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "边下边播",
+                            tint = MaterialTheme.colorScheme.primary,
                         )
                     }
                 }

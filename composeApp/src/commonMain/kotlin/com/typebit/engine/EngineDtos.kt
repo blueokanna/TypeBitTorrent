@@ -148,6 +148,12 @@ data class EngineSnapshotDto(
         val pmPort: Int = 0,
         /** Actual bound TCP listen port (0 when not listening). */
         val listenPort: Int = 0,
+        /** LSD (BEP-14): LAN announces multicast out (live). JSON key `lsd_sent`. */
+        val lsd_sent: Long = 0,
+        /** LSD (BEP-14): BT-SEARCH datagrams received (live). JSON key `lsd_recv`. */
+        val lsd_recv: Long = 0,
+        /** LSD (BEP-14): peers discovered via LAN multicast (live). JSON key `lsd_peers`. */
+        val lsd_peers: Long = 0,
         /** Cumulative wire bytes: (downloaded, uploaded). */
         val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
         val torrents: List<TorrentSnapshotDto> = emptyList(),
@@ -275,3 +281,52 @@ data class EngineStatsDto(
     val readOverload: Double
         get() = if (c_clean_budget > 0) c_clean.toDouble() / c_clean_budget else 0.0
 }
+
+/**
+ * A signed proof-of-download receipt (bridge JSON schema). Hex fields keep
+ * the JSON human-readable and binary-safe; the schema mirrors
+ * `native/src/engine.rs::receipt_to_json` exactly.
+ */
+@Serializable
+data class ReceiptDto(
+        val version: Int = 1,
+        /** Info hash of the attested content (hex, 32 bytes). */
+        val content_root: String = "",
+        /** Ed25519 public key of the signing node (hex, 32 bytes). */
+        val node_id: String = "",
+        /** Attested byte range (inclusive start). */
+        val range_start: Long = 0L,
+        /** Attested byte range (exclusive end). */
+        val range_end: Long = 0L,
+        /** Wall-clock window (unix seconds, inclusive start). */
+        val epoch_start: Long = 0L,
+        /** Wall-clock window (unix seconds, exclusive end). */
+        val epoch_end: Long = 0L,
+        /** Verified bytes inside the range. */
+        val bytes_received: Long = 0L,
+        /** Challenge commitment (hex, 32 bytes). */
+        val challenge_digest: String = "",
+        /** Hash over sampled real blocks (hex, 32 bytes). */
+        val data_proof: String = "",
+        /** Ed25519 signature over the canonical message (hex, 64 bytes). */
+        val signature: String = "",
+) {
+    val rangeBytes: Long get() = (range_end - range_start).coerceAtLeast(0L)
+
+    val coverageRatio: Double
+        get() = if (rangeBytes > 0) bytes_received.toDouble() / rangeBytes else 0.0
+}
+
+/** Result of verifying a receipt JSON. */
+@Serializable
+data class ReceiptVerifyResultDto(
+        val ok: Boolean = false,
+        val error: String? = null,
+        val node_id: String = "",
+        val content_root: String = "",
+        val range_start: Long = 0L,
+        val range_end: Long = 0L,
+        val epoch_start: Long = 0L,
+        val epoch_end: Long = 0L,
+        val bytes_received: Long = 0L,
+)

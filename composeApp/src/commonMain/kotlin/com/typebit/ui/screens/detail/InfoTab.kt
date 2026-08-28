@@ -72,7 +72,7 @@ fun InfoTab(torrent: Torrent, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SectionTitle(title: String) {
+internal fun SectionTitle(title: String) {
     Text(
         title,
         style = MaterialTheme.typography.labelLarge,

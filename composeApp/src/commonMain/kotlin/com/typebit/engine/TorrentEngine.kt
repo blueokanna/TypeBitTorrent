@@ -132,6 +132,26 @@ interface TorrentEngine {
     /** Engine-wide statistics (wire totals, cache, peers, discarded). */
     fun stats(): EngineStatsDto
 
+    // -- proof-of-download receipts ------------------------------------------
+
+    /**
+     * Exports a signed proof-of-download receipt for `hash` over an absolute
+     * byte range (inclusive start / exclusive end), attested to a wall-clock
+     * window (unix seconds). Returns the receipt JSON on success, or a
+     * `{"error":"…"}` JSON when the torrent has no verified coverage of the
+     * range (receipts require ≥90%). `null` only when the engine is gone.
+     */
+    fun exportReceipt(
+        hash: String,
+        rangeStart: Long,
+        rangeEnd: Long,
+        epochStart: Long,
+        epochEnd: Long,
+    ): String?
+
+    /** Verifies a receipt JSON (Ed25519 signature + structural integrity). */
+    fun verifyReceipt(json: String): ReceiptVerifyResultDto
+
     // -- configuration ------------------------------------------------------
 
     fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long)
@@ -343,6 +363,24 @@ class NativeTorrentEngine : TorrentEngine {
         return runCatching {
             BRIDGE_JSON.decodeFromString<EngineStatsDto>(json)
         }.getOrDefault(EngineStatsDto())
+    }
+
+    override fun exportReceipt(
+        hash: String,
+        rangeStart: Long,
+        rangeEnd: Long,
+        epochStart: Long,
+        epochEnd: Long,
+    ): String? = requireEngine().let {
+        nativeExportReceipt(it, hash, rangeStart, rangeEnd, epochStart, epochEnd)
+    }
+
+    override fun verifyReceipt(json: String): ReceiptVerifyResultDto {
+        val out = requireEngine().let { nativeVerifyReceipt(it, json) }
+            ?: return ReceiptVerifyResultDto(ok = false, error = "engine not running")
+        return runCatching {
+            BRIDGE_JSON.decodeFromString<ReceiptVerifyResultDto>(out)
+        }.getOrElse { ReceiptVerifyResultDto(ok = false, error = "invalid response") }
     }
 
     override fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long) {
