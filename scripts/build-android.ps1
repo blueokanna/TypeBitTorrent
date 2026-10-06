@@ -19,6 +19,14 @@ $jniLibs = Join-Path $root "composeApp\src\androidMain\jniLibs"
 $cargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
 if (-not (Test-Path $cargo)) { $cargo = "cargo.exe" }
 
+# Keep cargo and rustc on the SAME toolchain: a rustc from another install
+# (e.g. "C:\Program Files\Rust ...") earlier on PATH makes cargo pass
+# `--check-cfg`, which older rustc rejects ("-Z unstable-options").
+$cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+if (Test-Path (Join-Path $cargoBin "rustc.exe")) {
+    $env:PATH = "$cargoBin;$env:PATH"
+}
+
 # NDK location: honor ANDROID_NDK_HOME (set by CI or the caller), fall back
 # to the common local development location.
 $ndk = $env:ANDROID_NDK_HOME
@@ -62,6 +70,23 @@ $targets = @(
 )
 
 # 1) Cross-compile the Rust cdylib for every ABI.
+#
+# Every rebuilt library is then checked for the JNI entry points the Kotlin
+# code actually calls. A stale `.so` is not a theoretical problem: the JNI
+# ABI does not encode argument counts, so calling a new signature into an old
+# library reads garbage from the stack and SIGSEGVs the process (this is the
+# real "点击 Peer 就闪退" failure mode). Failing the build here is far cheaper
+# than shipping that APK.
+$nm = Join-Path $clangBin "llvm-nm.exe"
+$requiredSymbols = @(
+    "Java_com_typebit_engine_NativeBridgeKt_nativeBridgeAbi",
+    "Java_com_typebit_engine_NativeBridgeKt_nativeCreateEngine",
+    "Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrent",
+    "Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrentProgress",
+    "Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrentCancel",
+    "Java_com_typebit_engine_NativeBridgeKt_nativeSetFilePriorities"
+)
+
 Push-Location $native
 try {
     foreach ($t in $targets) {
@@ -73,20 +98,26 @@ try {
         New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
         Copy-Item $src $dst -Force
         Write-Host "    -> $dst"
+
+        if (Test-Path $nm) {
+            $exported = (& $nm -D --defined-only $dst 2>$null) -join "`n"
+            $missing = @($requiredSymbols | Where-Object { $exported -notmatch [regex]::Escape($_) })
+            if ($missing.Count -gt 0) {
+                throw "$($t.Abi): libtypebit_native.so is missing $($missing -join ', ') - rebuild the native crate"
+            }
+            Write-Host "    JNI surface OK ($($requiredSymbols.Count) symbols)"
+        } else {
+            Write-Warning "llvm-nm not found at $nm - skipping the JNI symbol check"
+        }
     }
 } finally {
     Pop-Location
 }
 
 # 2) Package the debug APK.
-Push-Location $root
-try {
-    Write-Host "==> assembleDebug ..."
-    & .\gradlew.bat :composeApp:assembleDebug --console=plain
-    if ($LASTEXITCODE -ne 0) { throw "assembleDebug failed" }
-} finally {
-    Pop-Location
-}
+. (Join-Path $PSScriptRoot "lib\gradle-env.ps1")
+Write-Host "==> assembleDebug ..."
+Invoke-TypeBitGradle -ProjectRoot $root -Arguments @(":composeApp:assembleDebug")
 
 $apk = Join-Path $root "composeApp\build\outputs\apk\debug\composeApp-debug.apk"
 Write-Host "==> APK: $apk ($((Get-Item $apk).Length) bytes)"

@@ -15,21 +15,57 @@ the seams and the trade-offs.
 │  data/       AppSettings · repositories · RSS             │
 │  model/      domain models (Torrent, records, DTOs)       │
 │  platform/   expect/actual seams (paths, picker, browser) │
+│  webui/*     desktop-only: headless entry + HTTP server    │
 └──────────────────────────┬───────────────────────────────┘
                            │ JNI (one cdylib for both targets)
 ┌──────────────────────────▼───────────────────────────────┐
 │ native/ (Rust, PolyForm) │
-│  jni_glue.rs  30 JNI entry points (thin, defensive)       │
+│  jni_glue.rs  49 JNI entry points (thin, defensive)       │
 │  engine.rs    worker thread · mpsc commands · JSON events │
 │  host.rs       NativeHost — complete typebit::Host        │
+│  make_torrent.rs  BEP-3/12/27 builder (progress + cancel) │
 │  meta.rs       add-time metadata mirror                   │
 │  json.rs       minimal JSON writer                        │
+│  lib.rs        JNI_ABI handshake (see below)              │
 └──────────────────────────┬───────────────────────────────┘
                            │ static link
 ┌──────────────────────────▼───────────────────────────────┐
-│ typebit 0.1.8 (Rust, PolyForm) — the actual torrent engine │
+│ typebit 0.1.9 (Rust, PolyForm) — the actual torrent engine │
 └──────────────────────────────────────────────────────────┘
 ```
+
+## Two front ends, one client
+
+The engine + store are platform-agnostic, so a third target was nearly free:
+
+* **Desktop / Android** — the Compose UI drives `AppStore`.
+* **Headless (`--headless`)** — `webui/Headless.kt` boots the *same*
+  `AppStore` and serves `webui/WebUiServer.kt`, a dependency-free
+  `com.sun.net.httpserver` implementation. The SPA (`resources/webui/`) talks
+  JSON to it; every endpoint calls the same store methods the Compose screen
+  calls. Nothing is re-implemented per platform, which is why a NAS runs the
+  full feature set.
+
+## The JNI handshake (why a stale library is loud, not fatal)
+
+JNI encodes no type information. If Kotlin declares `nativeMakeTorrent(String)`
+while the loaded library still implements `nativeMakeTorrent(String, String)`,
+the call links and then reads an argument that was never pushed — a SIGSEGV in
+the middle of the JVM, i.e. the app "闪退" with no exception, no log line from
+Kotlin, nothing to catch. It happened here during development (a stale
+`typebit_native.dll`), which is why:
+
+1. `native/src/lib.rs` defines `JNI_ABI`, exposed as `nativeBridgeAbi()`.
+2. `NativeRuntime.EXPECTED_BRIDGE_ABI` must equal it; `NativeTorrentEngine`
+   verifies the pair before the first real call and refuses with a clear
+   message instead of crashing.
+3. `scripts/verify-native.ps1` fails the build if the declared Kotlin
+   `expect fun native*` set is not fully exported by the DLL and by all four
+   Android ABIs, and if the two ABI numbers disagree.
+
+Rule: bump `JNI_ABI` in the same commit as any native signature or JSON
+contract change, and rebuild every shipped library.
+
 
 ## The engine boundary (why it looks like this)
 
@@ -64,8 +100,8 @@ A complete `typebit::Host` in `std`:
   `courierust` client has an in-tree TLS implementation (no system deps).
 - **Disk** — `std::fs` with `set_len` preallocation and `sync_data` flush.
 - **Global speed limits** — enforced by the engine's built-in token buckets
-  (`EngineConfig::global_*_limit_bps`, typebit 0.1.8); the host only counts
-  wire bytes for the status bar.
+  (`EngineConfig::global_*_limit_bps`); the host only counts wire bytes for the
+  status bar.
 - **Web seeds** (BEP-19) — `http_get_range` delegates Range requests to the
   std host, which rejects bodies that are not exactly the requested window.
 - **UPnP/NAT-PMP** — `local_ip` is discovered with the UDP-connect trick;
@@ -97,14 +133,15 @@ On startup the app: loads settings → starts the engine → re-adds every
 record → restores the resume blob → starts unpaused torrents → begins
 polling.
 
-## Honest data gaps (from the 0.1.7 API)
+## Honest data gaps
 
 | UI feature | Status | Why |
 | --- | --- | --- |
-| Per-torrent upload bytes / rate | `—` | no engine getter |
-| Peer table | counts only | no engine getter |
-| Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | engine emits the event without the info dict, so the bridge keeps its own mirror |
-| Encryption / uTP | stored settings | wire protocol is plaintext in 0.1.7; uTP (BEP-29) exists but peers usually negotiate TCP |
+| Peer table | live (`session::PeerSnapshot`: address, client, country, phase, rates, in-flight blocks) | resolved in 0.1.9 — the earlier API only exposed counts |
+| Per-torrent uploaded bytes | live (`engine.uploaded`) | resolved in 0.1.9 |
+| Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | the engine emits the event without the info dict, so the bridge keeps its own mirror |
+| Encryption / uTP | stored settings | the wire protocol is plaintext; uTP (BEP-29) exists but peers usually negotiate TCP |
+| WebUI over HTTPS | not built in | TLS is expected to be terminated by a reverse proxy; the server has no certificate store |
 
 These are documented in the README and marked in the UI; nothing is
-simulated.
+simulated. Where a number genuinely cannot be reported, the UI shows `—`.

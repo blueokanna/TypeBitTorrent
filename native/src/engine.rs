@@ -1833,15 +1833,17 @@ mod tests {
         // `<dir>/payload.bin.part`.
         let payload = dir.join("payload.bin");
         fs::write(&payload, vec![0x42u8; 300_000]).unwrap();
-        let torrent = crate::make_torrent::create_torrent_v1(
-            &[crate::make_torrent::FileSpec {
-                abs_path: payload.clone(),
-                rel_path: vec!["payload.bin".to_string()],
-            }],
-            64 * 1024,
-            "payload",
-            None,
-            None,
+        let torrent = crate::make_torrent::create_torrent(
+            &crate::make_torrent::TorrentBuild {
+                files: vec![crate::make_torrent::FileSpec {
+                    abs_path: payload.clone(),
+                    rel_path: vec!["payload.bin".to_string()],
+                }],
+                piece_length: 64 * 1024,
+                name: "payload".to_string(),
+                ..Default::default()
+            },
+            &crate::make_torrent::BuildProgress::new(),
         )
         .expect("create torrent");
 

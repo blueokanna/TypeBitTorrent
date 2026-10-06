@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Unraid Docker template for TypeBitTorrent.
+
+  Two ways to use it:
+    * manual: copy this file to /boot/config/plugins/dockerMan/templates-user/
+      as `typebittorrent.xml`, then Docker ▸ Add Container ▸ select the template;
+    * compose: use packaging/docker/docker-compose.yml (Compose Manager plugin).
+
+  Schema: `<Container version="2">` with `<Config>` entries for ports, paths and
+  variables (v2 form per the official CA starter template; Unraid 6.10+ no
+  longer reads the legacy <Networking>/<Data> blocks).
+  The container port in <WebUI> is always the CONTAINER port; Unraid replaces
+  [PORT:8080] with the host port the user chose.
+-->
+<Container version="2">
+  <Name>TypeBitTorrent</Name>
+  <Repository>ghcr.io/blueokanna/typebittorrent:latest</Repository>
+  <Registry>https://github.com/blueokanna/TypeBitTorrent/pkgs/container/typebittorrent</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/blueokanna/TypeBitTorrent/issues</Support>
+  <Project>https://github.com/blueokanna/TypeBitTorrent</Project>
+  <Overview>TypeBitTorrent is a BitTorrent client built on the TypeBit Rust engine (a Windows desktop client and an Android app ship from the same code base). This container runs the head-less build and serves the built-in WebUI, so the whole client — transfers, per-file priorities, renames, trackers, peers, settings, engine statistics, search, RSS and torrent creation — is usable from a browser on your LAN. Downloads are written straight to the array; nothing is proxied.&#13;&#10;&#13;&#10;Set a WebUI password in the template before starting: the server never exposes an unauthenticated interface to the network.&#13;&#10;&#13;&#10;Note: the release repository is licensed under PolyForm Perimeter 1.0.0 (source-available, not OSI-approved), which is why this template is distributed here for manual/compose installation rather than through the Community Applications feed.</Overview>
+  <Category>Downloaders:</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/blueokanna/TypeBitTorrent/main/packaging/unraid/typebittorrent.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/blueokanna/TypeBitTorrent/main/assets/typebittorrent.png</Icon>
+  <ReadMe>https://raw.githubusercontent.com/blueokanna/TypeBitTorrent/main/docs/nas.md</ReadMe>
+  <ExtraSearchTerms>torrent bittorrent client nas webui dht</ExtraSearchTerms>
+  <Requires>Docker image ghcr.io/blueokanna/typebittorrent (or a local build via packaging/docker).</Requires>
+  <Changes>Initial release: head-less engine + WebUI, per-file priorities, tracker editing, live peers, RSS, search and torrent creation.</Changes>
+  <Date>2026-10-06</Date>
+  <MinVer>6.10</MinVer>
+  <License>PolyForm-Perimeter-1.0.0</License>
+  <Config Name="WebUI" Target="8080" Default="8080" Mode="tcp" Description="WebUI 端口（浏览器访问 http://[IP]:[PORT:8080]）" Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Peer port (TCP)" Target="6881" Default="6881" Mode="tcp" Description="BitTorrent 监听端口（入站连接）。若被 ISP 封禁可在设置里改成别的端口。" Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Peer port (UDP)" Target="6881" Default="6881" Mode="udp" Description="DHT / uTP / SSR 使用的 UDP 端口" Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/typebittorrent" Mode="rw" Description="设置、续传数据与回执（必须持久化）" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Downloads" Target="/downloads" Default="/mnt/user/downloads" Mode="rw" Description="下载与做种目录（WebUI 中把默认保存目录设为 /downloads）" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="WebUI 密码" Target="TYPEBIT_PASSWORD" Default="" Description="WebUI 登录密码（至少 8 位，必填）" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="WebUI 用户名" Target="TYPEBIT_USERNAME" Default="admin" Description="WebUI 登录用户名" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="PUID" Target="PUID" Default="99" Description="文件属主 UID（Unraid 默认 99 = nobody）" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="PGID" Target="PGID" Default="100" Description="文件属组 GID（Unraid 默认 100 = users）" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>

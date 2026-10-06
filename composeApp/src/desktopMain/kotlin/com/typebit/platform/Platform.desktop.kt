@@ -12,14 +12,38 @@ actual object Platform {
 
     actual val isDesktop: Boolean = true
 
+    /**
+     * `<home>/.typebit`, or the directory named by `-Dtypebit.data.dir` — the
+     * knob the headless/NAS entry point sets so a container can keep settings,
+     * resume data and receipts on a mounted `/config` volume.
+     */
     actual fun appDataDir(): String {
-        val dir = File(System.getProperty("user.home"), ".typebit")
+        val override = System.getProperty("typebit.data.dir")?.takeIf { it.isNotBlank() }
+        val dir = if (override != null) File(override) else File(System.getProperty("user.home"), ".typebit")
         FileIO.ensureDir(dir.absolutePath)
         return dir.absolutePath
     }
 
     actual fun defaultDownloadDir(): String =
         File(System.getProperty("user.home"), "Downloads").absolutePath
+
+    actual fun resolveSaveDir(preferred: String): String {
+        val trimmed = preferred.trim()
+        if (trimmed.isNotEmpty()) {
+            val dir = File(trimmed)
+            try {
+                if (dir.exists() || dir.mkdirs()) {
+                    val probe = File(dir, ".typebit_write_probe")
+                    probe.writeText("")
+                    probe.delete()
+                    return dir.absolutePath
+                }
+            } catch (_: Exception) {
+                // Unusable (read-only mount, permission denied) → fall through.
+            }
+        }
+        return defaultDownloadDir()
+    }
 
     actual fun findFreePort(): Int =
         ServerSocket(0).use { it.localPort }

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Community Applications repository profile.
+
+  Place this file (exactly this name) in the ROOT of the repository that hosts
+  the templates — together with an OSI-approved LICENSE, a README and an icon —
+  and submit the repository URL at https://ca.unraid.net/submit/new.
+
+  IMPORTANT: the CA submission gate requires an OSI-approved open-source license
+  for the repository contents. This project ships under PolyForm Perimeter
+  1.0.0, which is source-available but NOT OSI-approved, so the feed will reject
+  it until the license changes. Until then, install with the template drop-in or
+  packaging/docker/docker-compose.yml (see docs/nas.md) — both install the same
+  container, just without going through the Apps tab.
+-->
+<CommunityApplications>
+  <Profile>TypeBitTorrent is a BitTorrent client built on the TypeBit Rust engine. The container runs the head-less build of the same client that ships for Windows and Android, and serves its built-in WebUI: transfers (add magnet/.torrent, pause, resume, remove), per-file priorities and renames, tracker editing, live peer list, engine statistics, search, RSS and torrent creation. Downloads are written directly to the array. Report issues and feature requests on the project's GitHub issue tracker.</Profile>
+  <Icon>https://raw.githubusercontent.com/blueokanna/TypeBitTorrent/main/assets/typebittorrent.png</Icon>
+  <WebPage>https://github.com/blueokanna/TypeBitTorrent</WebPage>
+  <Forum>https://github.com/blueokanna/TypeBitTorrent/issues</Forum>
+</CommunityApplications>

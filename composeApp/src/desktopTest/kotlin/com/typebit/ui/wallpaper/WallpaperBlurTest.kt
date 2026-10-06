@@ -92,16 +92,25 @@ class WallpaperBlurTest {
 
     @Test
     fun prepareWallpaperDownscalesAndBlurs() {
-        // The app background pipeline must return a small, blurred bitmap
-        // even from a large source (this is what keeps scrolling cheap).
+        // The app background pipeline must return a blurred bitmap whose
+        // longest edge stays within the documented draw cap
+        // (`MAX_BG_EDGE`), even when the source is huge — that cap is what
+        // keeps the per-frame GPU blit cheap.
         val src = solidImage(1200, 800, 0xFF446688.toInt())
         val prepared = prepareWallpaper(src, 24f)
-        assert(prepared.width <= 640) { "background should be downscaled, got ${prepared.width}" }
-        assert(prepared.height <= 640) { "background should be downscaled, got ${prepared.height}" }
+        assert(prepared.width <= 1440) { "background should stay under the draw cap, got ${prepared.width}" }
+        assert(prepared.height <= 1440) { "background should stay under the draw cap, got ${prepared.height}" }
         // The prepared bitmap must be opaque (no alpha loss).
         val px = IntArray(1)
         prepared.readPixels(px, prepared.width / 2, prepared.height / 2, 1, 1, 0, 1)
         assert(((px[0] ushr 24) and 0xFF) >= 250) { "prepared wallpaper must stay opaque" }
+
+        // A source above the cap is really downscaled (4K wallpapers are the
+        // common case on desktop).
+        val huge = solidImage(3840, 2160, 0xFF446688.toInt())
+        val shrunk = prepareWallpaper(huge, 24f)
+        assertEquals(1440, shrunk.width)
+        assertEquals(810, shrunk.height)
     }
 
     @Test

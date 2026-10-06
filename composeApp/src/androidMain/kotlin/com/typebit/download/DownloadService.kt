@@ -46,6 +46,7 @@ class DownloadService : Service() {
         private const val ACTION_START = "com.typebit.download.START"
         private const val ACTION_STOP = "com.typebit.download.STOP"
         private const val WAKELOCK_TAG = "typebit:download"
+        private const val TAG = "TypeBitDownloadService"
 
         /** Starts the foreground service (safe to call repeatedly). */
         fun start(context: Context) {
@@ -78,7 +79,16 @@ class DownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("启动中", "准备下载/做种…"))
+        // `startForeground` throws on hostile OEM states (notification
+        // permission revoked mid-flight, "startForeground not allowed",
+        // channel deleted by the user). An uncaught throw here kills the
+        // whole process — the download would be lost together with the UI —
+        // so the service degrades to a plain background service instead.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification("启动中", "准备下载/做种…"))
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "startForeground failed", t)
+        }
         // Partial wake lock: keeps the CPU alive (screen may be off) so the
         // engine's timers and sockets keep firing. Never full — the engine
         // only needs CPU, and full would drain the battery on screen-off.

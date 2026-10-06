@@ -21,6 +21,7 @@ import com.typebit.model.TrackerInfo
 import com.typebit.platform.FileIO
 import com.typebit.platform.Platform
 import com.typebit.util.B64
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,8 +73,30 @@ class AppStore(
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
+    /**
+     * Last-resort net for the store's own coroutines.
+     *
+     * A `CoroutineScope` without a handler reports an uncaught exception to
+     * the thread's default handler — on Android that is an immediate process
+     * kill (`Thread.UncaughtExceptionHandler` → FATAL EXCEPTION). The poll
+     * loop and every download action run in these scopes, so a single bad
+     * snapshot/JNI reply would otherwise take the whole app down while the
+     * user is browsing the detail tabs. Engine/bridge failures are already
+     * mapped to defaults in [com.typebit.engine.NativeTorrentEngine]; this
+     * handler covers the remaining store-side computations.
+     */
+    private val storeFailureHandler = CoroutineExceptionHandler { _, t ->
+        println("typebit store coroutine failure — ${t::class.simpleName}: ${t.message}")
+        _state.update {
+            it.copy(lastError = "内部错误已捕获：${t.message ?: t::class.simpleName}")
+        }
+    }
+
     private fun newEngineScope(): CoroutineScope =
-            CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+            CoroutineScope(
+                    SupervisorJob() + Dispatchers.Default.limitedParallelism(1) +
+                            storeFailureHandler
+            )
 
     private var engineScope: CoroutineScope = newEngineScope()
 
@@ -87,7 +110,10 @@ class AppStore(
     private var peersScope: CoroutineScope = newPeersScope()
 
     private fun newPeersScope(): CoroutineScope =
-            CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+            CoroutineScope(
+                    SupervisorJob() + Dispatchers.Default.limitedParallelism(1) +
+                            storeFailureHandler
+            )
 
     // Dedicated executor for one-shot Windows system actions (firewall /
     // ICS). These call out to `netsh` / `powershell` and can take seconds;
@@ -95,7 +121,21 @@ class AppStore(
     // here — these are user-initiated, not a polling loop, so blocking
     // JNI threads cannot pile up.
     private var systemScope: CoroutineScope =
-            CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(2))
+            CoroutineScope(
+                    SupervisorJob() + Dispatchers.IO.limitedParallelism(2) + storeFailureHandler
+            )
+
+    /**
+     * Teardown executor. Teardown is JNI (`nativeDestroyEngine` joins the
+     * engine worker), file I/O and a bounded `runBlocking` — it must run on
+     * a thread of its own when the caller is the UI (Android `onDispose`
+     * from an Activity destroy used to do all of this on the main thread,
+     * which is an ANR waiting to happen).
+     */
+    private var shutdownScope: CoroutineScope =
+            CoroutineScope(
+                    SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + storeFailureHandler
+            )
 
     // Persisted app-level records (engine cannot carry category/tags/source).
     // Only touched from [engineScope] — never from the UI thread.
@@ -120,6 +160,13 @@ class AppStore(
     // `start()` calls (e.g. an Activity recreate during a slow restore)
     // would otherwise boot TWICE — double re-adds and two poll loops.
     private var bootJob: Job? = null
+
+    /** Guards [teardown] against concurrent `stop()` / `stopBlocking()`. */
+    private val teardownLock = Any()
+    private var stopping = false
+
+    /** Records retargeted from an unwritable save dir during the last boot. */
+    private var retargetedRecords = 0
 
     private var lastSaveAt = 0L
 
@@ -146,17 +193,38 @@ class AppStore(
         if (!engineScope.isActive) engineScope = newEngineScope()
         if (!peersScope.isActive) peersScope = newPeersScope()
         if (!systemScope.isActive) {
-            systemScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(2))
+            systemScope =
+                    CoroutineScope(
+                            SupervisorJob() + Dispatchers.IO.limitedParallelism(2) +
+                                    storeFailureHandler
+                    )
         }
+        if (!shutdownScope.isActive) {
+            shutdownScope =
+                    CoroutineScope(
+                            SupervisorJob() + Dispatchers.IO.limitedParallelism(1) +
+                                    storeFailureHandler
+                    )
+        }
+        stopping = false
         bootJob = onEngineJob { boot() }
     }
 
     private suspend fun boot() {
         val settings = settingsRepo.load()
-        val saveDir = settings.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }
+        val configured = settings.downloads.defaultSavePath
+        // Never hand the engine a directory this process cannot write to:
+        // on Android the public Downloads path is denied by scoped storage,
+        // so the platform resolves a usable directory instead (and reports
+        // the substitution to the user).
+        val saveDir = Platform.resolveSaveDir(configured)
+        val saveDirSubstituted = configured.isNotBlank() && saveDir != configured.trim()
         val started = engine.start(EngineConfigJson.engineConfig(settings), saveDir)
         if (!started) {
-            _state.update { it.copy(lastError = "引擎启动失败：原生库未加载") }
+            val detail =
+                (engine as? com.typebit.engine.NativeTorrentEngine)?.lastBridgeFailure
+                    ?: "原生库未加载"
+            _state.update { it.copy(lastError = "引擎启动失败：$detail") }
             return
         }
         // The restored settings (never the defaults): every recovery step
@@ -170,6 +238,24 @@ class AppStore(
             // not abort the whole boot (reAddRecord already reports per
             // record, but a defensive catch keeps the boot total).
             records = torrentRepo.loadRecords()
+            // Retarget records that point at an unwritable directory (an
+            // Android record saved before scoped storage was accounted for,
+            // or a path on a removed drive). Safe by construction: a
+            // directory that cannot be written cannot hold partial data, so
+            // nothing is lost by moving the target to a usable one.
+            var retargeted = 0
+            records =
+                    records.map { rec ->
+                        val resolved = Platform.resolveSaveDir(rec.saveDir)
+                        if (resolved != rec.saveDir.trim()) {
+                            retargeted++
+                            rec.copy(saveDir = resolved)
+                        } else {
+                            rec
+                        }
+                    }
+            if (retargeted > 0) persistRecords()
+            retargetedRecords = retargeted
             for (rec in records) {
                 reAddRecord(rec)
             }
@@ -217,6 +303,15 @@ class AppStore(
             _state.update { it.copy(lastError = "恢复部分数据时出错：${t.message ?: t::class.simpleName}") }
         }
 
+        val saveDirNotice =
+                when {
+                    saveDirSubstituted ->
+                            "保存目录不可写，已改用 $saveDir（可在设置中修改）"
+                    retargetedRecords > 0 ->
+                            "已将 $retargetedRecords 个不可写的保存目录改到 $saveDir"
+                    else -> null
+                }
+
         _state.update {
             it.copy(
                     settings = effectiveSettings,
@@ -224,6 +319,7 @@ class AppStore(
                     peerId = engine.peerId(),
                     categories = buildCategories(),
                     tags = buildTags(),
+                    lastError = saveDirNotice ?: it.lastError,
             )
         }
         refreshStats()
@@ -277,22 +373,40 @@ class AppStore(
     private fun onEngineJob(block: suspend () -> Unit): Job = engineScope.launch { block() }
 
     /**
-     * Stops the engine and flushes persistence. Runs the shutdown work on the engine executor but
-     * waits for it with a bounded timeout so the data survives process exit (the executor's threads
-     * are daemons on the JVM, so a pure fire-and-forget shutdown could be cut off mid-write).
+     * Stops the engine and flushes persistence **without blocking the caller**.
      *
-     * Persistence is best-effort and is NEVER allowed to skip the engine teardown: `engine.stop()`
-     * (native destroy) is outside the timeout. If it were skipped, the engine worker thread would
-     * leak and the next store start would spawn a SECOND engine — two engines racing on the same
-     * port and the same `.part` files silently corrupts downloads.
+     * This is the path a UI lifecycle takes (Android `DisposableEffect`
+     * onDispose when the Activity is destroyed). Persistence plus
+     * `nativeDestroyEngine`/engine-thread join are JNI + disk work: running
+     * them on the main thread froze the UI for seconds and could be killed as
+     * an ANR, so they always run on [shutdownScope].
      */
-    fun stop() {
+    fun stop() = teardown(blocking = false)
+
+    /**
+     * Blocking variant for process-exit paths (desktop window close), where
+     * the process may be gone a moment later and the engine must be joined
+     * deterministically. Idempotent with [stop].
+     */
+    fun stopBlocking() = teardown(blocking = true)
+
+    private fun teardown(blocking: Boolean) {
+        synchronized(teardownLock) {
+            if (stopping) return
+            stopping = true
+        }
         bootJob?.cancel()
         pollJob?.cancel()
         engineScope.cancel()
         peersScope.cancel()
         systemScope.cancel()
-        runBlocking {
+
+        // Persistence is best-effort and is NEVER allowed to skip the engine
+        // teardown: `engine.stop()` (native destroy) is outside the timeout.
+        // If it were skipped, the engine worker thread would leak and the next
+        // store start would spawn a SECOND engine — two engines racing on the
+        // same port and the same `.part` files silently corrupts downloads.
+        val work: suspend () -> Unit = {
             withTimeoutOrNull(5_000) {
                 settingsSaveJob?.cancel()
                 settingsRepo.save(_state.value.settings)
@@ -307,9 +421,16 @@ class AppStore(
                 persistResume()
             }
             engine.stop()
+            com.typebit.platform.Platform.ensureBackgroundMode(false)
+            _state.update { it.copy(engineRunning = false) }
+            synchronized(teardownLock) { stopping = false }
         }
-        com.typebit.platform.Platform.ensureBackgroundMode(false)
-        _state.update { it.copy(engineRunning = false) }
+
+        if (blocking) {
+            runBlocking { work() }
+        } else {
+            shutdownScope.launch { work() }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -328,27 +449,22 @@ class AppStore(
      * `(absolutePath, fileName)` pairs; `pieceLength` must be a supported power of two (16 KiB ..
      * 256 MiB).
      */
-    fun makeTorrent(
-            files: List<Pair<String, String>>,
-            pieceLength: Int,
-            name: String,
-            announce: String?,
-            comment: String?,
-    ): ByteArray? =
-            engine.makeTorrent(
-                    files = files.map { it.first to listOf(it.second) },
-                    pieceLength = pieceLength,
-                    name = name,
-                    announce = announce,
-                    comment = comment,
-            )
+    fun makeTorrent(options: com.typebit.engine.MakeTorrentOptions): ByteArray? =
+            engine.makeTorrent(options)
+
+    /** Live progress of the in-flight [makeTorrent] (safe to poll from the UI). */
+    fun makeTorrentProgress(): com.typebit.engine.MakeTorrentProgress =
+            engine.makeTorrentProgress()
+
+    /** Cancels the in-flight [makeTorrent]; true when a build was signalled. */
+    fun cancelMakeTorrent(): Boolean = engine.cancelMakeTorrent()
 
     fun addTorrentFile(bytes: ByteArray, fileName: String) {
         val s = _state.value.settings
         addTorrentFileEx(
                 bytes = bytes,
                 fileName = fileName,
-                saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
+                saveDir = Platform.resolveSaveDir(s.downloads.defaultSavePath),
                 category = "",
                 tags = emptyList(),
                 paused = s.downloads.addTorrentsInPause,
@@ -397,7 +513,7 @@ class AppStore(
         val s = _state.value.settings
         addMagnetEx(
                 uri = uri,
-                saveDir = s.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() },
+                saveDir = Platform.resolveSaveDir(s.downloads.defaultSavePath),
                 category = "",
                 tags = emptyList(),
                 paused = s.downloads.addTorrentsInPause,
@@ -761,6 +877,28 @@ class AppStore(
                             prio[file] = priority
                             rec.copy(filePriorities = prio)
                         } else rec
+                    }
+            persistRecords()
+        }
+    }
+
+    /**
+     * Bulk priority change (a directory toggle in the file tree).
+     *
+     * Uses the engine's ATOMIC `setFilePriorities` with the full index-aligned
+     * array instead of N `setFilePriority` calls: one JNI round-trip, one
+     * scheduler re-plan, and — for a two-phase magnet — a single hold release.
+     */
+    fun setFilePriorities(hash: String, updates: Map<Int, Int>) = onEngine {
+        if (updates.isEmpty()) return@onEngine
+        val rec = records.firstOrNull { it.hash == hash }
+        val size = maxOf(updates.keys.max() + 1, rec?.filePriorities?.size ?: 0)
+        val prio = MutableList(size) { rec?.filePriorities?.getOrNull(it) ?: 1 }
+        updates.forEach { (index, p) -> if (index in 0 until size) prio[index] = p.coerceIn(0, 2) }
+        if (engine.setFilePriorities(hash, prio)) {
+            records =
+                    records.map { r ->
+                        if (r.hash == hash) r.copy(filePriorities = prio) else r
                     }
             persistRecords()
         }
@@ -1404,7 +1542,13 @@ class AppStore(
      */
     suspend fun peers(hash: String): List<com.typebit.engine.PeerDto> =
             withContext(peersScope.coroutineContext) {
-                if (engine.isRunning) engine.peers(hash) else emptyList()
+                // Never throws: this runs inside the Peers tab's polling
+                // LaunchedEffect, and an exception escaping it cancels the
+                // composition scope — i.e. an app crash on Android.
+                runCatching {
+                            if (engine.isRunning) engine.peers(hash) else emptyList()
+                        }
+                        .getOrDefault(emptyList())
             }
 
     /**
@@ -1413,7 +1557,11 @@ class AppStore(
      */
     suspend fun fetchStats(): com.typebit.engine.EngineStatsDto =
             withContext(peersScope.coroutineContext) {
-                if (engine.isRunning) engine.stats() else com.typebit.engine.EngineStatsDto()
+                runCatching {
+                            if (engine.isRunning) engine.stats()
+                            else com.typebit.engine.EngineStatsDto()
+                        }
+                        .getOrDefault(com.typebit.engine.EngineStatsDto())
             }
 
     fun renameFile(hash: String, file: Int, name: String) = onEngine {
@@ -1498,10 +1646,8 @@ class AppStore(
         return if (from <= to) minutes in from until to else minutes >= from || minutes < to
     }
 
-    private fun effectiveSaveDir(): String {
-        val d = _state.value.settings.downloads
-        return d.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }
-    }
+    private fun effectiveSaveDir(): String =
+            Platform.resolveSaveDir(_state.value.settings.downloads.defaultSavePath)
 
     private fun buildCategories(): List<String> {
         val set = LinkedHashSet<String>()

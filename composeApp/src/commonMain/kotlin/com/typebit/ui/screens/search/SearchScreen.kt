@@ -137,7 +137,7 @@ fun SearchScreen(
 
     fun addResult(r: TorrentSearchResult) {
         val saveDir =
-            state.settings.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }
+            Platform.resolveSaveDir(state.settings.downloads.defaultSavePath)
         store.addMagnetEx(r.magnet, saveDir, "", emptyList(), paused = false)
         addedMagnets[r.magnet] = true
     }

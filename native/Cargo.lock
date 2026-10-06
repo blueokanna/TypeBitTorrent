@@ -26,9 +26,9 @@ dependencies = [
 
 [[package]]
 name = "courierust"
-version = "1.0.2"
+version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7bb1a920b57e0d907847427287d74f2f0848c3ca89b74ae2e43c172586d581e"
+checksum = "3a028ca438579e10e069b61b81e796ed8180b0c60a7c27026dc1ef32d62d47e9"
 
 [[package]]
 name = "getrandom"
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "typebit_native"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "courierust",
  "getrandom",

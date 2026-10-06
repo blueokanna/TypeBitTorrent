@@ -12,14 +12,28 @@ package com.typebit.platform
 expect fun playMediaFile(path: String): Boolean
 
 /** True when a filename is a playable video (ts/avi/rmvb/wmv/mp4/…). */
-fun isVideoFile(name: String): Boolean {
-    val n = name.substringBeforeLast('.').let { it to name.substringAfterLast('.', "") }
-    val lower = n.second.lowercase()
-    return lower in VIDEO_EXTENSIONS && n.first.isNotEmpty()
+fun isVideoFile(name: String): Boolean = extensionOf(name) in VIDEO_EXTENSIONS
+
+/** True when a filename is any media the platform player can open (video or audio). */
+fun isMediaFile(name: String): Boolean {
+    val ext = extensionOf(name)
+    return ext in VIDEO_EXTENSIONS || ext in AUDIO_EXTENSIONS
+}
+
+/** Lowercase extension of a path, `""` when there is none. */
+private fun extensionOf(name: String): String {
+    val base = name.substringAfterLast('/').substringAfterLast('\\')
+    if (base.isEmpty() || base.startsWith(".") && base.count { it == '.' } == 1) return ""
+    return base.substringAfterLast('.', "").lowercase()
 }
 
 /** Video container extensions the streaming scheduler treats as playback-first. */
 private val VIDEO_EXTENSIONS = setOf(
     "mp4", "mkv", "avi", "webm", "mov", "m4v",
     "ts", "flv", "wmv", "mpg", "mpeg", "rmvb", "rm", "3gp", "ogv",
+)
+
+/** Audio containers the platform player can stream the same way. */
+private val AUDIO_EXTENSIONS = setOf(
+    "mp3", "flac", "m4a", "aac", "wav", "ogg", "opus", "wma", "ape",
 )

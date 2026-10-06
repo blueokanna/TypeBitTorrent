@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.typebit.model.FileEntry
 import com.typebit.model.Torrent
+import com.typebit.platform.isMediaFile
 import com.typebit.platform.isVideoFile
 import com.typebit.platform.playMediaFile
 import com.typebit.store.AppStore
@@ -162,14 +163,23 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             onToggleDir = { _, _ -> },
             onPriorityLeaf = { i, p -> store.setFilePriority(torrent.hash, i, p) },
             onPriorityDir = { dirKey, p ->
-                findNodeByKey(fileTree, dirKey)?.leafIndices
-                    ?.forEach { store.setFilePriority(torrent.hash, it, p) }
+                // One bulk commit per directory: the engine releases the
+                // two-phase magnet hold and re-plans the scheduler ONCE
+                // instead of once per file.
+                val indices = findNodeByKey(fileTree, dirKey)?.leafIndices ?: emptyList()
+                store.setFilePriorities(
+                    torrent.hash,
+                    indices.associateWith { p },
+                )
             },
             onRename = { renamingIndex = it },
             filter = filterText,
             showSelection = false,
             onPreview = previewFile,
-            isVideo = { i -> torrent.files.getOrNull(i)?.let { isVideoFile(it.effectivePath) } == true },
+            isVideo = { i -> torrent.files.getOrNull(i)?.let { isMediaFile(it.effectivePath) } == true },
+            // Bounded height: the tree scrolls inside the tab instead of
+            // asking for the pager page's full height.
+            modifier = Modifier.weight(1f),
         )
     }
 }

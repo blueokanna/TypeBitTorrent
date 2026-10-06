@@ -6,12 +6,20 @@ package com.typebit.engine
 // `typebit_native` cdylib; the JVM class is `com.typebit.engine.NativeBridgeKt`
 // because these live in NativeBridge.kt (see native/src/jni_glue.rs).
 
+actual external fun nativeBridgeAbi(): Int
+
 actual external fun nativeCreateEngine(configJson: String, saveDir: String): Long
 actual external fun nativeDestroyEngine(handle: Long)
 /** Parse `.torrent` bytes → metainfo JSON (no engine add) for the dialog. */
 actual external fun nativeParseTorrent(data: ByteArray): String?
-/** Create a v1 `.torrent` from local files (blocking; off the main thread). */
-actual external fun nativeMakeTorrent(filesJson: String, pieceLength: Int, name: String, announce: String, comment: String): ByteArray?
+/** Create a v1 `.torrent` from an options object (blocking; off the main thread). */
+actual external fun nativeMakeTorrent(optionsJson: String): ByteArray?
+
+/** Live progress of the in-flight build (`done`/`total`/`running`/`cancelled`). */
+actual external fun nativeMakeTorrentProgress(): String
+
+/** Requests cancellation of the in-flight build (1 = signalled, 0 = idle). */
+actual external fun nativeMakeTorrentCancel(): Int
 
 actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?

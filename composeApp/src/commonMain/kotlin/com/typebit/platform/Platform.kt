@@ -14,8 +14,19 @@ expect object Platform {
     /** Per-user app data directory (created on demand). */
     fun appDataDir(): String
 
-    /** The default "Downloads" directory. */
+    /** The default "Downloads" directory (always app-writable). */
     fun defaultDownloadDir(): String
+
+    /**
+     * Resolves a save directory the engine can actually write to.
+     *
+     * `preferred` is the user's configured path; when it is blank, missing or
+     * NOT writable by this process (Android scoped storage denies direct
+     * access to public paths such as `/storage/emulated/0/Download` without
+     * `MANAGE_EXTERNAL_STORAGE`), the platform default is used instead of
+     * letting every piece write fail with EACCES.
+     */
+    fun resolveSaveDir(preferred: String): String
 
     /** An OS-assigned free TCP port (for "random port" mode). */
     fun findFreePort(): Int

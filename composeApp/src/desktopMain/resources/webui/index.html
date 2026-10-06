@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>TypeBitTorrent</title>
+<link rel="icon" href="favicon.svg">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- Login gate: shown until /api/session reports an authenticated client. -->
+<div id="gate" class="gate hidden">
+  <form id="gate-form" class="gate-card" autocomplete="off">
+    <h1>TypeBitTorrent</h1>
+    <p class="muted" id="gate-hint">请输入 WebUI 账户密码</p>
+    <label>用户名<input id="gate-user" name="username" autocomplete="username" value="admin"></label>
+    <label>密码<input id="gate-pass" name="password" type="password" autocomplete="current-password"></label>
+    <button type="submit" class="primary">登录</button>
+    <p id="gate-error" class="error"></p>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand">
+      <img src="favicon.svg" alt="" width="22" height="22">
+      <strong>TypeBitTorrent</strong>
+      <span class="pill" id="engine-state">引擎</span>
+    </div>
+    <div class="rates" id="rates">↓ 0 B/s · ↑ 0 B/s</div>
+    <nav class="tabs" id="tabs">
+      <button data-view="transfers" class="active">传输</button>
+      <button data-view="create">制作种子</button>
+      <button data-view="search">搜索</button>
+      <button data-view="rss">RSS</button>
+      <button data-view="stats">统计</button>
+      <button data-view="settings">设置</button>
+      <button data-view="logs">日志</button>
+    </nav>
+    <div class="right">
+      <span class="pill" id="session-info"></span>
+      <button id="logout" class="ghost">退出</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 传输 -->
+    <section id="view-transfers" class="view active">
+      <div class="toolbar">
+        <button id="add-toggle" class="primary">＋ 添加种子</button>
+        <input id="filter" placeholder="过滤名称 / 哈希">
+      </div>
+      <div id="add-panel" class="panel hidden">
+        <div class="grid2">
+          <label>磁力链接 / BTIH
+            <input id="add-magnet" placeholder="magnet:?xt=urn:btih:…">
+          </label>
+          <label>或上传 .torrent
+            <input id="add-file" type="file" accept=".torrent,application/x-bittorrent">
+          </label>
+          <label>保存目录（留空用默认）
+            <input id="add-path" placeholder="/downloads">
+          </label>
+          <label class="row"><input id="add-paused" type="checkbox"> 添加后暂停</label>
+        </div>
+        <button id="add-submit" class="primary">添加</button>
+        <p id="add-msg" class="muted"></p>
+      </div>
+
+      <table class="list">
+        <thead>
+          <tr>
+            <th>名称</th><th>状态</th><th>进度</th><th>大小</th>
+            <th>下载</th><th>上传</th><th>种子/用户</th><th>剩余</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="torrents"></tbody>
+      </table>
+      <p id="empty-list" class="muted center hidden">暂无种子 —— 点击「添加种子」导入 .torrent 或磁力链接</p>
+
+      <div id="detail" class="panel hidden">
+        <div class="detail-head">
+          <h2 id="detail-name"></h2>
+          <button id="detail-close" class="ghost">关闭</button>
+        </div>
+        <div class="tabs small" id="detail-tabs">
+          <button data-dtab="files" class="active">文件</button>
+          <button data-dtab="peers">Peers</button>
+          <button data-dtab="trackers">Tracker</button>
+          <button data-dtab="info">信息</button>
+          <button data-dtab="receipts">回执</button>
+        </div>
+        <div id="dtab-files" class="dview active">
+          <div class="row between">
+            <span class="muted" id="files-summary"></span>
+            <span class="row">
+              <label class="row small">全部优先级
+                <select id="bulk-prio">
+                  <option value="">—</option>
+                  <option value="0">不下载</option>
+                  <option value="1">正常</option>
+                  <option value="2">高优先级</option>
+                </select>
+              </label>
+            </span>
+          </div>
+          <table class="list small-table">
+            <thead><tr><th>文件</th><th>大小</th><th>优先级</th><th></th></tr></thead>
+            <tbody id="detail-files"></tbody>
+          </table>
+        </div>
+        <div id="dtab-peers" class="dview">
+          <table class="list small-table">
+            <thead><tr><th>地址</th><th>客户端</th><th>地区</th><th>状态</th><th>↓</th><th>↑</th><th>在途</th></tr></thead>
+            <tbody id="detail-peers"></tbody>
+          </table>
+          <p id="peers-empty" class="muted center hidden">暂无连接的用户</p>
+        </div>
+        <div id="dtab-trackers" class="dview">
+          <div class="row">
+            <input id="tracker-url" placeholder="http://…/announce 或 udp://…">
+            <button id="tracker-add" class="primary">添加</button>
+          </div>
+          <table class="list small-table">
+            <thead><tr><th>地址</th><th>状态</th><th>种子</th><th>下载者</th><th></th></tr></thead>
+            <tbody id="detail-trackers"></tbody>
+          </table>
+        </div>
+        <div id="dtab-info" class="dview">
+          <div id="detail-info" class="kv"></div>
+          <div class="row">
+            <input id="rename-torrent" placeholder="新的种子名称">
+            <button id="rename-torrent-btn">重命名种子</button>
+          </div>
+        </div>
+        <div id="dtab-receipts" class="dview">
+          <p class="muted">签名回执（Proof-of-Download）：只有引擎真实校验过 ≥90% 覆盖的区间才能签发。</p>
+          <button id="receipt-export" class="primary">导出回执</button>
+          <p id="receipt-msg" class="muted"></p>
+          <ul id="receipt-list" class="plain"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 制作种子 -->
+    <section id="view-create" class="view">
+      <div class="panel">
+        <h2>制作 .torrent（BEP-3 v1）</h2>
+        <p class="muted">
+          服务器端路径：填一个目录即可递归打包（保留目录结构），或逐个填写文件。
+          分块大小留空自动选择（目标 ~2000 块）。
+        </p>
+        <div class="grid2">
+          <label>目录（服务器路径）<input id="mk-dir" placeholder="/downloads/MyRelease"></label>
+          <label>种子名称<input id="mk-name" placeholder="默认取目录名"></label>
+          <label>分块大小（字节，0=自动）
+            <select id="mk-piece">
+              <option value="0">自动</option>
+              <option value="16384">16 KiB</option>
+              <option value="65536">64 KiB</option>
+              <option value="262144">256 KiB</option>
+              <option value="1048576">1 MiB</option>
+              <option value="4194304">4 MiB</option>
+              <option value="16777216">16 MiB</option>
+              <option value="67108864">64 MiB</option>
+            </select>
+          </label>
+          <label class="row"><input id="mk-private" type="checkbox"> 私有种子（BEP-27）</label>
+          <label>Tracker（每行一条）<textarea id="mk-trackers" rows="3" placeholder="udp://tracker.example:6969/announce"></textarea></label>
+          <label>Source 标记<input id="mk-source" placeholder="可选，私有站点交叉做种用"></label>
+          <label>注释<input id="mk-comment" placeholder="可选"></label>
+        </div>
+        <div class="row">
+          <button id="mk-run" class="primary">开始制作</button>
+          <button id="mk-cancel" class="ghost" disabled>取消</button>
+          <button id="mk-add" class="ghost" disabled>加入下载列表</button>
+          <button id="mk-save" class="ghost" disabled>保存 .torrent</button>
+        </div>
+        <div id="mk-progress-wrap" class="progress-wrap hidden">
+          <div class="progress"><span id="mk-bar"></span></div>
+          <span class="muted" id="mk-progress-text"></span>
+        </div>
+        <p id="mk-msg" class="muted"></p>
+        <div id="mk-result" class="kv hidden"></div>
+      </div>
+    </section>
+
+    <!-- 搜索 -->
+    <section id="view-search" class="view">
+      <div class="toolbar">
+        <input id="search-q" placeholder="关键词">
+        <button id="search-run" class="primary">搜索</button>
+        <span class="muted" id="search-msg"></span>
+      </div>
+      <table class="list">
+        <thead><tr><th>标题</th><th>来源</th><th>大小</th><th>种子</th><th>下载者</th><th></th></tr></thead>
+        <tbody id="search-results"></tbody>
+      </table>
+    </section>
+
+    <!-- RSS -->
+    <section id="view-rss" class="view">
+      <div class="toolbar">
+        <input id="rss-url" placeholder="https://example.com/feed.xml">
+        <button id="rss-add" class="primary">添加订阅</button>
+        <button id="rss-refresh">刷新</button>
+        <span class="muted" id="rss-msg"></span>
+      </div>
+      <ul id="rss-feeds" class="plain"></ul>
+      <table class="list">
+        <thead><tr><th>标题</th><th>来源</th><th>时间</th><th></th></tr></thead>
+        <tbody id="rss-items"></tbody>
+      </table>
+    </section>
+
+    <!-- 统计 -->
+    <section id="view-stats" class="view">
+      <div class="cards" id="stat-cards"></div>
+      <h3>引擎统计</h3>
+      <div class="kv" id="engine-stats"></div>
+      <h3>网络状态</h3>
+      <div class="kv" id="net-stats"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="view-settings" class="view">
+      <p class="muted">修改后点击保存；保存会立即应用到运行中的引擎（限速、并发、端口等）。</p>
+      <div id="settings-form" class="settings"></div>
+      <div class="row sticky-actions">
+        <button id="settings-save" class="primary">保存设置</button>
+        <span class="muted" id="settings-msg"></span>
+      </div>
+    </section>
+
+    <!-- 日志 -->
+    <section id="view-logs" class="view">
+      <pre id="logs" class="logs"></pre>
+    </section>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

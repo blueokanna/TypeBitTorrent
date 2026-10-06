@@ -320,14 +320,19 @@ data class BitTorrentSettings(
 
 @Serializable
 data class WebUiSettings(
-    /** Roadmap: the built-in WebUI server is not shipped in 0.1.0. */
+    /** Serve the built-in WebUI (desktop/NAS builds; the phone app ignores it). */
     val enabled: Boolean = true,
     val port: Int = 8080,
     val username: String = "admin",
-    /** BCrypt-style password hash — never the plaintext. */
+    /** PBKDF2-HMAC-SHA256 hash (`pbkdf2$…`) — never the plaintext. */
     val passwordHash: String = "",
     val hostHeaderValidation: Boolean = false,
     val httpsEnabled: Boolean = false,
+    /**
+     * Desktop only: also listen on the LAN instead of loopback.
+     * Headless deployments bind with `--bind=0.0.0.0` explicitly.
+     */
+    val remoteAccess: Boolean = false,
     val maxAuthFailCount: Int = 5,
     val banDurationSec: Long = 3600,
     val sessionTimeoutMinutes: Long = 60,

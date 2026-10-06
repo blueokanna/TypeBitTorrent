@@ -40,6 +40,7 @@ flowchart LR
 - [为什么](#为什么)
 - [代码结构](#代码结构)
 - [使用手册](#使用手册) —— 这东西到底怎么用
+- [NAS 与 WebUI](#nas-与-webui) —— 飞牛 / Unraid / Docker，不需要显示器
 - [引擎深潜](#引擎深潜) —— 里面是怎么转的
 - [踩过的坑](#踩过的坑)
 - [老实交代](#老实交代)
@@ -177,10 +178,19 @@ hash），**暂停 / 继续**，**删除**（有确认，连 `.part` 暂存文�
 
 ### 制作种子
 
-**制作**（桌面工具栏 / Android 顶栏图标）→ 选文件（桌面 AWT 多选；Android
-SAF），选**分块大小**（16 KiB … 256 MiB——大文件用 128/256 MiB 是一等
-选项），填名称、announce 地址、备注。引擎跨文件边界流式算 SHA-1（1 MiB
-分块），写出可分享的 `.torrent`。Android 上通过 Create-Document（SAF）落盘。
+**制作**（桌面工具栏 / Android 顶栏图标）→ 选**文件**或**整个文件夹**
+（递归遍历，跳过空文件/零字节，重复路径直接拒绝），然后填分块大小、名称、
+announce 地址、备注、**来源标签**（BEP-10 风格的 source，私人站点上传要用）
+和**私有**标记（BEP-27）。
+
+分块大小默认取「约 2000 块」对应的档位，这是私人站的常见要求；16 KiB …
+256 MiB 全部可选。引擎以 1 MiB 为单位跨文件边界流式算 SHA-1，界面显示
+**实时进度**（块数、字节、百分比）并支持**取消**，完成后给出真实 infohash，
+以及「保存 .torrent」「加入并做种」两个按钮。infohash 就是对最终写出字节
+计算的，所以你复制的和 swarm 上认的是同一个。
+
+WebUI 的 `POST /api/create` 走的是同一条制作路径，NAS 版本产出的种子
+字节级一致。
 
 ### 统计对话框
 
@@ -205,8 +215,48 @@ SAF），选**分块大小**（16 KiB … 256 MiB——大文件用 128/256 MiB 
   锁屏下继续跑。**忽略电池优化**按钮会引导你去系统豁免——某些 OEM ROM
   不做豁免就不给后台联网。
 - **返回手势**：子页面返回主界面而不是退出；详情面板内返回关闭详情。
+- **下载存哪**：默认保存路径是
+  `Android/data/com.typebit.app/files/Download/TypeBitTorrent`——应用私有的
+  外置目录，**不需要** `MANAGE_EXTERNAL_STORAGE` 就能写，USB/MTP 能看见，
+  也已包含在 FileProvider 里，所以「边下边播」拿得到真实 content URI。
+  想放共享目录就用文件夹选择器挑一个（前提是你已授权存储访问）。
+- **边下边播**：文件标签页里点媒体行会解析出真实 content URI（`.part` 按
+  扩展名 + 已声明 MIME 识别），以 `FLAG_GRANT_READ_URI_PERMISSION` 打开；
+  只有系统里确实没有应用能处理时才弹选择器。
 - **WiFi 组播锁**在 `Application.onCreate` 里、引擎创建任何 socket **之前**
   就获取——OEM ROM 不会事后补开组播，所以 LSD 从第一次 announce 就能收。
+
+### NAS 与 WebUI
+
+同一个二进制可以直接跑无界面模式，这正是 Rust/Kotlin 分层的意义：NAS 没有
+显示器，但它有引擎。
+
+```bash
+typebittorrent --headless --bind=0.0.0.0 --port=8080 \
+               --data=/config --downloads=/downloads --password='change-me'
+```
+
+`--headless`（或环境变量 `TYPEBIT_HEADLESS=1`）启动引擎并对外提供内置
+WebUI；`--port` / `--data` / `--downloads` / `--username` / `--password`
+在启动时覆盖已存设置，容器里更常用 `TYPEBIT_PASSWORD`。如果哪里都没设密码，
+程序会随机生成一个并在启动时打印一次——**永远不会**裸奔一个无密码的客户端。
+
+浏览器界面是**完整客户端**，不是状态页：传输、添加（磁力 / `.torrent` /
+URL）、单文件优先级与改名、tracker、peer 列表、分块图、全局与单任务限速、
+设置、引擎统计、搜索、RSS、**制作种子**，走的都是桌面窗口用的同一批
+`AppStore` 调用。
+
+打包产物在 [`packaging/`](./packaging)：
+
+| 目标平台 | 路径 | 说明 |
+|----------|------|------|
+| Docker（amd64/arm64） | `packaging/docker` | 多阶段构建、精简 JRE、非 root 运行、`/config` + `/downloads` 卷 |
+| Unraid | `packaging/unraid/typebittorrent.xml` | Container v2 模板；配 `/mnt/user/appdata/typebittorrent` + 你的下载共享 |
+| 飞牛 fnOS | `packaging/fnos` | `fnpack` 源码 + `build-fpk.sh`，`cmd/main` 支持 start/stop/status |
+| 任意 Linux | `scripts/build-linux.sh` | 生成上面两个平台要用的 app image |
+
+完整说明——包括反向代理/TLS 的做法、以及这些包**故意不做**什么——见
+[`docs/nas.md`](./docs/nas.md)。
 
 ### 设置参考
 
@@ -500,7 +550,11 @@ free-ride 地板的一律不按指纹阻断。
 - 不是每个 qBittorrent 计数器都有。引擎拿不到真实值的字段，UI 显示 `—`，
   绝不编一个出来。
 - uTP 实现了但多数 peer 选 TCP；"加密模式"设置只是存着——线上是明文。
-- WebUI 服务器在路线图上；设置会持久化，但它不提供任何服务。
+- WebUI 走的是**明文 HTTP**：它的定位是局域网内使用，或交给反向代理终止
+  TLS。没有内建证书管理，`启用 HTTPS` 只是把 Cookie 标成 `Secure`。
+- Unraid 的 Community Applications 要求 OSI 认可的开源许可证，而本项目是
+  PolyForm Perimeter 1.0.0，所以模板只提供手动安装（`packaging/unraid`），
+  没有往 CA 提交。
 - 搜索引擎是抓页面不是调 API——站点改 HTML 后某个引擎可能一直 BLOCKED，
   直到正则跟上。
 
@@ -524,9 +578,38 @@ gradlew.bat :composeApp:assembleDebug   # Android APK
 gradlew.bat :composeApp:createDistributable
 ```
 
+**发版之前**，先证明原生库和 Kotlin 桥完全对得上：
+
+```powershell
+.\scripts\verify-native.ps1
+```
+
+它会比对 `JNI_ABI`（Rust）和 `EXPECTED_BRIDGE_ABI`（Kotlin），并检查
+`NativeBridge.kt` 里每一个 `expect fun native*` 是否真的由 DLL 和四个
+`.so` 全部导出。省掉这一步的后果不是编译失败，而是：**装上去能开，一调用
+引擎就整进程消失，连异常都没有**——JNI 不带类型信息，签名漂移不是链接错误
+而是 SIGSEGV。任何原生签名或 JSON 契约的改动，必须在同一次提交里把
+`JNI_ABI` 加一。
+
+`build-android.ps1` 还会通过 `scripts/lib/gradle-env.ps1` 调 Gradle：如果
+`%USERPROFILE%\.gradle\gradle.properties` 里留着指向 **本机回环地址** 的代理
+（Clash/V2Ray 的遗留配置，代理一关，Gradle 每次构建都会 "Connection refused"），
+它会临时清掉、构建完再逐字节还原。代理确实在跑的话，设
+`TYPEBIT_KEEP_GRADLE_PROXY=1` 保留原样。
+
 桌面 DLL 打在 app jar 里（`native/typebit_native.dll`）；Android 的 `.so`
 在 `jniLibs`。你在发行目录里 `dir /s /b | findstr dll` 找不到 DLL？它在
 jar 里面，正常。这个坑每个版本都会坑一个人。每个版本。
+
+要往下改的话，这几处值得先看：
+
+| 路径 | 是什么 |
+|------|--------|
+| `native/src/make_torrent.rs` | 制作种子实现（BEP-3/12/27），带进度、取消和自测 |
+| `native/src/jni_glue.rs` | JNI 表面层，保持薄：只做解析和默认值 |
+| `composeApp/src/commonMain/kotlin/com/typebit/engine/TorrentEngine.kt` | 崩溃安全门面：调用失败退化成默认值，而不是把异常扔进协程 |
+| `composeApp/src/desktopMain/kotlin/com/typebit/webui/WebUiServer.kt` | NAS 端的产品面（同一个 store，换成 HTTP） |
+| `packaging/` | Docker / Unraid / fnOS 打包，基于 `scripts/build-linux.sh` 产物 |
 
 ## 文档与许可证
 

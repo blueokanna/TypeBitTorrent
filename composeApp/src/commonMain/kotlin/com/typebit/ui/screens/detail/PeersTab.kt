@@ -44,16 +44,33 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     var peers by remember(torrent.hash) { mutableStateOf<List<PeerDto>>(emptyList()) }
     LaunchedEffect(torrent.hash) {
         while (true) {
+            // `store.peers` is total: a stopped/busy engine or a malformed
+            // reply yields an empty list, never an exception — an exception
+            // here would cancel this effect's scope and crash the app.
             peers = store.peers(torrent.hash)
             delay(2_000)
         }
     }
 
+    // Connected peers first, then by download rate: the rows a user cares
+    // about (the ones actually moving data) stay on top on a busy swarm.
+    val ordered = remember(peers) {
+        peers.sortedWith(
+            compareByDescending<PeerDto> { it.phase == 2 }
+                .thenByDescending { it.down }
+                .thenBy { it.addr },
+        )
+    }
+    val swarmDown = peers.sumOf { it.down.coerceAtLeast(0L) }
+    val swarmUp = peers.sumOf { it.up.coerceAtLeast(0L) }
+
     Column(modifier.fillMaxSize().padding(16.dp)) {
         Text(
-            "当前连接：${peers.size}",
+            "当前连接：${peers.size} · ↓ ${Format.speed(swarmDown)} · ↑ ${Format.speed(swarmUp)}",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.width(0.dp))
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -63,11 +80,11 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
                 subtitle = "tracker / DHT 发现 peer 并完成握手后会显示在这里",
             )
         } else {
-            LazyColumn {
+            LazyColumn(Modifier.weight(1f)) {
                 // No `key` on purpose: the engine may briefly hold two
                 // connections from the same endpoint (rapid reconnect), and
                 // a duplicate LazyColumn key would crash the composition.
-                items(peers) { p ->
+                items(ordered) { p ->
                     PeerRow(p)
                 }
             }
@@ -108,9 +125,16 @@ private fun PeerRow(peer: PeerDto) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${peer.client} · ${Format.speed(peer.down)} ↓ / ${Format.speed(peer.up)} ↑",
+                buildString {
+                    append(peer.client.ifBlank { "未知客户端" })
+                    if (peer.seed) append(" · 做种")
+                    append(" · ${Format.speed(peer.down)} ↓ / ${Format.speed(peer.up)} ↑")
+                    if (peer.inflight > 0) append(" · 在途 ${peer.inflight} 块")
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         Text(

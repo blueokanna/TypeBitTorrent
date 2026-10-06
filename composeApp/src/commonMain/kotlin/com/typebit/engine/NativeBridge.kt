@@ -9,6 +9,14 @@ package com.typebit.engine
 // Engine lifecycle
 // ---------------------------------------------------------------------------
 
+/**
+ * ABI revision exported by the loaded native library. Checked against
+ * [EXPECTED_BRIDGE_ABI] before the first real call: a stale `.so`/`.dll` whose
+ * signatures drifted from this file would otherwise be called with the wrong
+ * argument layout and crash the process instead of returning an error.
+ */
+expect fun nativeBridgeAbi(): Int
+
 /** Creates the engine worker; returns an opaque handle (0 on failure). */
 expect fun nativeCreateEngine(configJson: String, saveDir: String): Long
 
@@ -24,11 +32,25 @@ expect fun nativeParseTorrent(data: ByteArray): String?
 
 /**
  * Creates a v1 `.torrent` from local files (blocking — call off the main
- * thread). `filesJson` is `[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]},…]`;
- * `pieceLength` must be a supported power of two (16 KiB .. 256 MiB).
- * Returns the raw `.torrent` bytes, or null on error.
+ * thread). `optionsJson` carries everything the builder needs:
+ *
+ * ```json
+ * {"files":[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]},…],
+ *  "piece_length":4194304,"name":"x","announce":["udp://…"],
+ *  "announce_list":[["udp://…","https://…"]],"comment":"…",
+ *  "source":"…","private":true,"created_by":"…"}
+ * ```
+ *
+ * `piece_length` must be a supported power of two (16 KiB .. 256 MiB).
+ * Returns the raw `.torrent` bytes, or throws (JNI) on invalid input.
  */
-expect fun nativeMakeTorrent(filesJson: String, pieceLength: Int, name: String, announce: String, comment: String): ByteArray?
+expect fun nativeMakeTorrent(optionsJson: String): ByteArray?
+
+/** Progress of the in-flight [nativeMakeTorrent]: `{"done":n,"total":n,"running":b,"cancelled":b}`. */
+expect fun nativeMakeTorrentProgress(): String
+
+/** Requests cancellation of the in-flight [nativeMakeTorrent]; 1 = signalled, 0 = idle. */
+expect fun nativeMakeTorrentCancel(): Int
 
 /**
  * Adds a `.torrent`; returns the hex infohash or null on error.

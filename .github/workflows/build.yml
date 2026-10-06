@@ -1,12 +1,20 @@
 # TypeBitTorrent — CI/CD
 #
-# Builds the Android APK (4 ABIs) and the Windows desktop distribution on
-# GitHub-hosted Windows runners, then uploads them as workflow artifacts.
+# Builds three deliverables on GitHub-hosted runners and uploads them as
+# workflow artifacts:
+#   * Android APK (4 ABIs)                → windows-latest
+#   * Windows portable app image (+EXE/MSI best effort) → windows-latest
+#   * Linux app image for fnOS/Unraid/Docker → ubuntu-latest
 #
-# The Rust engine lives in a SEPARATE public repository (`blueokanna/TypeBit`)
-# and is referenced by the native crate as a PATH dependency
-# (`native/Cargo.toml` → `typebit = { path = "../../TypeBit" }`), so this
-# workflow checks both repositories out as siblings before building.
+# The Rust engine comes from crates.io (`typebit = "0.1.9"` in
+# `native/Cargo.toml`), so a single checkout of this repository is enough.
+#
+# IMPORTANT — ABI rule: `native/src/lib.rs` exposes `JNI_ABI`, and
+# `NativeRuntime.EXPECTED_BRIDGE_ABI` must equal it. Any change to a native
+# function signature or to a JSON contract requires bumping `JNI_ABI`, and
+# every `.so`/`.dll` shipped in the same APK/zip must be rebuilt (the jobs below
+# always rebuild all of them). Without that, a stale library is loaded and the
+# JVM dies with SIGSEGV inside the first mismatched call.
 #
 # Triggers: push to `main`, pull requests against `main`, or manual dispatch.
 
@@ -31,19 +39,8 @@ jobs:
 
     steps:
       # ---------------------------------------------------------------- checkouts
-      - name: Checkout TypeBitTorrent
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: TypeBitTorrent
-
-      # The engine must sit NEXT TO this repo so `native/Cargo.toml`'s
-      # `path = "../../TypeBit"` resolves: TypeBitTorrent/native → ../../TypeBit.
-      - name: Checkout TypeBit (Rust engine)
-        uses: actions/checkout@v4
-        with:
-          repository: blueokanna/TypeBit
-          ref: main
-          path: TypeBit
 
       # ------------------------------------------------------------------ toolchain
       - name: Set up JDK 17
@@ -78,71 +75,72 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: TypeBit, TypeBitTorrent/native
+          workspaces: native
 
       # ------------------------------------------------------------------ native libs
       # build-desktop.ps1 → cargo build --release → copies typebit_native.dll
       # into composeApp/src/desktopMain/resources/native/.
       - name: Build Windows desktop native DLL
         shell: pwsh
-        working-directory: TypeBitTorrent
         run: powershell -ExecutionPolicy Bypass -File scripts/build-desktop.ps1
 
       # build-android.ps1 regenerates native/.cargo/config.toml with THIS
       # runner's NDK path (the committed one holds a local dev path), then
       # cross-compiles all 4 ABIs into composeApp/src/androidMain/jniLibs.
+      # It also verifies the JNI surface of every ABI below.
       - name: Build Android native libs (4 ABIs)
         shell: pwsh
-        working-directory: TypeBitTorrent
         run: |
           $env:ANDROID_NDK_HOME = "$env:ANDROID_HOME/ndk/26.2.11394342"
           if (-not (Test-Path $env:ANDROID_NDK_HOME)) {
             throw "ANDROID_NDK_HOME missing: $env:ANDROID_NDK_HOME"
           }
           powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1
-          $abis = @("arm64-v8a","armeabi-v7a","x86_64","x86")
-          foreach ($abi in $abis) {
-            $so = "composeApp/src/androidMain/jniLibs/$abi/libtypebit_native.so"
-            if (-not (Test-Path $so)) { throw "missing $so" }
-          }
 
       # ------------------------------------------------------------------ tests
-      - name: Run TypeBit engine tests
+      # Proves the Android .so set and the desktop DLL export exactly the JNI
+      # entry points `NativeBridge.kt` declares, and that JNI_ABI matches
+      # EXPECTED_BRIDGE_ABI. A mismatch does not fail to link — it SIGSEGVs the
+      # JVM inside the first mismatched call, which is unshippable.
+      - name: Verify the native bridge matches Kotlin
         shell: pwsh
-        working-directory: TypeBit
-        run: cargo test --lib
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.2.11394342
+        run: powershell -ExecutionPolicy Bypass -File scripts/verify-native.ps1
 
       - name: Run native bridge tests
         shell: pwsh
-        working-directory: TypeBitTorrent/native
+        working-directory: native
         run: cargo test
+
+      - name: Lint native bridge (clippy, warnings are errors)
+        shell: pwsh
+        working-directory: native
+        run: cargo clippy --all-targets -- -D warnings
 
       # ------------------------------------------------------------------ Android APK
       - name: Build Android APK (debug)
         shell: pwsh
-        working-directory: TypeBitTorrent
-        run: .\gradlew.bat :composeApp:assembleDebug
+        run: .\gradlew.bat :composeApp:assembleDebug --console=plain
 
       # ------------------------------------------------------------------ Windows desktop
       - name: Build Windows portable distribution
         shell: pwsh
-        working-directory: TypeBitTorrent
-        run: .\gradlew.bat :composeApp:createDistributable
+        run: .\gradlew.bat :composeApp:createDistributable --console=plain
 
       # Installers (EXE/MSI) are best-effort: they download WiX and use
       # jpackage, which can be flaky on hosted runners. The portable
       # distribution above is the guaranteed Windows deliverable.
       - name: Build Windows installers (EXE/MSI)
         shell: pwsh
-        working-directory: TypeBitTorrent
         continue-on-error: true
-        run: .\gradlew.bat :composeApp:packageDistributionForCurrentOS
+        run: .\gradlew.bat :composeApp:packageDistributionForCurrentOS --console=plain
 
       # ------------------------------------------------------------------ artifacts
       - name: Package Windows portable zip
         shell: pwsh
         run: |
-          $src = "TypeBitTorrent/composeApp/build/compose/binaries/main/app/TypeBitTorrent"
+          $src = "composeApp/build/compose/binaries/main/app/TypeBitTorrent"
           if (-not (Test-Path $src)) { throw "portable distribution missing: $src" }
           Compress-Archive -Path $src -DestinationPath "TypeBitTorrent-windows-portable.zip"
 
@@ -150,7 +148,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TypeBitTorrent-Android-APK
-          path: TypeBitTorrent/composeApp/build/outputs/apk/debug/composeApp-debug.apk
+          path: composeApp/build/outputs/apk/debug/composeApp-debug.apk
           if-no-files-found: error
 
       - name: Upload Windows portable
@@ -165,6 +163,85 @@ jobs:
         with:
           name: TypeBitTorrent-Windows-Installers
           path: |
-            TypeBitTorrent/composeApp/build/compose/binaries/main/exe/*.exe
-            TypeBitTorrent/composeApp/build/compose/binaries/main/msi/*.msi
+            composeApp/build/compose/binaries/main/exe/*.exe
+            composeApp/build/compose/binaries/main/msi/*.msi
           if-no-files-found: warn
+
+  nas:
+    name: Build Linux app image (fnOS / Unraid / Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle (caching)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      # jpackage (app image) needs binutils; the Skiko/Swing runtime links
+      # against the usual X11/font stack, which the container image strips away
+      # because headless mode never touches it.
+      - name: Install packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils fakeroot libxi6 libxrender1 libxtst6 libxext6 \
+            libfreetype6 fontconfig
+
+      - name: Build Linux app image
+        run: |
+          chmod +x scripts/build-linux.sh
+          scripts/build-linux.sh
+
+      - name: Smoke-test the headless server
+        run: |
+          OUT="$GITHUB_WORKSPACE/composeApp/build/compose/binaries/main/app/TypeBitTorrent"
+          mkdir -p /tmp/typebit-data /tmp/typebit-downloads
+          "$OUT/bin/TypeBitTorrent" --headless --bind=127.0.0.1 --port=18080 \
+            --data=/tmp/typebit-data --downloads=/tmp/typebit-downloads \
+            --password="ci-smoke-password" > /tmp/typebit.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/state > /tmp/state.json; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/ > /dev/null
+          python3 - <<'PY'
+          import json
+          with open("/tmp/state.json") as fh:
+              state = json.load(fh)
+          print("engine running:", state.get("engineRunning"))
+          assert state.get("engineRunning") is True, "engine did not start"
+          PY
+          kill "$PID"
+          wait "$PID" || true
+          cat /tmp/typebit.log
+
+      - name: Upload Linux app image
+        uses: actions/upload-artifact@v4
+        with:
+          name: TypeBitTorrent-Linux
+          path: build-TypeBitTorrent-linux-*.tar.gz
+          if-no-files-found: error
+
+      # The Docker image is what Unraid and fnOS users actually run; building it
+      # here proves the Dockerfile stays in sync with the app image layout.
+      - name: Build Docker image (no push)
+        run: |
+          docker build -f packaging/docker/Dockerfile -t typebittorrent:ci .
+

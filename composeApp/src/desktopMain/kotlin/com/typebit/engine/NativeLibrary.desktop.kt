@@ -3,15 +3,20 @@ package com.typebit.engine
 import java.io.File
 
 /**
- * Desktop loader. Resolution order:
+ * Desktop/JVM loader — platform aware, because the same app image now also
+ * ships for Linux (fnOS, Unraid and plain NAS/desktop installs).
  *
- * 1. `java.library.path` — for users who install the DLL system-wide.
- * 2. The classpath resource `/native/typebit_native.dll` — packaged
- *    distributions (scripts/build-desktop.ps1 puts it in desktopMain/resources).
+ * Resolution order:
+ *
+ * 1. `java.library.path` — for users who install the library system-wide.
+ * 2. The classpath resource `/native/<libname>` — packaged distributions
+ *    (`scripts/build-desktop.ps1` for Windows, `scripts/build-linux.sh` for
+ *    Linux/macOS put the freshly built library in `desktopMain/resources/native`).
  * 3. A few dev-tree locations, so `./gradlew :composeApp:run` works right
- *    after `scripts/build-desktop.ps1` without re-packaging.
+ *    after a native build without re-packaging.
  */
 actual fun loadNativeLibrary(): Boolean {
+    val fileName = nativeFileName()
     try {
         System.loadLibrary("typebit_native")
         return true
@@ -21,12 +26,12 @@ actual fun loadNativeLibrary(): Boolean {
         return false
     }
 
-    // 2) bundled resource (packaged MSI/EXE/jar)
+    // 2) bundled resource (packaged MSI/EXE/DEB/app image)
     try {
-        val resource = "/native/typebit_native.dll"
-        val stream = NativeLibraryLoader::class.java.getResourceAsStream(resource)
+        val stream = NativeLibraryLoader::class.java.getResourceAsStream("/native/$fileName")
         if (stream != null) {
-            val tmp = File.createTempFile("typebit_native", ".dll")
+            val suffix = fileName.substringAfterLast('.', "lib")
+            val tmp = File.createTempFile("typebit_native", ".$suffix")
             tmp.deleteOnExit()
             stream.use { input -> tmp.outputStream().use { output -> input.copyTo(output) } }
             System.load(tmp.absolutePath)
@@ -37,10 +42,11 @@ actual fun loadNativeLibrary(): Boolean {
     }
 
     // 3) dev-tree candidates
-    val candidates = listOf(
-        File("native/target/release/typebit_native.dll"),
-        File("composeApp/src/desktopMain/resources/native/typebit_native.dll"),
-    )
+    val candidates =
+        listOf(
+            File("native/target/release/$fileName"),
+            File("composeApp/src/desktopMain/resources/native/$fileName"),
+        )
     for (f in candidates) {
         try {
             if (f.isFile) {
@@ -53,6 +59,14 @@ actual fun loadNativeLibrary(): Boolean {
     }
     return false
 }
+
+/** `libtypebit_native.so` on Linux/Android, `.dylib` on macOS, `.dll` on Windows. */
+internal fun nativeFileName(): String =
+    when {
+        System.getProperty("os.name").contains("win", ignoreCase = true) -> "typebit_native.dll"
+        System.getProperty("os.name").contains("mac", ignoreCase = true) -> "libtypebit_native.dylib"
+        else -> "libtypebit_native.so"
+    }
 
 /** Tiny marker class so the resource stream lookup has a classloader anchor. */
 private object NativeLibraryLoader

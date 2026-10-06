@@ -50,5 +50,10 @@ actual object FileIO {
         return dir.list()?.sorted()
     }
 
+    actual fun size(path: String): Long {
+        val f = File(path)
+        return if (f.isFile) f.length() else -1L
+    }
+
     actual fun delete(path: String): Boolean = runCatching { File(path).delete() }.getOrDefault(false)
 }

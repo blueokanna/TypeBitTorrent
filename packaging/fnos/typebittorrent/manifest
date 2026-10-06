@@ -1,0 +1,17 @@
+appname=typebittorrent
+version=0.1.9
+display_name=TypeBitTorrent
+desc=基于 TypeBit Rust 引擎的 BitTorrent 客户端：无界面运行，内置 WebUI 管理全部功能（添加磁力/种子、暂停继续、文件优先级与重命名、Tracker 编辑、实时 Peers、引擎统计、搜索、RSS 与制作种子），下载直接落盘。
+source=thirdparty
+platform=x86
+maintainer=blueokanna
+maintainer_url=https://github.com/blueokanna/TypeBitTorrent
+distributor=blueokanna
+distributor_url=https://github.com/blueokanna/TypeBitTorrent
+os_min_version=1.2.0
+desktop_uidir=ui
+desktop_applaunchname=typebittorrent.main
+service_port=8080
+ctl_stop=true
+checkport=false
+changelog=首个版本：无头模式 + 内置 WebUI（传输、文件优先级、Tracker、Peers、统计、搜索、RSS、制作种子）。

@@ -24,6 +24,9 @@ expect object FileIO {
     /** Lists directory entry names (files and folders), or null when absent. */
     fun listDir(path: String): List<String>?
 
+    /** File size in bytes, or -1 when [path] is missing / not a file. */
+    fun size(path: String): Long
+
     /** Deletes a file. Returns false when it did not exist (or failed). */
     fun delete(path: String): Boolean
 }

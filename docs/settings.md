@@ -79,7 +79,21 @@ per option, whether it is **live** (actually drives the engine/bridge),
 
 ## WebUI
 
-All options are **stored** — the WebUI server is a roadmap item.
+| option | effect |
+|--------|--------|
+| 启用 WebUI | **live** — the desktop build starts/stops the embedded server |
+| 端口 | **live** — the socket is rebound when it changes |
+| 用户名 / 密码 | **live** — read per request; PBKDF2 hash only, plaintext never stored |
+| 允许局域网访问（桌面版） | **live** — off = `127.0.0.1`, on = `0.0.0.0` |
+| 本机免登录 | **live** — loopback callers skip authentication |
+| 主机头校验 | **live** — validates `Host` (DNS-rebinding defence) |
+| 反向代理模式 | **live** — trust `X-Forwarded-For` / `X-Forwarded-Proto` |
+| 启用 HTTPS | advisory only — this server speaks plain HTTP; terminate TLS in front |
+| CSRF 保护 / 反点击劫持 | **live** — `X-TypeBit` header + `SameSite=Strict`, `X-Frame-Options`, CSP |
+| 会话超时 / 最大登录失败 / 封禁时长 | **live** — session TTL and per-address throttling |
+
+Headless deployments (`--headless`) bind `0.0.0.0` by default and can override
+every one of these on the command line; see [nas.md](./nas.md).
 
 ## 高级 (Advanced)
 

@@ -1,0 +1,103 @@
+#!/bin/bash
+# fnOS lifecycle entry point for TypeBitTorrent.
+#
+# Contract (developer.fnnas.com/docs/core-concepts/framework): `status` exits 0
+# when the service runs, 3 when it does not, 1 on a real failure; `start` and
+# `stop` must be idempotent.
+#
+# The package ships a self-contained app image (its own JRE), so no runtime
+# dependency is declared in `manifest` — the NAS needs nothing installed.
+#
+# Environment provided by fnOS (see the framework docs):
+#   TRIM_APPDEST   install root, e.g. /var/apps/typebittorrent/target
+#   TRIM_TEMP_LOGFILE, TRIM_SERVICE_PORT, TRIM_DATA_SHARE_PATHS, TRIM_PKGVAR …
+set -u
+
+APPNAME="typebittorrent"
+# TRIM_APPDEST is where fnOS installs the package payload; fall back to the
+# script's own location so the package can also be driven by hand while
+# debugging (`./cmd/main start` from an unpacked .fpk).
+APPDEST="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd | sed 's#/cmd$##')}"
+BIN="${APPDEST}/app/bin/TypeBitTorrent"
+CONFIG_DIR="${TRIM_PKGVAR:-${APPDEST}/var}/config"
+DOWNLOAD_DIR="${TRIM_DATA_SHARE_PATHS:-/vol1/typebittorrent}/downloads"
+PIDFILE="${CONFIG_DIR}/typebit.pid"
+LOGFILE="${TRIM_TEMP_LOGFILE:-${CONFIG_DIR}/typebit.log}"
+PORT="${TRIM_SERVICE_PORT:-8080}"
+
+log() { echo "$(date '+%F %T') $*" >>"$LOGFILE" 2>/dev/null || true; }
+
+is_running() {
+    [ -f "$PIDFILE" ] || return 1
+    local pid
+    pid="$(cat "$PIDFILE" 2>/dev/null)"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+    if is_running; then
+        return 0
+    fi
+    mkdir -p "$CONFIG_DIR" "$DOWNLOAD_DIR"
+    if [ ! -x "$BIN" ]; then
+        log "missing executable: $BIN"
+        return 1
+    fi
+    # A password must exist: without one the server generates a random one and
+    # prints it to the log, which is unhelpful in a NAS UI — so default to a
+    # generated-but-persisted value on first start and tell the user to change
+    # it in the WebUI settings.
+    if [ ! -f "${CONFIG_DIR}/.initialized" ]; then
+        touch "${CONFIG_DIR}/.initialized"
+    fi
+    log "starting: $BIN --headless --data=$CONFIG_DIR --downloads=$DOWNLOAD_DIR --port=$PORT"
+    nohup "$BIN" --headless \
+        --bind=0.0.0.0 \
+        --port="$PORT" \
+        --data="$CONFIG_DIR" \
+        --downloads="$DOWNLOAD_DIR" \
+        >>"$LOGFILE" 2>&1 &
+    echo $! >"$PIDFILE"
+    sleep 2
+    if is_running; then
+        log "started pid $(cat "$PIDFILE")"
+        return 0
+    fi
+    log "failed to start"
+    return 1
+}
+
+stop() {
+    if ! is_running; then
+        rm -f "$PIDFILE"
+        return 0
+    fi
+    local pid
+    pid="$(cat "$PIDFILE")"
+    # SIGTERM first: the client flushes resume data and joins the engine worker
+    # before exiting, so a clean stop never loses progress.
+    kill "$pid" 2>/dev/null
+    for _ in $(seq 1 20); do
+        is_running || break
+        sleep 0.5
+    done
+    if is_running; then
+        log "graceful stop timed out, sending SIGKILL to $pid"
+        kill -9 "$pid" 2>/dev/null
+    fi
+    rm -f "$PIDFILE"
+    return 0
+}
+
+case "${1:-}" in
+    start) start ;;
+    stop) stop ;;
+    status)
+        if is_running; then exit 0; else exit 3; fi
+        ;;
+    *)
+        log "unknown command: ${1:-}"
+        exit 1
+        ;;
+esac

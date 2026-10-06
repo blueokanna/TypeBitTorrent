@@ -10,6 +10,15 @@ package com.typebit.engine
  */
 expect fun loadNativeLibrary(): Boolean
 
+/**
+ * ABI revision this Kotlin code requires from the native library.
+ *
+ * Keep in sync with `JNI_ABI` in `native/src/lib.rs`. Bumping either side
+ * without the other makes the app report "原生库版本不匹配" instead of
+ * crashing inside a JNI call with a stale signature layout.
+ */
+const val EXPECTED_BRIDGE_ABI = 2
+
 private var nativeReady = false
 
 /** Must be called before any native call. Throws if the library is absent. */

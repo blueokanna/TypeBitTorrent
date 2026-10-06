@@ -205,17 +205,31 @@ fun FileTreeView(
     showSelection: Boolean = true,
     /** 边下边播: play callback (leaf index) — shown for [isVideo] leaves. */
     onPreview: ((Int) -> Unit)? = null,
-    /** Whether a leaf index is a playable video (drives the preview button). */
+    /** Whether a leaf index is a playable media file (drives the preview button). */
     isVideo: ((Int) -> Boolean)? = null,
+    /** Applied to the list itself (the caller owns the height contract). */
+    modifier: Modifier = Modifier,
 ) {
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val q = filter.trim()
-    // Reads of `expanded` inside the calculation are tracked, so toggling a
-    // directory re-runs the flatten and children appear/disappear.
-    val visible = remember(roots, q) { collectVisible(roots, q, expanded) }
+    // Snapshot the expansion map and key the flatten on it. A read inside the
+    // `remember` calculation is NOT a valid dependency for the calculation
+    // itself: Compose would recompose the caller but `remember` would keep
+    // returning the stale list, so collapsing/expanding a directory did
+    // nothing. Copying the map is O(toggled dirs) and keying on its content
+    // (`Map.equals`, not identity) recomputes exactly when a toggle changes.
+    val expandedSnapshot = expanded.toMap()
+    val visible = remember(roots, q, expandedSnapshot) {
+        collectVisible(roots, q, expandedSnapshot)
+    }
+    // LazyColumn crashes the composition on a duplicate key. The keys built
+    // from the torrent's file table are unique by construction, but a
+    // malformed file list (duplicate paths from a hand-crafted torrent) must
+    // degrade to a slightly merged view instead of killing the app.
+    val rows = remember(visible) { visible.distinctBy { it.key } }
 
-    LazyColumn(Modifier.fillMaxWidth()) {
-        items(visible, key = { it.key }) { node ->
+    LazyColumn(modifier.fillMaxWidth()) {
+        items(rows, key = { it.key }) { node ->
             // Directories default to EXPANDED so the user immediately sees
             // every file inside — the #1 complaint ("不知道种子里有什么").
             val open = expanded[node.key] ?: true
@@ -256,11 +270,14 @@ fun FileTreeView(
                 // whole row is the hit target, matching qBittorrent.
                 Row(
                     Modifier.weight(1f).clickable {
-                        if (node.isDir) {
-                            expanded[node.key] = !open
-                        } else {
-                            val idx = node.leafIndex ?: -1
-                            if (showSelection) onToggleLeaf(idx, !isSelected(idx))
+                        val idx = node.leafIndex ?: -1
+                        when {
+                            node.isDir -> expanded[node.key] = !open
+                            showSelection -> onToggleLeaf(idx, !isSelected(idx))
+                            // Detail tab (no checkboxes): tapping a playable
+                            // file opens it, so a full-width row is not a
+                            // dead hit target.
+                            onPreview != null && isVideo?.invoke(idx) == true -> onPreview(idx)
                         }
                     },
                     verticalAlignment = Alignment.CenterVertically,
@@ -352,7 +369,7 @@ fun FileTreeView(
 private fun collectVisible(
     nodes: List<FileTreeNode>,
     q: String,
-    expanded: MutableMap<String, Boolean>,
+    expanded: Map<String, Boolean>,
 ): List<FileTreeNode> {
     val out = mutableListOf<FileTreeNode>()
     fun walk(list: List<FileTreeNode>) {

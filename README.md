@@ -41,6 +41,7 @@ flowchart LR
 - [why](#why)
 - [the stack](#the-stack)
 - [user guide](#user-guide) — how to actually use this thing
+- [NAS & WebUI](#nas--webui) — fnOS / Unraid / Docker, no display required
 - [engine deep-dive](#engine-deep-dive) — how it works under the hood
 - [war stories](#war-stories)
 - [honest limitations](#honest-limitations)
@@ -191,12 +192,21 @@ persist across restarts.
 
 ### create a torrent
 
-**Create** (desktop toolbar or Android top-bar icon) → pick files (AWT
-multi-select on desktop; SAF on Android), choose **piece length** (16 KiB …
-256 MiB — 128/256 MiB are first-class options for huge files), name, announce
-URLs, comment. The engine streams SHA-1 across file boundaries (1 MiB chunks)
-and writes a `.torrent` you can share. On Android the file lands via
-Create-Document (SAF).
+**Create** (desktop toolbar or Android top-bar icon) → pick files, or a whole
+**folder** (recursive walk, empty/zero-byte files skipped, duplicates
+rejected), then set piece length, name, announce URLs, comment, **source tag**
+(BEP-10 style, for private-tracker uploads) and the **private** flag (BEP-27).
+
+Piece size defaults to whatever lands near 2000 pieces, which is what private
+trackers expect; 16 KiB … 256 MiB are all selectable. The engine streams SHA-1
+across file boundaries in 1 MiB chunks, reports **live progress** (piece count,
+bytes, percentage) with a working **cancel**, and then hands you the real
+infohash plus buttons to save the `.torrent` and/or start seeding it. The
+infohash is computed from the exact bencode that gets written, so what you copy
+is what the swarm will ask for.
+
+The same creation path backs `POST /api/create` in the WebUI, so a NAS build
+produces byte-identical torrents.
 
 ### stats dialog
 
@@ -223,9 +233,53 @@ The **bar-chart button** opens a live stats dialog (1 s refresh):
   some OEM ROMs for background networking).
 - **Back gesture**: back from a sub-screen returns to the main screen instead
   of quitting; back in the detail panel closes it.
+- **Where downloads go**: the default save path is
+  `Android/data/com.typebit.app/files/Download/TypeBitTorrent` — an
+  app-private external directory, i.e. writable without
+  `MANAGE_EXTERNAL_STORAGE`, visible over USB/MTP and covered by the
+  FileProvider, so playing a file mid-download works. Point it at a shared
+  folder with the folder picker if you granted storage access.
+- **Play while downloading**: tapping a media row in the Files tab resolves
+  the real content URI (`.part` files are recognised by extension + declared
+  MIME) and opens it with `FLAG_GRANT_READ_URI_PERMISSION`; a chooser appears
+  only when no app can be resolved.
 - The **WiFi multicast lock** is acquired in `Application.onCreate`, before
   the engine creates any socket — OEM ROMs won't enable multicast
   retroactively, so LSD works from the very first announce.
+
+### nas & webui
+
+The same binary runs headless, which is the point of the Rust/Kotlin split: a
+NAS has no display but it does have the engine.
+
+```bash
+typebittorrent --headless --bind=0.0.0.0 --port=8080 \
+               --data=/config --downloads=/downloads --password='change-me'
+```
+
+`--headless` (or `TYPEBIT_HEADLESS=1`) starts the engine and serves the
+built-in WebUI; `--port` / `--data` / `--downloads` / `--username` /
+`--password` override stored settings on boot. `TYPEBIT_PASSWORD` is the
+container-friendly alternative. If no password is set anywhere, one is
+generated and printed once — an unauthenticated client is never served.
+
+The browser UI is a full client, not a status page: transfers, add (magnet /
+`.torrent` / URL), per-file priorities and renames, trackers, peers, piece
+map, global + per-torrent speed limits, settings, engine statistics,
+search engines, RSS and **torrent creation** all drive the same `AppStore`
+calls the desktop window uses.
+
+Ready-made packaging lives in [`packaging/`](./packaging):
+
+| target | path | notes |
+|--------|------|-------|
+| Docker (amd64/arm64) | `packaging/docker` | multi-stage, distroless-ish JRE, non-root, `/config` + `/downloads` volumes |
+| Unraid | `packaging/unraid/typebittorrent.xml` | Container v2 template; `/mnt/user/appdata/typebittorrent` + your downloads share |
+| 飞牛 fnOS | `packaging/fnos` | `fnpack` sources + `build-fpk.sh`, `cmd/main` with start/stop/status |
+| any Linux | `scripts/build-linux.sh` | produces the app image the two above consume |
+
+Full instructions, including the reverse-proxy/TLS story and what the
+packages deliberately do *not* do, are in [`docs/nas.md`](./docs/nas.md).
 
 ### settings reference
 
@@ -312,9 +366,22 @@ engine on change.
 
 #### WebUI
 
+The embedded server is shipped; the desktop build starts it on demand and the
+headless build always serves it.
+
 | setting | default | meaning |
 |---------|---------|---------|
-| 全部 | — | **Roadmap.** Settings persist but the built-in WebUI server does not ship yet. No pretending. |
+| 启用 WebUI | on | start/stop the HTTP server (desktop); headless ignores it |
+| 端口 | 8080 | listening port (rebound live) |
+| 用户名 / 密码 | admin / empty | credentials; password stored as PBKDF2-HMAC-SHA256 |
+| 允许局域网访问 | off | off → `127.0.0.1` only, on → `0.0.0.0` |
+| 本机免登录 | on | loopback callers skip authentication |
+| 最大登录失败次数 / 封禁时长 | 5 / 3600 s | per-address throttling |
+| 会话超时 | 60 min | session TTL |
+| 主机头校验 | off | validate `Host` (DNS-rebinding defence) |
+| 反向代理模式 | off | trust `X-Forwarded-For` / `X-Forwarded-Proto` |
+| 启用 HTTPS | off | advisory: this server is plain HTTP, put TLS in front |
+| CSRF 保护 / 反点击劫持 | on / on | `X-TypeBit` header + `SameSite=Strict`; `X-Frame-Options` + CSP |
 
 #### 高级 (Advanced)
 
@@ -543,7 +610,12 @@ fingerprint.
   honestly, the UI shows `—` instead of inventing one.
 - uTP is implemented but most peers pick TCP; "encryption mode" settings are
   stored UI — the wire is plaintext.
-- The WebUI server is on the roadmap; its settings persist but serve nothing.
+- The WebUI speaks **plain HTTP**. It is designed for a LAN or a reverse proxy
+  that terminates TLS; there is no built-in certificate management, and
+  `启用 HTTPS` only flips the `Secure` cookie flag.
+- The Unraid Community Applications feed requires an OSI-approved license and
+  this project is under PolyForm Perimeter 1.0.0, so the template is shipped
+  for manual install (`packaging/unraid`) rather than submitted to CA.
 - The search engines are scraped, not API-driven — sites change their HTML and
   an engine can go BLOCKED until the regex catches up.
 
@@ -567,10 +639,41 @@ gradlew.bat :composeApp:assembleDebug   # Android APK
 gradlew.bat :composeApp:createDistributable
 ```
 
+**Before you ship anything**, prove the libraries match the Kotlin bridge:
+
+```powershell
+.\scripts\verify-native.ps1
+```
+
+It compares `JNI_ABI` (Rust) with `EXPECTED_BRIDGE_ABI` (Kotlin) and checks
+that every `expect fun native*` in `NativeBridge.kt` is actually exported by the
+DLL and by all four `.so`s. Skipping this is how you get an app that compiles,
+installs, and then **dies with no exception the moment it calls into the
+engine** — JNI carries no type information, so a signature drift is not a link
+error, it is a SIGSEGV. Bump `JNI_ABI` in the same commit as any native
+signature or JSON contract change.
+
+`build-android.ps1` also runs Gradle through `scripts/lib/gradle-env.ps1`, which
+temporarily neutralises a **loopback** proxy in
+`%USERPROFILE%\.gradle\gradle.properties` (the leftover Clash/V2Ray setting that
+makes every Gradle build fail with "Connection refused" once the proxy is gone)
+and restores that file byte-for-byte afterwards. Set `TYPEBIT_KEEP_GRADLE_PROXY=1`
+if your proxy is genuinely running.
+
 The desktop DLL ships inside the app jar (`native/typebit_native.dll`); the
 Android `.so`s live in `jniLibs`. If you `dir /s /b | findstr dll` the distro
 and see nothing, that's because the DLL is *in the jar*. This has confused
 exactly one person per release. Every release.
+
+Files worth knowing if you are extending this:
+
+| path | what it is |
+|------|------------|
+| `native/src/make_torrent.rs` | the torrent builder (BEP-3/12/27) with progress, cancellation and its own tests |
+| `native/src/jni_glue.rs` | the JNI surface; keep it thin — parsing and defaults only |
+| `composeApp/src/commonMain/kotlin/com/typebit/engine/TorrentEngine.kt` | the crash-proof facade: a failing call degrades to a default instead of throwing into a coroutine |
+| `composeApp/src/desktopMain/kotlin/com/typebit/webui/WebUiServer.kt` | the NAS product surface (same store, HTTP instead of pixels) |
+| `packaging/` | Docker / Unraid / fnOS packaging built on `scripts/build-linux.sh` |
 
 ## docs & license
 

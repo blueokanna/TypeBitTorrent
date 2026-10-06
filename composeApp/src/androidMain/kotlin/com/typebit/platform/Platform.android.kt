@@ -4,6 +4,7 @@ import android.os.Environment
 import android.os.PowerManager
 import com.typebit.AppContextHolder
 import com.typebit.download.DownloadService
+import java.io.File
 import java.net.ServerSocket
 
 actual object Platform {
@@ -23,9 +24,51 @@ actual object Platform {
     actual fun appDataDir(): String =
         AppContextHolder.context.filesDir.absolutePath
 
+    /**
+     * A directory the app is actually allowed to write to.
+     *
+     * The public `Downloads/` path is NOT writable by this app: since
+     * Android 10 (API 29) scoped storage forbids direct file access to
+     * `/storage/emulated/0/Download` without `MANAGE_EXTERNAL_STORAGE`
+     * (which Play policy rejects for a torrent client), and this app declares
+     * no storage permission at all. Pointing the engine there made every
+     * `.part` write fail with EACCES.
+     *
+     * `getExternalFilesDir(DIRECTORY_DOWNLOADS)` is the app's own external
+     * files directory — writable with NO permission, visible to the user
+     * under `Android/data/<pkg>/files/Download`, and already covered by the
+     * FileProvider roots (`<external-files-path>`), so 边下边播 can hand a
+     * `.part` file to the system player through a temporary content URI.
+     */
     actual fun defaultDownloadDir(): String {
-        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return downloads?.absolutePath ?: AppContextHolder.context.filesDir.absolutePath
+        val ctx = AppContextHolder.context
+        val external = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        val base = external ?: File(ctx.filesDir, "Download")
+        val dir = File(base, "TypeBitTorrent")
+        if (!dir.exists()) dir.mkdirs()
+        return dir.absolutePath
+    }
+
+    actual fun resolveSaveDir(preferred: String): String {
+        val trimmed = preferred.trim()
+        if (trimmed.isNotEmpty() && isWritableDir(File(trimmed))) return File(trimmed).absolutePath
+        return defaultDownloadDir()
+    }
+
+    /** True when the directory exists (or can be created) AND accepts a write. */
+    private fun isWritableDir(dir: File): Boolean {
+        return try {
+            if (!dir.exists() && !dir.mkdirs()) {
+                false
+            } else {
+                val probe = File(dir, ".typebit_write_probe")
+                probe.writeText("")
+                probe.delete()
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     actual fun findFreePort(): Int =

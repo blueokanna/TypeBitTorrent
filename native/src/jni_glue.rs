@@ -223,11 +223,15 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeParseTorrent
     })
 }
 
-/// Parse a JSON array of files for `nativeMakeTorrent`: `[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]}, …]`.
-fn parse_make_files(json: &str) -> Result<Vec<crate::make_torrent::FileSpec>, String> {
+/// Process-wide progress of the (single) in-flight `nativeMakeTorrent`.
+/// The UI polls it for a real progress bar and sets the cancel flag through
+/// `nativeMakeTorrentCancel`.
+static MAKE_PROGRESS: crate::make_torrent::BuildProgress =
+    crate::make_torrent::BuildProgress::new();
+
+/// Decode the byte array of a `files` entry: `[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]}, …]`.
+fn parse_make_files(v: &nextjson::Value) -> Result<Vec<crate::make_torrent::FileSpec>, String> {
     use nextjson::Value;
-    let v: Value =
-        nextjson::nextdecode(json.as_bytes()).map_err(|e| format!("bad files json: {e}"))?;
     let arr = v.as_array().ok_or("files must be a JSON array")?;
     let mut out = Vec::with_capacity(arr.len());
     for e in arr {
@@ -257,55 +261,143 @@ fn parse_make_files(json: &str) -> Result<Vec<crate::make_torrent::FileSpec>, St
     Ok(out)
 }
 
-fn opt_str(s: &str) -> Option<&str> {
-    let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t)
-    }
+/// Decode an array of tracker URL strings.
+fn url_list(v: Option<&nextjson::Value>) -> Vec<String> {
+    v.and_then(nextjson::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(nextjson::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-/// Create a v1 `.torrent` from local files (blocking, caller's thread). `files_json` is the array
-/// parsed by [`parse_make_files`]; returns raw `.torrent` bytes, or null (with a Java exception).
+/// Decode the whole `nativeMakeTorrent` options object:
+///
+/// ```json
+/// {"files":[{"abs":"…","rel":[…]},…],"piece_length":4194304,"name":"x",
+///  "announce":["udp://…"],"announce_list":[["udp://…","https://…"]],
+///  "comment":"…","source":"…","private":true,"created_by":"…"}
+/// ```
+///
+/// `announce` is used as tier 0 when `announce_list` is absent, so a caller
+/// that only knows about single trackers keeps working.
+fn parse_make_options(json: &str) -> Result<crate::make_torrent::TorrentBuild, String> {
+    use nextjson::Value;
+    let v: Value =
+        nextjson::nextdecode(json.as_bytes()).map_err(|e| format!("bad options json: {e}"))?;
+    let files = parse_make_files(v.get("files").unwrap_or(&v))?;
+    let piece_length = v
+        .get("piece_length")
+        .and_then(Value::as_u64)
+        .ok_or("options missing piece_length")? as u32;
+    let name = v
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let announce_list: Vec<Vec<String>> = match v.get("announce_list").and_then(Value::as_array) {
+        Some(tiers) => tiers.iter().map(|t| url_list(Some(t))).collect(),
+        None => {
+            let flat = url_list(v.get("announce"));
+            if flat.is_empty() {
+                Vec::new()
+            } else {
+                vec![flat]
+            }
+        }
+    };
+    Ok(crate::make_torrent::TorrentBuild {
+        files,
+        piece_length,
+        name,
+        comment: v.get("comment").and_then(Value::as_str).map(str::to_string),
+        created_by: v
+            .get("created_by")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        source: v.get("source").and_then(Value::as_str).map(str::to_string),
+        is_private: v
+            .get("private")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        announce_list,
+    })
+}
+
+
+/// Create a v1 `.torrent` from local files (blocking, caller's thread).
+///
+/// `options_json` is the object decoded by [`parse_make_options`]. Returns the
+/// raw `.torrent` bytes, or null with a pending Java exception carrying the
+/// reason. Progress is published through [`MAKE_PROGRESS`]; only ONE build may
+/// run at a time (the UI disables the button while busy).
 #[no_mangle]
 pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrent(
     unowned: EnvUnowned,
     _class: JClass,
-    files_json: JString,
-    piece_length: jint,
-    name: JString,
-    announce: JString,
-    comment: JString,
+    options_json: JString,
 ) -> jbyteArray {
     with_env(unowned, |env| {
-        let files_json = jstr(env, &files_json);
-        let name = jstr(env, &name);
-        let announce = jstr(env, &announce);
-        let comment = jstr(env, &comment);
-        let specs = match parse_make_files(&files_json) {
-            Ok(s) => s,
+        let json = jstr(env, &options_json);
+        let build = match parse_make_options(&json) {
+            Ok(b) => b,
             Err(e) => {
                 throw(env, &format!("nativeMakeTorrent: {e}"));
                 return Ok(std::ptr::null_mut());
             }
         };
-        match crate::make_torrent::create_torrent_v1(
-            &specs,
-            piece_length as u32,
-            if name.trim().is_empty() {
-                "torrent"
-            } else {
-                name.trim()
-            },
-            opt_str(&announce),
-            opt_str(&comment),
-        ) {
+        match crate::make_torrent::create_torrent(&build, &MAKE_PROGRESS) {
             Ok(bytes) => Ok(env.byte_array_from_slice(&bytes)?.into_raw()),
             Err(e) => {
+                // Mark the build finished even on failure so a polling UI
+                // never spins on a dead progress record.
+                MAKE_PROGRESS.finish();
                 throw(env, &format!("nativeMakeTorrent: {e}"));
                 Ok(std::ptr::null_mut())
             }
+        }
+    })
+}
+
+/// Live progress of the in-flight `nativeMakeTorrent`:
+/// `{"done":n,"total":n,"running":bool,"cancelled":bool}`.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrentProgress(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jstring {
+    with_env(unowned, |env| {
+        let (done, total, running, cancelled) = MAKE_PROGRESS.snapshot();
+        let mut w = crate::json::JsonWriter::new();
+        w.begin_object();
+        w.kv_u64("done", done);
+        w.comma();
+        w.kv_u64("total", total);
+        w.comma();
+        w.kv_bool("running", running);
+        w.comma();
+        w.kv_bool("cancelled", cancelled);
+        w.end_object();
+        Ok(new_jstring(env, w.as_str()))
+    })
+}
+
+/// Requests cancellation of the in-flight build (returns 1, or 0 when no
+/// build is running). The maker aborts at the next 1 MiB chunk.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrentCancel(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jint {
+    with_env(unowned, |_env| {
+        let (_, _, running, _) = MAKE_PROGRESS.snapshot();
+        if running {
+            MAKE_PROGRESS.request_cancel();
+            Ok(1)
+        } else {
+            Ok(0)
         }
     })
 }

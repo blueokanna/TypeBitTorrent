@@ -13,6 +13,10 @@ local.properties
 
 # Kotlin / Compose
 .kotlin/
+composeApp/bin/
+
+# Test output: ScreenshotTest / LayoutProbeTest write PNGs here for eyeballing.
+composeApp/screenshots/
 
 # Rust / native
 native/target/
@@ -28,3 +32,13 @@ composeApp/src/androidMain/jniLibs/
 .DS_Store
 Thumbs.db
 *.log
+
+# NAS packaging: the payload is produced by scripts/build-linux.sh and is far
+# too large (and platform specific) to keep in git.
+packaging/fnos/typebittorrent/app/bin/
+packaging/fnos/typebittorrent/app/lib/
+packaging/fnos/typebittorrent/app/runtime/
+packaging/fnos/typebittorrent/*.fpk
+packaging/fnos/typebittorrent/ICON.PNG
+packaging/fnos/typebittorrent/ICON_256.PNG
+build-TypeBitTorrent-linux-*.tar.gz

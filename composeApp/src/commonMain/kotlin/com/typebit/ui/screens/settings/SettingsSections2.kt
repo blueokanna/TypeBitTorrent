@@ -1,5 +1,6 @@
 package com.typebit.ui.screens.settings
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,6 +10,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +29,8 @@ import com.typebit.data.RssSettings
 import com.typebit.data.UtpMixedMode
 import com.typebit.data.WebUiSettings
 import com.typebit.platform.fetchUrlText
+import com.typebit.platform.hashWebUiPassword
+import com.typebit.platform.isAcceptableWebUiPassword
 import com.typebit.util.TrackerListParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -473,48 +477,99 @@ fun BackgroundSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
 fun WebUiSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val s = settings.webUi
     val update: (WebUiSettings) -> Unit = { ns -> onChange(settings.copy(webUi = ns)) }
+    var passwordDraft by remember { mutableStateOf("") }
 
     SectionCard("WebUI") {
         Text(
-                "内置 WebUI 服务在 0.1.0 中尚未提供（路线图项目）；以下设置会持久化，供未来版本使用。",
+                "内置 WebUI 服务已随桌面/服务端一同发布：桌面版勾选“启用 WebUI”后重启即可在浏览器打开 " +
+                        "http://<主机>:${s.port}；服务器（NAS）版本使用 --headless 启动，" +
+                        "参数 --port / --data / --downloads / --password 可直接覆盖此处设置。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        SettingSwitch("启用 WebUI", "", s.enabled, { update(s.copy(enabled = it)) })
-        SettingNumberField(
-                "端口",
-                s.port.toString(),
-                { update(s.copy(port = it.toIntOrNull() ?: s.port)) }
+        SettingSwitch(
+                "启用 WebUI",
+                "监听 WebUI 端口；手机端不支持内嵌服务，会自动忽略此项。",
+                s.enabled,
+                { update(s.copy(enabled = it)) }
         )
+        SettingNumberField("端口", s.port.toString(), { update(s.copy(port = it.toIntOrNull() ?: s.port)) })
         SettingTextField("用户名", s.username, { update(s.copy(username = it)) })
         SettingTextField(
                 "密码",
-                "",
-                { if (it.isNotBlank()) update(s.copy(passwordHash = it.hashCode().toString())) }
+                passwordDraft,
+                { passwordDraft = it },
+                placeholder = if (s.passwordHash.isBlank()) "尚未设置密码" else "已设置（留空则保持不变）",
+        )
+        Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(
+                    onClick = {
+                        if (isAcceptableWebUiPassword(passwordDraft)) {
+                            update(s.copy(passwordHash = hashWebUiPassword(passwordDraft)))
+                            passwordDraft = ""
+                        }
+                    },
+                    enabled = isAcceptableWebUiPassword(passwordDraft),
+            ) { Text("设置密码") }
+            if (s.passwordHash.isNotBlank()) {
+                TextButton(onClick = { update(s.copy(passwordHash = "")) }) { Text("清除密码") }
+            }
+            Text(
+                    if (s.passwordHash.isBlank()) "当前：未设置密码（仅本机回环可访问）"
+                    else "当前：已设置 PBKDF2 密码（至少 8 位，明文不落盘）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        SettingSwitch(
+                "允许局域网访问（桌面版）",
+                "默认只监听 127.0.0.1；开启后同网段设备也能访问本机 WebUI，请务必先设置强密码。",
+                s.remoteAccess,
+                { update(s.copy(remoteAccess = it)) }
         )
         SettingSwitch(
-                "主机头校验",
-                "",
-                s.hostHeaderValidation,
-                { update(s.copy(hostHeaderValidation = it)) }
+                "本机免登录",
+                "来自 127.0.0.1 的请求直接放行；关闭后本机也必须登录。",
+                s.localHostAuth,
+                { update(s.copy(localHostAuth = it)) }
         )
-        SettingSwitch("启用 HTTPS", "", s.httpsEnabled, { update(s.copy(httpsEnabled = it)) })
+        SettingNumberField(
+                "最大登录失败次数",
+                s.maxAuthFailCount.toString(),
+                { update(s.copy(maxAuthFailCount = it.toIntOrNull() ?: s.maxAuthFailCount)) }
+        )
+        SettingNumberField(
+                "封禁时长 (秒)",
+                s.banDurationSec.toString(),
+                { update(s.copy(banDurationSec = it.toLongOrNull() ?: s.banDurationSec)) },
+                suffix = "秒"
+        )
         SettingNumberField(
                 "会话超时 (分钟)",
                 s.sessionTimeoutMinutes.toString(),
-                {
-                    update(
-                            s.copy(
-                                    sessionTimeoutMinutes = it.toLongOrNull()
-                                                    ?: s.sessionTimeoutMinutes
-                            )
-                    )
-                }
+                { update(s.copy(sessionTimeoutMinutes = it.toLongOrNull() ?: s.sessionTimeoutMinutes)) }
         )
-        SettingSwitch("CSRF 保护", "", s.csrfProtection, { update(s.copy(csrfProtection = it)) })
+        SettingSwitch(
+                "主机头校验",
+                "校验 Host 头，防止 DNS rebinding；通过反向代理访问时请填写代理域名。",
+                s.hostHeaderValidation,
+                { update(s.copy(hostHeaderValidation = it)) }
+        )
+        SettingSwitch(
+                "反向代理模式",
+                "由 Nginx / fnOS 网关等终止 TLS 时启用：信任 X-Forwarded-For 与 X-Forwarded-Proto。",
+                s.reverseProxyEnabled,
+                { update(s.copy(reverseProxyEnabled = it)) }
+        )
+        SettingSwitch("启用 HTTPS", "内置服务为纯 HTTP；勾选表示你已在前面套了 HTTPS 反向代理。", s.httpsEnabled, { update(s.copy(httpsEnabled = it)) })
+        SettingSwitch("CSRF 保护", "要求 X-TypeBit 头 + 同站 Cookie，写操作均需携带。", s.csrfProtection, { update(s.copy(csrfProtection = it)) })
         SettingSwitch(
                 "反点击劫持",
-                "",
+                "发送 X-Frame-Options / frame-ancestors，阻止页面被 iframe 嵌套。",
                 s.clickjackingProtection,
                 { update(s.copy(clickjackingProtection = it)) }
         )

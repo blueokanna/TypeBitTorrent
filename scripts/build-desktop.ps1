@@ -18,6 +18,14 @@ $desktopRes = Join-Path $root "composeApp\src\desktopMain\resources\native"
 $cargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
 if (-not (Test-Path $cargo)) { $cargo = "cargo.exe" }
 
+# A rustc from another install (e.g. "C:\Program Files\Rust ...") on PATH ahead
+# of rustup's shim makes cargo pass flags that old rustc rejects. Put the
+# rustup shims first so cargo and rustc always come from the same toolchain.
+$cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+if (Test-Path (Join-Path $cargoBin "rustc.exe")) {
+    $env:PATH = "$cargoBin;$env:PATH"
+}
+
 Push-Location $native
 try {
     Write-Host "==> building release DLL ..."
