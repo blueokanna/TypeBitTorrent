@@ -692,6 +692,10 @@ const SETTING_SECTIONS = [
       ['pexEnabled', 'bool', '启用 PEX'],
       ['lsdEnabled', 'bool', '启用 LSD 局域网发现'],
       ['encryptionMode', 'num', '加密模式（0 关 1 允许 2 强制）'],
+      ['enableDoh', 'bool', 'DNS over HTTPS 解析（绕过被投毒的 DNS）'],
+      ['dohProviders', 'text', 'DoH 服务商（每行一个 https:// 地址）'],
+      ['enableIpv6', 'bool', '启用 IPv6（AAAA + 双栈 UDP）'],
+      ['allowLanWebseeds', 'bool', '允许局域网 Web 种子（NAS 内网做种）'],
     ],
   },
   {

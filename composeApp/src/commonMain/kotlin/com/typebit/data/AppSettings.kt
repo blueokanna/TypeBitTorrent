@@ -187,7 +187,40 @@ data class ConnectionSettings(
     val announceToAllTrackers: Boolean = true,
     val announceToAllTiers: Boolean = true,
     val peerTos: Int = 0,
+    /**
+     * Resolve names over DNS-over-HTTPS instead of trusting the OS resolver.
+     *
+     * On a network whose DNS is filtered or hijacked this is the difference
+     * between "trackers and DHT bootstrap resolve" and "nothing resolves", and
+     * it also feeds the address guard that refuses fetches pointed at loopback
+     * or the cloud metadata service. Off = the OS resolver, unchanged.
+     */
+    val enableDoh: Boolean = true,
+    /** DoH endpoints in priority order (newline separated in the UI). */
+    val dohProviders: String = DEFAULT_DOH_PROVIDERS,
+    /**
+     * Ask for AAAA records and allow IPv6 peers/trackers.
+     *
+     * Off is the right setting on a v4-only network: an AAAA lookup there is a
+     * wasted round trip per name, and a v6 peer address is unreachable.
+     */
+    val enableIpv6: Boolean = true,
+    /**
+     * Allow web-seed and tracker fetches that resolve to a private LAN address.
+     *
+     * On by default because seeding from a NAS on the same LAN is normal here.
+     * Off refuses every RFC 1918 / ULA target — the correct setting for a
+     * machine that should never touch its own network on a torrent's behalf.
+     */
+    val allowLanWebseeds: Boolean = true,
 )
+
+/** Default DoH ladder, mirrored from `native/src/dns.rs`. */
+const val DEFAULT_DOH_PROVIDERS: String =
+    "https://cloudflare-dns.com/dns-query\n" +
+        "https://dns.alidns.com/dns-query\n" +
+        "https://doh.pub/dns-query"
+
 
 // ---------------------------------------------------------------------------
 // 速度

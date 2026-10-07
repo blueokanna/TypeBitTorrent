@@ -318,14 +318,10 @@ fn parse_make_options(json: &str) -> Result<crate::make_torrent::TorrentBuild, S
             .and_then(Value::as_str)
             .map(str::to_string),
         source: v.get("source").and_then(Value::as_str).map(str::to_string),
-        is_private: v
-            .get("private")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        is_private: v.get("private").and_then(Value::as_bool).unwrap_or(false),
         announce_list,
     })
 }
-
 
 /// Create a v1 `.torrent` from local files (blocking, caller's thread).
 ///

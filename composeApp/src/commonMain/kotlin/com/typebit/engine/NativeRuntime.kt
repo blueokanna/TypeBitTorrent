@@ -17,7 +17,7 @@ expect fun loadNativeLibrary(): Boolean
  * without the other makes the app report "原生库版本不匹配" instead of
  * crashing inside a JNI call with a stale signature layout.
  */
-const val EXPECTED_BRIDGE_ABI = 2
+const val EXPECTED_BRIDGE_ABI = 3
 
 private var nativeReady = false
 

@@ -1,4 +1,4 @@
-//! typebit_native — the JNI bridge embedding the TypeBit BitTorrent engine.
+﻿//! typebit_native — the JNI bridge embedding the TypeBit BitTorrent engine.
 //!
 //! Builds a `cdylib` loadable from both Android (ART) and JVM desktop
 //! (Compose Desktop). The engine runs on a dedicated Rust thread; Kotlin
@@ -6,12 +6,18 @@
 //!
 //! Layout:
 //! * [`host`]  — a complete std `typebit::Host` (sockets, UDP, HTTP, disk).
+//! * [`dns`]   — RFC 8484 DNS-over-HTTPS, the resolve cache and hedged
+//!   providers (the engine's DNS attack surface lives here).
+//! * [`netpolicy`] — what may be fetched from where (the SSRF guard) and the
+//!   resolver settings, both parsed from the engine config.
+//! * [`netinfo`] — platform network facts (the default gateway for NAT-PMP).
 //! * [`engine`] — the worker thread, command protocol and config parsing.
 //! * [`meta`]  — add-time metadata mirror (the engine exposes no metainfo
 //!   getter, so the bridge mirrors name/files/trackers at add time).
 //! * [`json`]  — minimal JSON writer for the JNI surface.
 
 pub mod android_log;
+pub mod dns;
 pub mod engine;
 pub mod firewall;
 pub mod host;
@@ -19,6 +25,8 @@ pub mod jni_glue;
 pub mod json;
 pub mod make_torrent;
 pub mod meta;
+pub mod netinfo;
+pub mod netpolicy;
 
 use jni::sys::{jint, JNI_VERSION_1_6};
 
@@ -31,7 +39,15 @@ use jni::sys::{jint, JNI_VERSION_1_6};
 /// makes the JNI call read its arguments from the wrong registers/slots and
 /// SIGSEGVs the whole process (the app "闪退"). Shipping an APK whose
 /// `jniLibs/*.so` predates a signature change is exactly how that happens.
-pub const JNI_ABI: jint = 2;
+///
+/// Revision history:
+/// * 1 — original surface.
+/// * 2 — `nativeMakeTorrent(optionsJson)` + progress/cancel; the
+///   `nativeSetFilePriorities` bulk commit.
+/// * 3 — network policy keys (`doh_enabled`, `doh_providers`, `ipv6_enabled`,
+///   `allow_lan_webseeds`, `http2_enabled`, `http_max_redirects`) added to the
+///   engine config contract.
+pub const JNI_ABI: jint = 3;
 
 /// Reports the ABI revision above; called once per engine start.
 #[no_mangle]

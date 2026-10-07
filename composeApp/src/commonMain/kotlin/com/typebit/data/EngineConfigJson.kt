@@ -73,6 +73,16 @@ object EngineConfigJson {
             put("delta", bt.schedulerDelta)
             put("edge_bytes", bt.schedulerEdgeBytes)
             put("trackers", parseTrackers(bt.extraTrackers))
+            // ---- network policy (see native/src/netpolicy.rs) ----
+            put("doh_enabled", conn.enableDoh && conn.dohProviders.isNotBlank())
+            put("doh_providers", parseLines(conn.dohProviders))
+            put("ipv6_enabled", conn.enableIpv6)
+            put("allow_lan_webseeds", conn.allowLanWebseeds)
+            // HTTP/2 for HTTPS trackers and web seeds (cleartext stays HTTP/1.1
+            // — see native/src/host.rs), and the redirect budget: a redirect is
+            // the second half of an SSRF attempt, so the count stays small.
+            put("http2_enabled", true)
+            put("http_max_redirects", 2)
         }.toString()
     }
 
@@ -106,6 +116,14 @@ object EngineConfigJson {
 
     /** Splits a newline-separated tracker list into a JSON array. */
     private fun parseTrackers(raw: String): JsonArray = buildJsonArray {
+        raw.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .forEach { add(JsonPrimitive(it)) }
+    }
+
+    /** Splits a newline-separated list (DoH endpoints) into a JSON array. */
+    private fun parseLines(raw: String): JsonArray = buildJsonArray {
         raw.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith("#") }

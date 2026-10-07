@@ -24,6 +24,7 @@ use typebit::{EngineConfig, EngineEvent, Host, InfoHash};
 use crate::host::{LogBuffer, NativeHost};
 use crate::json::JsonWriter;
 use crate::meta::{FileMeta, MetaRegistry, TorrentMeta};
+use crate::netpolicy::NetworkPolicy;
 
 use nextjson::NsonDeserialize;
 use typebit::receipt::{Receipt, ReceiptPayload};
@@ -324,6 +325,10 @@ pub fn spawn_engine(
             return Err(e);
         }
     };
+    // Network policy (DoH providers, URL guard) comes from the same blob,
+    // parsed separately so `parse_config`'s signature — and every caller of
+    // it — stays untouched.
+    let policy = parse_network_policy_json(config_json);
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
     let events: EventQueue = Arc::new(Mutex::new(VecDeque::new()));
     let events_worker = events.clone();
@@ -334,7 +339,7 @@ pub fn spawn_engine(
     let jh = match std::thread::Builder::new()
         .name("typebit-engine".to_string())
         .spawn(move || {
-            run_loop(cfg, logs_worker, cmd_rx, events_worker, flag_worker);
+            run_loop(cfg, logs_worker, cmd_rx, events_worker, flag_worker, policy);
             ENGINE_LIVE.store(false, Ordering::SeqCst);
             alog(&format!(
                 "spawn_engine #{seq}: worker exited, guard released"
@@ -365,8 +370,9 @@ fn run_loop(
     cmd_rx: Receiver<Cmd>,
     events: EventQueue,
     stop_flag: Arc<AtomicBool>,
+    policy: NetworkPolicy,
 ) {
-    let mut host = NativeHost::new(logs.clone());
+    let mut host = NativeHost::with_policy(logs.clone(), policy);
     host.bind_tcp(engine_cfg.listen_port);
 
     let mut engine = Engine::new(host, engine_cfg);
@@ -901,7 +907,8 @@ fn handle_cmd(
         Cmd::Stats { tx } => {
             let st = engine.stats();
             let (d_total, u_total) = engine.host.totals();
-            let _ = tx.send(stats_to_json(&st, d_total, u_total));
+            let dns = engine.host.dns_stats();
+            let _ = tx.send(stats_to_json(&st, d_total, u_total, &dns));
         }
         Cmd::ExportReceipt {
             hash,
@@ -1315,7 +1322,12 @@ fn country_code(cc: &[u8; 2]) -> String {
 /// `d_total`/`u_total` are the cumulative wire counters from the host; the
 /// rest come from the engine's [`typebit::engine::EngineStats`]. Every field
 /// is a real counter.
-fn stats_to_json(st: &typebit::engine::EngineStats, d_total: u64, u_total: u64) -> String {
+fn stats_to_json(
+    st: &typebit::engine::EngineStats,
+    d_total: u64,
+    u_total: u64,
+    dns: &crate::dns::DnsStats,
+) -> String {
     let mut w = JsonWriter::new();
     w.begin_object();
     w.kv_u64("d_total", d_total);
@@ -1351,6 +1363,24 @@ fn stats_to_json(st: &typebit::engine::EngineStats, d_total: u64, u_total: u64) 
     w.kv_u64("c_clean_budget", st.cache_clean_budget);
     w.comma();
     w.kv_u64("c_dirty_entries", st.cache_dirty_entries as u64);
+    w.comma();
+    // Resolution health: how many answers came from the DoH cache versus the OS
+    // resolver, and which providers are actually up. A user whose network
+    // breaks trackers can see whether DoH is working from the stats dialog
+    // instead of guessing.
+    w.kv_u64("dns_queries", dns.queries);
+    w.comma();
+    w.kv_u64("dns_cache_hits", dns.cache_hits);
+    w.comma();
+    w.kv_u64("dns_os_fallbacks", dns.os_fallbacks);
+    w.comma();
+    w.kv_u64("dns_provider_ok", dns.provider_ok);
+    w.comma();
+    w.kv_u64("dns_provider_failures", dns.provider_failures);
+    w.comma();
+    w.kv_u64("dns_providers_up", dns.providers.iter().filter(|(_, up)| *up).count() as u64);
+    w.comma();
+    w.kv_u64("dns_providers_total", dns.providers.len() as u64);
     w.end_object();
     w.into_string()
 }
@@ -1496,6 +1526,22 @@ fn anti_leech_json(client: &str, addr: &str) -> String {
 }
 
 // ---------- config parsing ----------
+
+/// Parse the network policy out of the engine-config JSON.
+///
+/// Separate from [`parse_config`] on purpose: the policy is consumed by the
+/// host (sockets, HTTP) and has nothing to do with the engine's own config, so
+/// keeping the two apart is what lets `parse_config` keep its signature — and
+/// every one of its callers stay untouched.
+pub fn parse_network_policy_json(json: &str) -> NetworkPolicy {
+    match nextjson::nextdecode(json.as_bytes()) {
+        Ok(root) => NetworkPolicy::from_config(&root),
+        // A malformed blob is the engine's problem to report (`parse_config`
+        // fails loudly); here the safe default is the documented one, which
+        // still refuses loopback fetches.
+        Err(_) => NetworkPolicy::default(),
+    }
+}
 
 /// Parse the engine configuration JSON into `(EngineConfig, SessionConfig)`.
 ///

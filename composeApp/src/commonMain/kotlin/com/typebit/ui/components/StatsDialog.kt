@@ -81,6 +81,15 @@ fun StatsDialog(
                 StatRow("合并节约的写入", Format.bytes(stats.c_coalesced))
                 StatRow("磁盘读取量", Format.bytes(stats.c_read_bytes))
                 StatRow("缓存淘汰次数", stats.c_evictions.toString())
+                // Name resolution: which DoH providers are actually reachable
+                // and how much of the traffic the cache absorbed. A user whose
+                // trackers stopped resolving can see whether DoH is the cause
+                // instead of guessing.
+                stats.dnsSummary?.let {
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    SectionTitle("域名解析")
+                    StatRow("DoH 服务商 / 缓存 / 回退", it)
+                }
             }
         },
         confirmButton = {

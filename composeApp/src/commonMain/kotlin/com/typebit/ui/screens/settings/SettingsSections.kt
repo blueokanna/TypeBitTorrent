@@ -1,6 +1,8 @@
 package com.typebit.ui.screens.settings
 
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import com.typebit.data.AppSettings
 import com.typebit.data.BehaviorSettings
 import com.typebit.data.ConnectionSettings
@@ -158,6 +160,43 @@ fun ConnectionSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
             } },
         )
         SettingTextField("网络接口", s.networkInterface, { update(s.copy(networkInterface = it)) }, placeholder = "留空 = 自动")
+    }
+
+    SectionCard("域名解析") {
+        SettingSwitch(
+            "启用 DNS over HTTPS",
+            "用加密的 DoH 查询解析 Tracker / DHT 引导地址，绕开被劫持或投毒的本地 DNS；" +
+                "同时为「禁止访问本机/云元数据地址」的安全检查提供可信答案。",
+            s.enableDoh,
+            { update(s.copy(enableDoh = it)) },
+        )
+        if (s.enableDoh) {
+            SettingTextField(
+                "DoH 服务商",
+                s.dohProviders,
+                { update(s.copy(dohProviders = it)) },
+                placeholder = "每行一个 https:// 地址",
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SettingNote(
+                "按顺序尝试，第一个响应最慢 250 ms 后会自动并发下一个（对冲），失败的服务商在退避期内跳过，" +
+                    "答案按 TTL 缓存。留空即退回系统解析器。"
+            )
+        }
+        SettingSwitch(
+            "启用 IPv6",
+            "同时查询 AAAA 记录，并用一个双栈 UDP 套接字承载 IPv6 的 DHT 与 UDP Tracker。" +
+                "网络没有 IPv6 时关掉可省一次无用查询。",
+            s.enableIpv6,
+            { update(s.copy(enableIpv6 = it)) },
+        )
+        SettingSwitch(
+            "允许局域网 Web 种子",
+            "允许 Tracker / Web 种子指向 RFC1918 内网地址（例如旁边的 NAS）。" +
+                "关闭后内网地址一律拒绝；本机回环与云元数据地址在任何情况下都被拒绝。",
+            s.allowLanWebseeds,
+            { update(s.copy(allowLanWebseeds = it)) },
+        )
     }
 
     SectionCard("代理") {

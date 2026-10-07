@@ -165,10 +165,7 @@ fn read_file_chunks(
 /// Pieces are hashed as one logical byte stream across all files (v1 pieces
 /// may straddle file boundaries); memory stays bounded (1 MiB read chunk +
 /// SHA-1 state + one 20-byte hash per piece).
-pub fn create_torrent(
-    build: &TorrentBuild,
-    progress: &BuildProgress,
-) -> Result<Vec<u8>, String> {
+pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<Vec<u8>, String> {
     let piece_length = build.piece_length;
     if !is_supported_piece_length(piece_length) {
         return Err(format!("unsupported piece length {piece_length}"));
@@ -220,7 +217,10 @@ pub fn create_torrent(
         let mut seen = std::collections::HashSet::with_capacity(files.len());
         for f in &files {
             if !seen.insert(f.rel_path.as_slice()) {
-                return Err(format!("duplicate path in file list: {}", f.rel_path.join("/")));
+                return Err(format!(
+                    "duplicate path in file list: {}",
+                    f.rel_path.join("/")
+                ));
             }
         }
     }
@@ -295,7 +295,12 @@ pub fn create_torrent(
         }
         info.push((b"files", list(entries)));
     }
-    if let Some(source) = build.source.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(source) = build
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         info.push((b"source", bytes(source.as_bytes().to_vec())));
     }
     if build.is_private {
@@ -310,7 +315,13 @@ pub fn create_torrent(
         .map(|tier| {
             tier.iter()
                 .map(|s| s.trim())
-                .filter(|s| s.starts_with("http://") || s.starts_with("https://") || s.starts_with("udp://") || s.starts_with("ws://") || s.starts_with("wss://"))
+                .filter(|s| {
+                    s.starts_with("http://")
+                        || s.starts_with("https://")
+                        || s.starts_with("udp://")
+                        || s.starts_with("ws://")
+                        || s.starts_with("wss://")
+                })
                 .collect()
         })
         .filter(|tier: &Vec<&str>| !tier.is_empty())
@@ -323,16 +334,16 @@ pub fn create_torrent(
     if !tiers.is_empty() {
         let encoded: Vec<BVal> = tiers
             .iter()
-            .map(|tier| {
-                list(tier
-                    .iter()
-                    .map(|u| bytes(u.as_bytes().to_vec()))
-                    .collect())
-            })
+            .map(|tier| list(tier.iter().map(|u| bytes(u.as_bytes().to_vec())).collect()))
             .collect();
         root.push((b"announce-list", list(encoded)));
     }
-    if let Some(c) = build.comment.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(c) = build
+        .comment
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         root.push((b"comment", bytes(c.as_bytes().to_vec())));
     }
     root.push((
@@ -491,7 +502,9 @@ mod tests {
             };
             let progress = BuildProgress::default();
             let raw = create_torrent(&build, &progress).unwrap();
-            typebit::metainfo::Torrent::from_bytes(&raw).unwrap().info_hash
+            typebit::metainfo::Torrent::from_bytes(&raw)
+                .unwrap()
+                .info_hash
         };
         assert_eq!(make(true), make(false));
         std::fs::remove_dir_all(&dir).ok();
@@ -549,7 +562,10 @@ mod tests {
         let progress = BuildProgress::default();
         create_torrent(&build, &progress).expect("create");
         let (done, total, running, cancelled) = progress.snapshot();
-        assert_eq!((done, total, running, cancelled), (512 * 1024, 512 * 1024, false, false));
+        assert_eq!(
+            (done, total, running, cancelled),
+            (512 * 1024, 512 * 1024, false, false)
+        );
 
         // The chunk reader honours a cancellation requested mid-build; this
         // is the exact primitive the hashing loop calls per 1 MiB.

@@ -1,5 +1,6 @@
 package com.typebit.engine
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -129,6 +130,12 @@ data class SnapshotTotalsDto(
 )
 
 /** One batched snapshot for the whole UI poll tick (see `Cmd::Snapshot`). */
+///
+/// **The `@SerialName` annotations are load-bearing.** The bridge's JSON uses
+/// snake_case keys (`ext_ip`, `listen_port`, …) and this decoder has no naming
+/// strategy (`Json { ignoreUnknownKeys = true }`), so a camelCase property
+/// without an annotation silently stays at its default. That is how the bound
+/// listen port and the port-mapping phase used to read 0 everywhere.
 @Serializable
 data class EngineSnapshotDto(
         /** DHT routing-table size (live). */
@@ -136,18 +143,24 @@ data class EngineSnapshotDto(
         /** Trackers currently active (not failed) across all torrents (live). */
         val trackers: Int = 0,
         /** NAT-detected external UDP IP (BEP-42), empty until confirmed. */
-        val extIp: String = "",
+        @SerialName("ext_ip") val extIp: String = "",
         /** NAT-detected external UDP port (BEP-42), 0 until confirmed. */
-        val extPort: Int = 0,
+        @SerialName("ext_port") val extPort: Int = 0,
         /**
          * UPnP/NAT-PMP port-mapping phase (0=idle … 5=mapping, 6=mapped, 8=done, 9=failed). See
          * `typebit::portmap::PortMapPhase::code`.
          */
-        val pmPhase: Int = 0,
+        @SerialName("pm_phase") val pmPhase: Int = 0,
         /** External port granted by the gateway, 0 until mapped. */
-        val pmPort: Int = 0,
-        /** Actual bound TCP listen port (0 when not listening). */
-        val listenPort: Int = 0,
+        @SerialName("pm_port") val pmPort: Int = 0,
+        /**
+         * Actual bound TCP listen port (0 when not listening).
+         *
+         * This is the port inbound peers connect to and the one a firewall rule
+         * must open, which is why it is read from the engine instead of from
+         * the configured value.
+         */
+        @SerialName("listen_port") val listenPort: Int = 0,
         /** LSD (BEP-14): LAN announces multicast out (live). JSON key `lsd_sent`. */
         val lsd_sent: Long = 0,
         /** LSD (BEP-14): BT-SEARCH datagrams received (live). JSON key `lsd_recv`. */
@@ -268,6 +281,15 @@ data class EngineStatsDto(
         val c_clean: Long = 0L,
         val c_clean_budget: Long = 0L,
         val c_dirty_entries: Long = 0L,
+        /** DoH/wire resolution counters (see `native/src/dns.rs`). */
+        val dns_queries: Long = 0L,
+        val dns_cache_hits: Long = 0L,
+        val dns_os_fallbacks: Long = 0L,
+        val dns_provider_ok: Long = 0L,
+        val dns_provider_failures: Long = 0L,
+        /** Providers whose circuit is closed right now, out of the configured total. */
+        val dns_providers_up: Long = 0L,
+        val dns_providers_total: Long = 0L,
 ) {
     val ratio: Double
         get() = if (d_total > 0) u_total.toDouble() / d_total else 0.0
@@ -280,6 +302,13 @@ data class EngineStatsDto(
 
     val readOverload: Double
         get() = if (c_clean_budget > 0) c_clean.toDouble() / c_clean_budget else 0.0
+
+    /** One line for the stats dialog, or `null` when DoH is not configured. */
+    val dnsSummary: String?
+        get() =
+            if (dns_providers_total <= 0) null
+            else
+                "$dns_providers_up/$dns_providers_total 可用 · 查询 $dns_queries · 缓存命中 $dns_cache_hits · 系统解析回退 $dns_os_fallbacks"
 }
 
 /**

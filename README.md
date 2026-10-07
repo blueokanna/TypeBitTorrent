@@ -281,6 +281,72 @@ Ready-made packaging lives in [`packaging/`](./packaging):
 Full instructions, including the reverse-proxy/TLS story and what the
 packages deliberately do *not* do, are in [`docs/nas.md`](./docs/nas.md).
 
+### the network layer
+
+Four things in here are not "how everyone does it", and each one exists because
+the previous behaviour lost peers or corrupted data.
+
+**DNS over HTTPS, with hedging and a breaker.** The engine resolves names
+through the OS resolver, which is the weakest link on a filtered or hijacked
+network: a poisoned answer leaves every `udp://` tracker and every BEP-5 router
+unreachable, and one blocked domain can hold the whole bootstrap behind it.
+[`native/src/dns.rs`](native/src/dns.rs) is a resolver that asks
+`https://` DoH endpoints (RFC 8484, wire format, no extra dependency), with:
+
+- **A TTL-aware cache** (positive *and* negative) and **single-flight**, so N
+  callers asking for the same name produce one query, not N;
+- **Hedging**: if the first provider has not answered in 250 ms the next one is
+  asked in parallel and the first answer wins — a blocker cannot make every
+  lookup cost a timeout;
+- **Circuit breakers** with a growing backoff, so a provider that is *blocked*
+  stops costing a timeout on every lookup, while a provider that failed once is
+  retried soon;
+- **An OS fallback that never blocks the engine.** The hooks the engine calls on
+  its own thread (`resolve_host` / `resolve_host_all`) read the cache, fall back
+  to the system resolver immediately, and queue a DoH refresh on a worker — the
+  tick loop is never waiting on a provider. The next lookup gets the
+  authoritative answer.
+
+It is on by default and can be turned off (Settings → 连接 → 域名解析); the
+provider list is yours to edit.
+
+**A guard against torrent-supplied URLs.** Every HTTP URL this client fetches
+comes from something untrusted — a tracker list, a web-seed list, or the
+`.torrent` file itself. A client that fetches whatever those strings say is an
+SSRF primitive aimed at your own machine: `http://127.0.0.1:8080/admin`,
+`http://[::1]:9200/`, `http://169.254.169.254/latest/meta-data/`. The guard
+classifies the URL *and* the address the name resolves to, and refuses loopback,
+the cloud metadata service and special-use ranges. Private LAN ranges stay
+allowed by default, because seeding from the NAS next to you is a feature, not
+an attack — switch that off in the same settings block if you never want a
+torrent to touch your local network. Redirects are capped at two, so the second
+half of an SSRF attempt has nowhere to go.
+
+**IPv6 that actually works.** The shared UDP socket is now dual-stack
+(`::` with `IPV6_V6ONLY=0`) and v4 peers are unwrapped from their mapped form, so
+IPv6 DHT nodes and IPv6 UDP trackers are reachable — previously every `NetAddr::V6`
+send failed with `EAFNOSUPPORT`, which is why the resolver deliberately preferred
+IPv4. The default gateway is discovered too (Linux `/proc/net/route`, Windows
+`GetBestRoute`), which is what NAT-PMP needs; together with `http_post` for UPnP
+SOAP, automatic port mapping works on both kinds of router instead of neither.
+
+**HTTP that does not fight itself.** Tracker announces and web-seed ranges share
+one pooled client:
+
+- **HTTP/2 for `https://`** (one connection, many multiplexed range requests,
+  RFC 9218 priorities per stream) and HTTP/1.1 for `http://` — clear-text h2 is
+  not something the other side is guaranteed to speak, and using it silently
+  broke plain-HTTP trackers;
+- **Two priority classes**: an announce is a few hundred bytes that makes peers
+  appear, so it preempts a queue full of range fetches;
+- **Real deadlines** from the engine's `timeout_ms` per request, plus a
+  keep-alive pool, honest `User-Agent`, and one retry on transport failure;
+- **Byte-range validation that cannot corrupt data**: a `206` must be exactly the
+  requested window, and a `200` (server ignored `Range`) is only accepted when it
+  is *aligned* — the request starts at offset 0 and the declared length is the
+  window. Anything else is refused instead of writing file offset 0 into the
+  middle of the file.
+
 ### settings reference
 
 Every category mirrors qBittorrent's options dialog. Settings are persisted
@@ -333,6 +399,15 @@ engine on change.
 | 上传槽 | 8 / 4 | global / per-torrent unchoke slots |
 | 协议 | TCP+UDP | TCP / UDP only |
 | 代理 | 无 | **SOCKS5 only** (honest: SOCKS4/HTTP settings are stored but never enable a proxy — the engine implements SOCKS5) |
+
+#### 域名解析 (Name resolution)
+
+| setting | default | meaning |
+|---------|---------|---------|
+| 启用 DNS over HTTPS | on | resolve tracker / DHT-bootstrap names over RFC 8484 DoH instead of trusting the OS resolver |
+| DoH 服务商 | Cloudflare, AliDNS, DNSPod | one `https://` endpoint per line, tried in order with 250 ms hedging |
+| 启用 IPv6 | on | ask for AAAA and let one dual-stack UDP socket carry IPv6 DHT and UDP trackers |
+| 允许局域网 Web 种子 | on | allow fetches that resolve to RFC 1918 / ULA (the NAS case); loopback and the cloud metadata address are refused either way |
 
 #### 速度 (Speed)
 

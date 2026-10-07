@@ -51,6 +51,21 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | 向所有 Tracker/层级通告 | **live** (engine walks BEP-12 tiers in order) |
 | Peer TOS | stored |
 
+## 域名解析 (Name resolution)
+
+| Option | Status |
+| --- | --- |
+| 启用 DNS over HTTPS | **live at engine start** — the bridge builds its resolver from this; providers are tried in order with 250 ms hedging behind a circuit breaker |
+| DoH 服务商 | **live at engine start** (each entry must be `https://`; anything else is dropped) |
+| 启用 IPv6 | **live at engine start** — AAAA queries plus a dual-stack UDP socket for DHT and UDP trackers |
+| 允许局域网 Web 种子 | **live at engine start** — off refuses RFC 1918/ULA targets; loopback and the cloud metadata address are refused regardless |
+
+The resolver is the only place the client deliberately talks to a third party it
+was not told about by a torrent, and it is therefore the only network feature
+with its own off switch. Counters (`dns_*`) are exposed in 统计 and in the WebUI
+`/api/stats`, so "are the providers reachable from here?" is an observation, not
+a guess.
+
 ## 速度 (Speed)
 
 | Option | Status |
@@ -96,7 +111,6 @@ Headless deployments (`--headless`) bind `0.0.0.0` by default and can override
 every one of these on the command line; see [nas.md](./nas.md).
 
 ## 高级 (Advanced)
-
 `diskCacheBytes` and `saveResumeDataIntervalSec` are **live at engine
 start** / for the poll loop respectively. The remaining options (uTP mode,
 socket backlog, tracker retry policy, peer resolution, …) are **stored**

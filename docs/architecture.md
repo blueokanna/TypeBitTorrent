@@ -23,6 +23,9 @@ the seams and the trade-offs.
 │  jni_glue.rs  49 JNI entry points (thin, defensive)       │
 │  engine.rs    worker thread · mpsc commands · JSON events │
 │  host.rs       NativeHost — complete typebit::Host        │
+│  dns.rs        DoH + resolve cache + hedged providers     │
+│  netpolicy.rs  URL/address guard, resolver settings       │
+│  netinfo.rs    default gateway, dual-stack socket option  │
 │  make_torrent.rs  BEP-3/12/27 builder (progress + cancel) │
 │  meta.rs       add-time metadata mirror                   │
 │  json.rs       minimal JSON writer                        │
@@ -33,6 +36,45 @@ the seams and the trade-offs.
 │ typebit 0.1.9 (Rust, PolyForm) — the actual torrent engine │
 └──────────────────────────────────────────────────────────┘
 ```
+
+## The network layer (host.rs + dns.rs + netpolicy.rs)
+
+`typebit` owns the swarm logic and calls `Host` for everything OS-shaped. That
+seam is where all the network engineering in this project happens, because it is
+the only place that can be changed without forking the engine.
+
+```
+engine thread                      worker pools                 network
+─────────────                      ────────────                 ───────
+resolve_host ──▶ cache ──hit──▶ address
+                   │ miss
+                   ├──▶ OS resolver (never blocks)  ─────────▶ getaddrinfo
+                   └──▶ queue refresh ──▶ resolver pool ──▶ DoH (hedged) ──▶ https
+http_get_async ──▶ interactive queue ─┐
+http_get_range_async ─▶ bulk queue ───┴─▶ HTTP pool (4) ──▶ guard ──▶ client
+                                                           │           (h2/h1)
+                                                           └──▶ refuse
+tcp_connect ──▶ helper thread (connect_timeout) ─────────────────▶ socket
+udp_send ──▶ dual-stack socket (v4 ↔ v4-mapped) ─────────────────▶ socket
+```
+
+Three rules hold the design together:
+
+1. **The engine thread never blocks on the network.** `resolve_host` reads a
+   cache or the OS resolver; HTTP work is queued onto pools; connects return a
+   handle immediately. Anything that could take a second happens off-thread.
+2. **Nothing the torrent says is trusted.** Every URL is checked against
+   [`crate::netpolicy`] before it is dialled, and a name is checked against the
+   address it resolves to.
+3. **Two clients, because clear-text HTTP/2 does not exist in the wild.**
+   `http2` in the client library means prior-knowledge h2c for `http://`, which
+   an ordinary tracker answers by dropping the connection; HTTPS gets ALPN
+   (and therefore real multiplexing), HTTP gets HTTP/1.1.
+
+`dns.rs` is deliberately transport-agnostic: the only way a query reaches the
+network is the `DohTransport` trait, which is why the cache, single-flight,
+hedging and breaker rules are unit-testable without a socket. The real transport
+is 25 lines in `host.rs`.
 
 ## Two front ends, one client
 
@@ -64,7 +106,10 @@ Kotlin, nothing to catch. It happened here during development (a stale
    Android ABIs, and if the two ABI numbers disagree.
 
 Rule: bump `JNI_ABI` in the same commit as any native signature or JSON
-contract change, and rebuild every shipped library.
+contract change, and rebuild every shipped library. The current revision is 3
+(2 added the make-torrent contract; 3 added the network-policy config keys), and
+`scripts/verify-native.ps1` fails the build if the two numbers disagree or if
+any declared entry point is missing from a shipped library.
 
 
 ## The engine boundary (why it looks like this)
@@ -142,6 +187,8 @@ polling.
 | Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | the engine emits the event without the info dict, so the bridge keeps its own mirror |
 | Encryption / uTP | stored settings | the wire protocol is plaintext; uTP (BEP-29) exists but peers usually negotiate TCP |
 | WebUI over HTTPS | not built in | TLS is expected to be terminated by a reverse proxy; the server has no certificate store |
+| DoH for HTTPS tracker/web-seed fetches | not possible here | the HTTP client resolves the URL host itself, and that name is also the TLS identity and the virtual host, so it cannot be replaced by an address. DoH covers DHT bootstrap, UDP trackers and the URL guard; HTTPS keeps the OS resolver |
+| DNS rebinding on a plain-HTTP fetch | raised, not eliminated | the guard checks the address a name resolves to, but a hostile authoritative server can answer differently to the transport's own lookup. HTTPS is unaffected (certificate pinning), and the obvious targets (loopback, metadata) are refused outright |
 
 These are documented in the README and marked in the UI; nothing is
 simulated. Where a number genuinely cannot be reported, the UI shows `—`.

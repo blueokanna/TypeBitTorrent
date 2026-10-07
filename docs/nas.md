@@ -196,8 +196,13 @@ thread (bounded), and only then does the process exit.
 | `--username=`, `TYPEBIT_USERNAME` | WebUI user (default `admin`) |
 | `--password=`, `TYPEBIT_PASSWORD` | WebUI password; hashed with PBKDF2-HMAC-SHA256 (120 000 iterations) and stored in settings. If neither a CLI nor env password exists **and** no hash is stored, a random one is generated and printed once at startup |
 
-### Security
+The engine's own network policy is *not* on this list: it lives in the settings
+(连接 → 域名解析) and is read at engine start, so a NAS running in a container
+with a broken DNS server can be given DoH endpoints from the WebUI, and a NAS
+that must never touch its host network can switch LAN fetches off. The counters
+for that live in `/api/stats` (`dns_*`).
 
+### Security
 * Sessions are 256-bit random tokens in an `HttpOnly`, `SameSite=Strict` cookie
   with a configurable TTL; changing the password invalidates every session.
 * Every mutating request must carry `X-TypeBit: 1`. Browsers cannot add a custom
