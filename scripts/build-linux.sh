@@ -30,7 +30,7 @@ cp "$LIB" "$RES/libtypebit_native.so"
 echo "    -> $RES/libtypebit_native.so"
 
 echo "==> building desktop distribution (this also packages the runtime)"
-(cd "$ROOT" && ./gradlew --console=plain :composeApp:createDistributable)
+(cd "$ROOT" && bash ./gradlew --console=plain :composeApp:createDistributable)
 
 [ -x "$OUT/bin/TypeBitTorrent" ] || { echo "missing launcher: $OUT/bin/TypeBitTorrent" >&2; exit 1; }
 echo "==> app image: $OUT"

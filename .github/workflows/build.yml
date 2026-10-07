@@ -54,6 +54,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list includes the removed "tools"
+          # package, which makes sdkmanager fail on current Android SDKs.
+          packages: platform-tools
 
       - name: Install NDK 26.2.11394342
         shell: pwsh
@@ -244,4 +248,3 @@ jobs:
       - name: Build Docker image (no push)
         run: |
           docker build -f packaging/docker/Dockerfile -t typebittorrent:ci .
-
