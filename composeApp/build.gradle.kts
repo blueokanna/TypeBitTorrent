@@ -92,6 +92,7 @@ compose.desktop {
     application {
         mainClass = "com.typebit.MainKt"
         nativeDistributions {
+            modules("jdk.httpserver")
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Deb)
             packageName = "TypeBitTorrent"
             packageVersion = "0.1.0"
