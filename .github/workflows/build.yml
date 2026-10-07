@@ -214,16 +214,47 @@ jobs:
 
       - name: Smoke-test the headless server
         run: |
+          set -Eeuo pipefail
           OUT="$GITHUB_WORKSPACE/composeApp/build/compose/binaries/main/app/TypeBitTorrent"
-          mkdir -p /tmp/typebit-data /tmp/typebit-downloads
+          LOG=/tmp/typebit.log
+          STATE=/tmp/state.json
+          DATA_DIR="$(mktemp -d)"
+          DOWNLOADS_DIR="$(mktemp -d)"
           "$OUT/bin/TypeBitTorrent" --headless --bind=127.0.0.1 --port=18080 \
-            --data=/tmp/typebit-data --downloads=/tmp/typebit-downloads \
+            --data="$DATA_DIR" --downloads="$DOWNLOADS_DIR" \
             --password="ci-smoke-password" > /tmp/typebit.log 2>&1 &
           PID=$!
+          cleanup() {
+            status=$?
+            if [ -n "${PID:-}" ]; then
+              kill "$PID" 2>/dev/null || true
+              wait "$PID" 2>/dev/null || true
+            fi
+            if [ "$status" -ne 0 ]; then
+              echo "::error::Headless smoke test failed; application output follows:"
+              if [ -f "$LOG" ]; then cat "$LOG"; else echo "Application log was not created."; fi
+            fi
+          }
+          trap cleanup EXIT
+
+          READY=0
           for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:18080/api/state > /tmp/state.json; then break; fi
+            if curl --silent --fail --connect-timeout 1 --max-time 2 \
+              http://127.0.0.1:18080/api/session >/dev/null; then
+              READY=1
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "::error::Headless process exited before the WebUI became ready."
+              exit 1
+            fi
             sleep 1
           done
+          if [ "$READY" -ne 1 ]; then
+            echo "::error::WebUI did not become ready within 60 seconds."
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:18080/api/state > "$STATE"
           curl -fsS http://127.0.0.1:18080/ > /dev/null
           python3 - <<'PY'
           import json
@@ -234,7 +265,8 @@ jobs:
           PY
           kill "$PID"
           wait "$PID" || true
-          cat /tmp/typebit.log
+          PID=""
+          cat "$LOG"
 
       - name: Upload Linux app image
         uses: actions/upload-artifact@v4
