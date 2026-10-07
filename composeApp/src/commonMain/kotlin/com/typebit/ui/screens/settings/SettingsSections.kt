@@ -164,23 +164,27 @@ fun ConnectionSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
 
     SectionCard("域名解析") {
         SettingSwitch(
-            "启用 DNS over HTTPS",
-            "用加密的 DoH 查询解析 Tracker / DHT 引导地址，绕开被劫持或投毒的本地 DNS；" +
-                "同时为「禁止访问本机/云元数据地址」的安全检查提供可信答案。",
+            "使用内置解析器",
+            "用自带的递归解析器取代系统 DNS：从根服务器迭代解析，逐级 QNAME 最小化、0x20 大小写随机化，" +
+                "并在存在签名链时校验 DNSSEC；同时为「禁止访问本机/云元数据地址」的安全检查提供可信答案。",
             s.enableDoh,
             { update(s.copy(enableDoh = it)) },
         )
         if (s.enableDoh) {
             SettingTextField(
-                "DoH 服务商",
+                "上游解析器",
                 s.dohProviders,
                 { update(s.copy(dohProviders = it)) },
-                placeholder = "每行一个 https:// 地址",
+                placeholder = "每行一个 https://1.1.1.1/dns-query#cloudflare-dns.com",
                 modifier = Modifier.fillMaxWidth(),
             )
             SettingNote(
-                "按顺序尝试，第一个响应最慢 250 ms 后会自动并发下一个（对冲），失败的服务商在退避期内跳过，" +
-                    "答案按 TTL 缓存。留空即退回系统解析器。"
+                "每行 `协议://地址[/路径][#TLS 名称]`，地址必须是 IP（解析器无法解析自己的域名）：\n" +
+                    "https://1.1.1.1/dns-query#cloudflare-dns.com  （DNS over HTTPS）\n" +
+                    "tls://1.1.1.1#one.one.one.one  （DNS over TLS，853 端口常在 DoH 被限速时可用）\n" +
+                    "223.5.5.5  （明文 UDP，仅在你信任该链路时使用）\n" +
+                    "证书按系统信任库校验；系统信任库不可读时加密上游会被停用，改为直接迭代解析。" +
+                    "留空即完全迭代解析——不向任何第三方发送查询，但需要能访问 53 端口。"
             )
         }
         SettingSwitch(

@@ -23,7 +23,9 @@ the seams and the trade-offs.
 │  jni_glue.rs  49 JNI entry points (thin, defensive)       │
 │  engine.rs    worker thread · mpsc commands · JSON events │
 │  host.rs       NativeHost — complete typebit::Host        │
-│  dns.rs        DoH + resolve cache + hedged providers     │
+│  dns.rs        resolution (RecurseX) + the non-blocking   │
+│                engine edge: memo, single-flight, upstreams│
+│  tlsroots.rs   platform trust anchors (incl. Android's)   │
 │  netpolicy.rs  URL/address guard, resolver settings       │
 │  netinfo.rs    default gateway, dual-stack socket option  │
 │  make_torrent.rs  BEP-3/12/27 builder (progress + cancel) │
@@ -34,10 +36,14 @@ the seams and the trade-offs.
                            │ static link
 ┌──────────────────────────▼───────────────────────────────┐
 │ typebit 0.1.9 (Rust, PolyForm) — the actual torrent engine │
+│ recurse-x 0.2.3 — the resolver: iterative from the root + │
+│                   DoT/DoH, DNSSEC, semantic cache         │
+│ courierust 1.0.9 — HTTP/1.1 + HTTP/2 + TLS (in-tree; the  │
+│                    only external input is the CA store)   │
 └──────────────────────────────────────────────────────────┘
 ```
 
-## The network layer (host.rs + dns.rs + netpolicy.rs)
+## The network layer (host.rs + dns.rs + tlsroots.rs + netpolicy.rs)
 
 `typebit` owns the swarm logic and calls `Host` for everything OS-shaped. That
 seam is where all the network engineering in this project happens, because it is
@@ -46,22 +52,23 @@ the only place that can be changed without forking the engine.
 ```
 engine thread                      worker pools                 network
 ─────────────                      ────────────                 ───────
-resolve_host ──▶ cache ──hit──▶ address
+resolve_host ──▶ memo ──hit──▶ address (hash probe, never blocks)
                    │ miss
                    ├──▶ OS resolver (never blocks)  ─────────▶ getaddrinfo
-                   └──▶ queue refresh ──▶ resolver pool ──▶ DoH (hedged) ──▶ https
-http_get_async ──▶ interactive queue ─┐
+                   └──▶ queue warm-up ──▶ resolver worker ──▶ RecurseX ──▶ DoT/DoH
+http_get_async ──▶ interactive queue ─┐                                or root walk
 http_get_range_async ─▶ bulk queue ───┴─▶ HTTP pool (4) ──▶ guard ──▶ client
-                                                           │           (h2/h1)
+                                                           │           (h2/h1,
+                                                           │            verified TLS)
                                                            └──▶ refuse
 tcp_connect ──▶ helper thread (connect_timeout) ─────────────────▶ socket
 udp_send ──▶ dual-stack socket (v4 ↔ v4-mapped) ─────────────────▶ socket
 ```
 
-Three rules hold the design together:
+Four rules hold the design together:
 
-1. **The engine thread never blocks on the network.** `resolve_host` reads a
-   cache or the OS resolver; HTTP work is queued onto pools; connects return a
+1. **The engine thread never blocks on the network.** `resolve_host` reads the
+   memo or the OS resolver; HTTP work is queued onto pools; connects return a
    handle immediately. Anything that could take a second happens off-thread.
 2. **Nothing the torrent says is trusted.** Every URL is checked against
    [`crate::netpolicy`] before it is dialled, and a name is checked against the
@@ -70,11 +77,35 @@ Three rules hold the design together:
    `http2` in the client library means prior-knowledge h2c for `http://`, which
    an ordinary tracker answers by dropping the connection; HTTPS gets ALPN
    (and therefore real multiplexing), HTTP gets HTTP/1.1.
+4. **TLS is always verified, and the anchors come from the platform.** The HTTP
+   client library has no implicit trust store — `ClientConfig::default()` leaves
+   `tls: None`, under which it *refuses* `https://` outright rather than sending
+   it in clear text. [`crate::tlsroots`] fills that in from the OS (Windows
+   `ROOT` store, a distribution bundle) and, on Android — where the library's
+   Unix paths do not exist — from `/apex/com.android.conscrypt/cacerts` and
+   `/system/etc/security/cacerts`, whose entries are PEM files with no
+   extension. Nothing ever sets `verify: false`: a client that cannot be told
+   what to trust fails instead.
 
-`dns.rs` is deliberately transport-agnostic: the only way a query reaches the
-network is the `DohTransport` trait, which is why the cache, single-flight,
-hedging and breaker rules are unit-testable without a socket. The real transport
-is 25 lines in `host.rs`.
+`dns.rs` is the engine-facing edge over RecurseX, and everything in it exists
+because a resolver cannot supply it:
+
+* a **memo** (the resolver's answers, kept with their TTL) so the synchronous
+  hooks answer in constant time, plus a **warm-up** on a background worker so the
+  next lookup is authoritative;
+* **single-flight**, so six bootstrapping routers are one query per name;
+* **upstream parsing**: `scheme://ip[/path][#tls-name]`, with well-known provider
+  hostnames mapped to addresses (a resolver cannot resolve its own name) and
+  unusable entries reported in the log with the user's own text;
+* **the published surface**: mode, per-upstream health (measured RTT and
+  timeouts, read from the resolver's path model), and the counters the stats
+  dialog shows.
+
+Encrypted upstreams are only enabled when the trust store loaded; otherwise they
+are dropped with a logged reason and resolution continues iteratively. DNSSEC is
+requested and validated, but never *claimed*: RecurseX ships no root trust
+anchor, so `dnssec_anchored` stays off and the answer's `validated` flag is what
+gets reported.
 
 ## Two front ends, one client
 
@@ -187,8 +218,11 @@ polling.
 | Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | the engine emits the event without the info dict, so the bridge keeps its own mirror |
 | Encryption / uTP | stored settings | the wire protocol is plaintext; uTP (BEP-29) exists but peers usually negotiate TCP |
 | WebUI over HTTPS | not built in | TLS is expected to be terminated by a reverse proxy; the server has no certificate store |
-| DoH for HTTPS tracker/web-seed fetches | not possible here | the HTTP client resolves the URL host itself, and that name is also the TLS identity and the virtual host, so it cannot be replaced by an address. DoH covers DHT bootstrap, UDP trackers and the URL guard; HTTPS keeps the OS resolver |
-| DNS rebinding on a plain-HTTP fetch | raised, not eliminated | the guard checks the address a name resolves to, but a hostile authoritative server can answer differently to the transport's own lookup. HTTPS is unaffected (certificate pinning), and the obvious targets (loopback, metadata) are refused outright |
+| 日志 panel | no data source | `AppState.logs` is read by `/api/logs` and the panel but nothing assigns it — there is no JNI call that drains the native log ring. Engine diagnostics that *are* wired (DNS mode, per-upstream health, unusable upstream entries, port-mapping phase) are in 统计 and `/api/stats`; surfacing the ring as well is a JNI call plus a poll, not a redesign |
+| Resolver-based DoH for HTTPS tracker/web-seed fetches | not possible here | the HTTP client resolves the URL host itself, and that name is also the TLS identity and the virtual host, so it cannot be replaced by an address. The resolver covers DHT bootstrap, UDP trackers and the URL guard; HTTPS fetches keep the OS resolver (but get a verified TLS connection, with the roots from `tlsroots.rs`) |
+| DNSSEC chain anchoring | not claimed | RecurseX validates signatures where a chain exists but ships no root trust anchor, so `dnssec_anchored` stays off and the stats report `validated` without over-claiming. Installing an anchor is a one-line change once the resolver accepts one |
+| DoQ / DoH3 upstreams | not compiled | `recurse-x`'s `doq`/`doh3` features pull a QUIC stack into every ABI for a capability no setting here exposes. `tls://` covers the same problem (an encrypted path that is not TCP/443), and the feature is one line in `native/Cargo.toml` away |
+| DNS rebinding on a plain-HTTP fetch | raised, not eliminated | the guard checks the address a name resolves to, but a hostile authoritative server can answer differently to the transport's own lookup. HTTPS is unaffected (certificate validation), and the obvious targets (loopback, metadata) are refused outright |
 
 These are documented in the README and marked in the UI; nothing is
 simulated. Where a number genuinely cannot be reported, the UI shows `—`.

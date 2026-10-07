@@ -281,15 +281,34 @@ data class EngineStatsDto(
         val c_clean: Long = 0L,
         val c_clean_budget: Long = 0L,
         val c_dirty_entries: Long = 0L,
-        /** DoH/wire resolution counters (see `native/src/dns.rs`). */
+        /**
+         * Name-resolution counters (see `native/src/dns.rs`). `dns_mode` is 1
+         * when the resolver forwards to configured upstreams and 0 when it
+         * walks from the root itself.
+         */
+        val dns_mode: Long = 0L,
         val dns_queries: Long = 0L,
         val dns_cache_hits: Long = 0L,
         val dns_os_fallbacks: Long = 0L,
         val dns_provider_ok: Long = 0L,
         val dns_provider_failures: Long = 0L,
-        /** Providers whose circuit is closed right now, out of the configured total. */
+        /** Upstreams whose last measured path is healthy, out of the configured total. */
         val dns_providers_up: Long = 0L,
         val dns_providers_total: Long = 0L,
+        val dns_upstream_queries: Long = 0L,
+        val dns_upstream_timeouts: Long = 0L,
+        val dns_servfails: Long = 0L,
+        val dns_nxdomain: Long = 0L,
+        val dns_nodata: Long = 0L,
+        val dns_rate_limited: Long = 0L,
+        val dns_stale: Long = 0L,
+        val dns_dnssec_failures: Long = 0L,
+        val dns_validated: Long = 0L,
+        val dns_resolver_cache_hits: Long = 0L,
+        val dns_resolver_cache_misses: Long = 0L,
+        val dns_avg_resolve_us: Long = 0L,
+        /** Configured upstreams that could not be used, in the user's own words. */
+        val dns_problems: String = "",
 ) {
     val ratio: Double
         get() = if (d_total > 0) u_total.toDouble() / d_total else 0.0
@@ -303,12 +322,41 @@ data class EngineStatsDto(
     val readOverload: Double
         get() = if (c_clean_budget > 0) c_clean.toDouble() / c_clean_budget else 0.0
 
-    /** One line for the stats dialog, or `null` when DoH is not configured. */
+    /** Two lines for the stats dialog, or `null` when nothing was resolved yet. */
     val dnsSummary: String?
-        get() =
-            if (dns_providers_total <= 0) null
-            else
-                "$dns_providers_up/$dns_providers_total 可用 · 查询 $dns_queries · 缓存命中 $dns_cache_hits · 系统解析回退 $dns_os_fallbacks"
+        get() {
+            if (dns_queries <= 0L && dns_providers_total <= 0L) return null
+            // With no upstream configured the resolver walks from the root
+            // itself, which is a mode, not a failure — say so.
+            val mode =
+                if (dns_providers_total <= 0L) "从根迭代"
+                else "转发 $dns_providers_up/$dns_providers_total 可用"
+            val first =
+                "$mode · 查询 $dns_queries · 缓存命中 $dns_cache_hits · 系统解析回退 $dns_os_fallbacks"
+            val avg = if (dns_avg_resolve_us > 0L) " · 平均 ${dns_avg_resolve_us / 1000} ms" else ""
+            // `dns_provider_ok` counts answers the resolver produced (including
+            // its own cache), `dns_upstream_queries`/`_timeouts` count the
+            // iterative walk's authoritative queries — labelled accordingly so
+            // neither reads as the other.
+            val second =
+                "解析成功 $dns_provider_ok / 失败 $dns_provider_failures · " +
+                    "权威查询 $dns_upstream_queries / 超时 $dns_upstream_timeouts$avg\n" +
+                    "DNSSEC 校验 $dns_validated / 失败 $dns_dnssec_failures · " +
+                    "解析器缓存 $dns_resolver_cache_hits 命中"
+            return "$first\n$second"
+        }
+
+    /**
+     * Unusable upstream entries, in the user's own words, or `null`.
+     *
+     * This is the feedback loop for the 上游解析器 field: a line that cannot be
+     * turned into a forwarder — a typo, a QUIC scheme this build does not
+     * compile, an encrypted entry dropped because the platform trust store was
+     * unreadable — has to be visible, because the symptom otherwise is
+     * "I added my resolver and nothing changed".
+     */
+    val dnsProblems: String?
+        get() = dns_problems.trim().ifEmpty { null }
 }
 
 /**

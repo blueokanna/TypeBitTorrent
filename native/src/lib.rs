@@ -27,6 +27,7 @@ pub mod make_torrent;
 pub mod meta;
 pub mod netinfo;
 pub mod netpolicy;
+pub mod tlsroots;
 
 use jni::sys::{jint, JNI_VERSION_1_6};
 
@@ -46,7 +47,11 @@ use jni::sys::{jint, JNI_VERSION_1_6};
 ///   `nativeSetFilePriorities` bulk commit.
 /// * 3 — network policy keys (`doh_enabled`, `doh_providers`, `ipv6_enabled`,
 ///   `allow_lan_webseeds`, `http2_enabled`, `http_max_redirects`) added to the
-///   engine config contract.
+///   engine config contract. The keys' *semantics* were later widened (the
+///   resolver became a full recursive one, and `doh_providers` became a list of
+///   `scheme://ip[/path][#tls-name]` upstreams), which is deliberately **not**
+///   an ABI change: old hostname-style entries are still accepted and mapped to
+///   their addresses, so both directions of mixed old/new remain working.
 pub const JNI_ABI: jint = 3;
 
 /// Reports the ABI revision above; called once per engine start.

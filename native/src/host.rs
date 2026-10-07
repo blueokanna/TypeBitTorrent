@@ -31,7 +31,7 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::dns::{self, DnsService, DohError, DohTransport};
+use crate::dns::{self, DnsService};
 use crate::netpolicy::NetworkPolicy;
 use typebit::platform::{ConnId, DiskId, Host, LogLevel, NetAddr};
 use typebit::{Error, Result};
@@ -59,6 +59,21 @@ const LOCAL_IP_TTL: Duration = Duration::from_secs(30);
 
 /// Shared log ring: `(level, message)` pairs, oldest first.
 pub type LogBuffer = Arc<Mutex<VecDeque<(u8, String)>>>;
+
+/// Appends one line to the log ring.
+///
+/// A free function because the host needs it *before* it exists: the trust
+/// store and the DNS configuration are resolved while `NativeHost` is being
+/// built, and a host with no way to report why HTTPS is unavailable is a host
+/// whose user has nothing to act on.
+fn push_log(logs: &LogBuffer, level: LogLevel, msg: &str) {
+    if let Ok(mut q) = logs.lock() {
+        if q.len() >= LOG_CAPACITY {
+            q.pop_front();
+        }
+        q.push_back((level as u8, msg.to_string()));
+    }
+}
 
 /// Connection bookkeeping on the engine thread.
 enum ConnSlot {
@@ -212,8 +227,8 @@ fn resolve_worker_loop(
         let spawned = std::thread::Builder::new()
             .name("typebit-resolve-job".to_string())
             .spawn(move || {
-                // DoH first (authoritative), OS resolver second, cache third —
-                // the full resolution path, on a thread of its own.
+                // The full resolution path — resolver, then OS resolver, then
+                // memo — on a thread of its own.
                 let resolved = dns.resolve(&job.host, job.port, Instant::now()).addrs;
                 let _ = worker_done_tx.send((job.host, job.port, resolved));
                 worker_active.fetch_sub(1, Ordering::SeqCst);
@@ -278,9 +293,12 @@ impl NativeHost {
 
     /// Builds a host under an explicit [`NetworkPolicy`].
     ///
-    /// The DoH transport is the same `courierust` stack the rest of the host
-    /// uses (in-tree TLS, no system dependencies), so DoH works on Android
-    /// without a DNS library and on Windows without WinHTTP.
+    /// The outbound TLS stack is `courierust`'s own (in-tree TLS, no system
+    /// dependency), but the *trust anchors* come from
+    /// [`crate::tlsroots`] — `courierust` refuses to guess, and an `https://`
+    /// URL under an unconfigured client is rejected outright rather than
+    /// silently downgraded. The DNS service is built from the same policy, so
+    /// one settings screen decides both.
     pub fn with_policy(logs: LogBuffer, policy: NetworkPolicy) -> Self {
         let (established_tx, established_rx) = channel();
         let family = if policy.ipv6 && dns::has_ipv6() {
@@ -288,10 +306,26 @@ impl NativeHost {
         } else {
             dns::IpFamily::V4Only
         };
-        let dns = DnsService::new(
-            std::sync::Arc::new(DohTransportImpl::new(&policy)),
-            policy.doh_providers.clone(),
-            family,
+        let dns = DnsService::new(&policy, family);
+        match crate::tlsroots::anchors() {
+            Ok(anchors) => push_log(
+                &logs,
+                LogLevel::Info,
+                &format!("TLS 信任库: {} 个根证书（{}）", anchors.count, anchors.source),
+            ),
+            Err(why) => push_log(
+                &logs,
+                LogLevel::Warn,
+                &format!("无可用 TLS 信任库，HTTPS 不可用: {why}"),
+            ),
+        }
+        for problem in dns.problems() {
+            push_log(&logs, LogLevel::Warn, &format!("DNS 配置: {problem}"));
+        }
+        push_log(
+            &logs,
+            LogLevel::Info,
+            &format!("DNS 模式: {}", dns.stats().summary()),
         );
         NativeHost {
             listener: None,
@@ -422,7 +456,9 @@ impl NativeHost {
     /// Close everything (engine teardown).
     ///
     /// The queues are closed first: the pools then drop their queued work and
-    /// exit instead of holding sockets open after the engine has stopped.
+    /// exit instead of holding sockets open after the engine has stopped. The
+    /// resolver's maintenance thread is joined last — it is the one background
+    /// thread that would otherwise survive an engine restart.
     pub fn shutdown(&mut self) {
         if let Some(h) = self.http_worker.as_ref() {
             h.queue.close();
@@ -430,6 +466,7 @@ impl NativeHost {
         if let Some(h) = self.resolve_worker.as_ref() {
             h.queue.close();
         }
+        self.dns.shutdown();
         self.listener = None;
         self.udp = None;
         self.lsd_udp = None;
@@ -694,7 +731,6 @@ impl NativeHost {
         self.dns.stats()
     }
 }
-
 /// The async DNS resolver: resolves each hostname on its OWN bounded thread
 /// The HTTP clients this host uses, one per transport shape.
 ///
@@ -736,18 +772,55 @@ impl HttpClients {
     }
 }
 
+/// TLS settings for a client, from the platform trust store.
+///
+/// Split out from [`build_client`] because it is the security-relevant part and
+/// the only part a test can pin without a certificate to hand: the roots are
+/// the platform's, verification is on, and an unreadable store yields `None`
+/// (the `https://`-refused path) rather than a client that trusts anything.
+fn tls_settings(
+    anchors: std::result::Result<&crate::tlsroots::TrustAnchors, &str>,
+    http2: bool,
+) -> Option<courierust::courierust_client::TlsSettings> {
+    match anchors {
+        Ok(anchors) => Some(courierust::courierust_client::TlsSettings {
+            roots: anchors.roots.clone(),
+            verify: true,
+            // The ALPN list has to match the wire format the client will speak:
+            // offering `h2` and then sending HTTP/1.1 on the negotiated
+            // connection is a protocol error waiting to happen, and offering
+            // only `http/1.1` when HTTP/2 is wanted loses the multiplexing that
+            // web seeds depend on.
+            alpn: if http2 {
+                vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+            } else {
+                vec![b"http/1.1".to_vec()]
+            },
+            ..Default::default()
+        }),
+        Err(_) => None,
+    }
+}
+
 /// Builds an HTTP client: TLS settings, timeouts, retry policy and identity.
 ///
 /// One client per transport shape for the whole session on purpose: its
 /// connection pool, HTTP/2 streams and TLS sessions are the entire reason 50
 /// announces per minute and hundreds of range requests do not turn into
 /// hundreds of handshakes.
+///
+/// **TLS is not optional.** `courierust`'s `ClientConfig::default()` carries
+/// `tls: None`, and its client rejects an `https://` URL under `tls: None`
+/// outright ("https requires TLS settings") rather than sending it in
+/// cleartext — a deliberate choice that has to be met with an equally
+/// deliberate one here. See [`tls_settings`].
 fn build_client(policy: &NetworkPolicy, http2: bool) -> courierust::courierust_client::Client {
     use courierust::courierust_client::ClientConfig;
+    let secure = http2 && policy.http2;
     let config = ClientConfig {
         // Only meaningful for https:// (ALPN); cleartext stays HTTP/1.1 —
         // see `HttpClients`.
-        http2: http2 && policy.http2,
+        http2: secure,
         http3: false,
         max_connections_per_host: 4,
         connect_timeout: Some(Duration::from_secs(6)),
@@ -772,6 +845,7 @@ fn build_client(policy: &NetworkPolicy, http2: bool) -> courierust::courierust_c
             max_backoff: Duration::from_secs(1),
             retry_non_idempotent: false,
         }),
+        tls: tls_settings(crate::tlsroots::anchors(), secure),
         ..Default::default()
     };
     courierust::courierust_client::Client::with_config(config)
@@ -989,49 +1063,6 @@ fn remove_at<T>(q: &mut VecDeque<T>, index: usize) -> Option<T> {
         q.push_front(value);
     }
     item
-}
-
-/// The DoH transport: one HTTPS POST per query on the shared HTTP client.
-///
-/// It lives here rather than in [`crate::dns`] because it is I/O, and the DNS
-/// rules must stay testable without a socket. The client is its own instance
-/// so a DoH provider cannot occupy a connection the swarm needs.
-struct DohTransportImpl {
-    client: courierust::courierust_client::Client,
-}
-
-impl DohTransportImpl {
-    fn new(policy: &NetworkPolicy) -> Self {
-        DohTransportImpl {
-            // DoH is always https, so this is the ALPN/HTTP-2 client.
-            client: build_client(policy, true),
-        }
-    }
-}
-
-impl DohTransport for DohTransportImpl {
-    fn exchange(&self, url: &str, query: &[u8], timeout: Duration) -> std::result::Result<Vec<u8>, DohError> {
-        let resp = self
-            .client
-            .request(url, courierust::courierust_http::method::Method::POST)
-            .header("content-type", "application/dns-message")
-            .header("accept", "application/dns-message")
-            .timeout(timeout)
-            .priority(courierust::courierust_h2::priority::Priority {
-                urgency: 1,
-                incremental: false,
-            })
-            .body(query.to_vec())
-            .send()
-            .map_err(|_| DohError::Transport)?;
-        if resp.status.as_u16() != 200 {
-            return Err(DohError::Transport);
-        }
-        resp.body
-            .collect_limited(64 * 1024)
-            .map(|b| b.to_vec())
-            .map_err(|_| DohError::BadResponse)
-    }
 }
 
 impl Host for NativeHost {
@@ -1723,7 +1754,7 @@ fn sock_to_netaddr(a: SocketAddr) -> NetAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns::{DohError, DohTransport};
+    use crate::dns::DnsService;
     use std::io::BufRead;
     use std::net::TcpListener as StdTcpListener;
 
@@ -1847,6 +1878,61 @@ mod tests {
         }
     }
 
+    /// Stands in for a host whose trust store cannot be read.
+    fn no_store() -> std::result::Result<&'static crate::tlsroots::TrustAnchors, &'static str> {
+        Err("no store")
+    }
+
+    /// TLS is configured from the platform store, verified, and never
+    /// downgraded. This is the pin on a real defect: `ClientConfig::default()`
+    /// carries `tls: None`, under which every `https://` tracker and web seed
+    /// was refused ("https requires TLS settings") — so the client had no HTTPS
+    /// at all, and the obvious wrong fix (`verify: false`) would have handed
+    /// them to anyone on the path.
+    #[test]
+    fn the_https_client_verifies_against_the_platform_store() {
+        // An unreadable store is refused outright, not turned into trust-all.
+        assert!(tls_settings(no_store(), true).is_none());
+        let Ok(anchors) = crate::tlsroots::anchors() else {
+            // A host with no readable trust store: the `None` path above is the
+            // whole behaviour, and HTTPS stays refused rather than unverified.
+            return;
+        };        let tls = tls_settings(Ok(anchors), true).expect("configured");
+        assert!(tls.verify, "certificate verification must never be off");
+        assert_eq!(tls.roots.len(), anchors.count);
+        assert!(!tls.roots.is_empty(), "a store with no roots verifies nothing");        assert_eq!(tls.alpn, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+
+        // ALPN has to match the wire format the client will speak.
+        let h1 = tls_settings(Ok(anchors), false).expect("configured");
+        assert_eq!(h1.alpn, vec![b"http/1.1".to_vec()]);
+        assert_eq!(h1.roots.len(), anchors.count);
+    }
+
+    /// Whatever else an `https://` URL does, it must not be sent as cleartext:
+    /// the request that reaches the server is a TLS handshake, not a request
+    /// line. A plaintext server can only see the former.
+    #[test]
+    fn an_https_url_is_never_sent_in_cleartext() {
+        let server = TestServer::start(1, |_| http_response("200 OK", "", b"ok"));
+        let client = build_client(&loopback_policy(), true);
+        let result = client
+            .request(
+                &format!("https://127.0.0.1:{}/announce", server.port),
+                courierust::courierust_http::method::Method::GET,
+            )
+            .timeout(Duration::from_secs(3))
+            .send();
+        // The server answers HTTP on a plain socket, so a TLS client cannot be
+        // satisfied by it.
+        assert!(result.is_err(), "a plaintext server must not answer an HTTPS request");
+        for head in server.requests() {
+            assert!(
+                !head.starts_with("GET ") && !head.starts_with("POST "),
+                "an https request was sent as cleartext: {head:?}"
+            );
+        }
+    }
+
     fn http_response(status: &str, extra_headers: &str, body: &[u8]) -> Vec<u8> {
         let mut out = format!(
             "HTTP/1.1 {status}\r\n{extra_headers}content-length: {}\r\nconnection: close\r\n\r\n",
@@ -1857,28 +1943,18 @@ mod tests {
         out
     }
 
-    /// A DoH transport that always fails: the tests that need an answer prime
-    /// the cache directly, so no query is ever issued.
-    struct SilentDoh;
-
-    impl DohTransport for SilentDoh {
-        fn exchange(
-            &self,
-            _url: &str,
-            _query: &[u8],
-            _timeout: Duration,
-        ) -> std::result::Result<Vec<u8>, DohError> {
-            Err(DohError::Transport)
-        }
-    }
-
+    /// A DNS service for the guard tests.
+    ///
+    /// No upstream is configured, so nothing in these tests can reach the
+    /// network: the tests that need an answer prime the memo directly, and the
+    /// ones that need a *real* answer use a loopback name (`localhost`), which
+    /// the OS resolver owns.
     fn test_dns() -> DnsService {
-        // A provider is configured (and always fails) because the DoH URL
-        // rewrite only applies when DoH is the resolver — which is the point:
-        // the guard and the rewrite are DoH features, not free-standing ones.
         DnsService::new(
-            Arc::new(SilentDoh),
-            vec!["https://doh.test/dns-query".to_string()],
+            &NetworkPolicy {
+                doh_providers: Vec::new(),
+                ..NetworkPolicy::default()
+            },
             dns::IpFamily::V4Only,
         )
     }
@@ -2116,26 +2192,25 @@ mod tests {
     #[test]
     #[ignore = "network diagnostic; run with `cargo test -- --ignored`"]
     fn diag_live_doh_round_trip() {
-        // Exercises the real transport (TLS, HTTP/2, DNS wire format) against a
-        // public resolver. Skipped by default because CI and locked-down
-        // networks have no HTTPS egress — in that case the assertion below
-        // still proves the failure is reported cleanly rather than panicking.
-        let transport = DohTransportImpl::new(&NetworkPolicy::default());
-        let query = crate::dns::encode_query(0x1234, "cloudflare-dns.com", crate::dns::Rtype::A)
-            .expect("query");
-        match transport.exchange(
-            "https://cloudflare-dns.com/dns-query",
-            &query,
-            Duration::from_secs(8),
-        ) {
-            Ok(body) => {
-                let msg = crate::dns::decode_response(&body, 0x1234).expect("decodes");
-                let addrs = msg.ipv4("cloudflare-dns.com");
-                println!("live DoH: rcode {} answers {} -> {addrs:?}", msg.rcode, msg.answers.len());
-                assert!(!addrs.is_empty(), "a live resolver must answer with an address");
-            }
-            Err(e) => println!("live DoH unavailable in this environment: {e:?}"),
+        // Exercises the real path (trust anchors, TLS, DoH, DNSSEC request)
+        // against a public resolver. Skipped by default because CI and
+        // locked-down networks have no HTTPS egress — in that case the
+        // assertion below still proves the failure is *reported*, and that a
+        // missing trust store is named rather than silently downgraded.
+        match crate::tlsroots::anchors() {
+            Ok(a) => println!("trust anchors: {} from {}", a.count, a.source),
+            Err(why) => println!("no trust anchors: {why}"),
         }
+        let policy = NetworkPolicy::default();
+        let svc = DnsService::new(&policy, dns::IpFamily::V4Only);
+        let resolved = svc.resolve("cloudflare-dns.com", 443, std::time::Instant::now());
+        println!("live resolve: {:?} -> {:?}", resolved.source, resolved.addrs);
+        println!("dns stats: {}", svc.stats().summary());
+        assert!(
+            !resolved.addrs.is_empty(),
+            "a working network must resolve a well-known name (through the OS resolver at worst)"
+        );
+        svc.shutdown();
     }
 
     #[test]

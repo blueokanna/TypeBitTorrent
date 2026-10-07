@@ -198,9 +198,20 @@ thread (bounded), and only then does the process exit.
 
 The engine's own network policy is *not* on this list: it lives in the settings
 (连接 → 域名解析) and is read at engine start, so a NAS running in a container
-with a broken DNS server can be given DoH endpoints from the WebUI, and a NAS
-that must never touch its host network can switch LAN fetches off. The counters
-for that live in `/api/stats` (`dns_*`).
+with a broken DNS server can be given upstream resolvers from the WebUI, and a
+NAS that must never touch its host network can switch LAN fetches off. The
+counters for that live in `/api/stats` (`dns_*`).
+
+Two container-specific notes on that screen:
+
+* an upstream must be **addressed by IP** (`https://1.1.1.1/dns-query#cloudflare-dns.com`),
+  because the appliance's own name server is exactly the thing being bypassed;
+* with the provider list empty the resolver iterates from the root, which needs
+  outbound UDP/53 and no CA store at all — the correct configuration for a
+  minimal image that ships no `ca-certificates`. If encrypted upstreams are
+  configured and no trust store can be read, they are dropped with a line in the
+  log and resolution falls back to iterating. `TYPEBIT_CA_BUNDLE=/path/to/bundle.pem`
+  points the trust store at a bundle explicitly instead.
 
 ### Security
 * Sessions are 256-bit random tokens in an `HttpOnly`, `SameSite=Strict` cookie

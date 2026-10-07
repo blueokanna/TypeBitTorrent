@@ -55,15 +55,17 @@ per option, whether it is **live** (actually drives the engine/bridge),
 
 | Option | Status |
 | --- | --- |
-| 启用 DNS over HTTPS | **live at engine start** — the bridge builds its resolver from this; providers are tried in order with 250 ms hedging behind a circuit breaker |
-| DoH 服务商 | **live at engine start** (each entry must be `https://`; anything else is dropped) |
+| 使用内置解析器 | **live at engine start** — on: the built-in recursive resolver (iterative from the root, QNAME minimisation, 0x20, DNSSEC where a chain exists) handles DHT bootstrap, UDP trackers and the URL guard; off: no upstream group is configured, so the resolver iterates from the root and asks no third party |
+| 上游解析器 | **live at engine start** — one `scheme://ip[/path][#tls-name]` per line (`https://`, `tls://`, `udp://`/`tcp://`, or a bare IP for UDP). Well-known provider hostnames are mapped to their addresses; an entry that cannot be parsed is logged with its own text and skipped. Encrypted entries are only enabled when the platform trust store loaded |
 | 启用 IPv6 | **live at engine start** — AAAA queries plus a dual-stack UDP socket for DHT and UDP trackers |
 | 允许局域网 Web 种子 | **live at engine start** — off refuses RFC 1918/ULA targets; loopback and the cloud metadata address are refused regardless |
 
 The resolver is the only place the client deliberately talks to a third party it
 was not told about by a torrent, and it is therefore the only network feature
-with its own off switch. Counters (`dns_*`) are exposed in 统计 and in the WebUI
-`/api/stats`, so "are the providers reachable from here?" is an observation, not
+with its own off switch — and with the switch off it still resolves everything,
+just by walking from the root itself. Counters (`dns_*`, including the mode,
+per-upstream health and DNSSEC tallies) are exposed in 统计 and in the WebUI
+`/api/stats`, so "are the upstreams reachable from here?" is an observation, not
 a guess.
 
 ## 速度 (Speed)

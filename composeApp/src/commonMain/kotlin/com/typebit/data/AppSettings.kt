@@ -188,15 +188,32 @@ data class ConnectionSettings(
     val announceToAllTiers: Boolean = true,
     val peerTos: Int = 0,
     /**
-     * Resolve names over DNS-over-HTTPS instead of trusting the OS resolver.
+     * Resolve names through the built-in resolver instead of trusting the OS
+     * resolver.
      *
      * On a network whose DNS is filtered or hijacked this is the difference
      * between "trackers and DHT bootstrap resolve" and "nothing resolves", and
      * it also feeds the address guard that refuses fetches pointed at loopback
-     * or the cloud metadata service. Off = the OS resolver, unchanged.
+     * or the cloud metadata service. The resolver validates DNSSEC where a
+     * signature chain exists, minimises QNAMEs, and can walk from the root
+     * itself; see [dohProviders] for which upstreams it forwards to.
+     *
+     * Off = the resolver asks no third party anything: it starts at the root
+     * servers and walks down, which is the most private mode and the one that
+     * needs outbound UDP/53 to work. If that is blocked, lookups fall back to
+     * the OS resolver.
      */
     val enableDoh: Boolean = true,
-    /** DoH endpoints in priority order (newline separated in the UI). */
+    /**
+     * Forwarder upstreams in priority order, one per line.
+     *
+     * Each line is `scheme://address[/path][#tls-name]` — `https://1.1.1.1/dns-query#cloudflare-dns.com`,
+     * `tls://1.1.1.1#one.one.one.one`, or a bare `223.5.5.5` for plain DNS.
+     * The address must be an IP literal: a resolver cannot resolve its own
+     * name. Well-known provider hostnames are mapped automatically, so
+     * `https://cloudflare-dns.com/dns-query` still works, and anything else is
+     * resolved once at startup.
+     */
     val dohProviders: String = DEFAULT_DOH_PROVIDERS,
     /**
      * Ask for AAAA records and allow IPv6 peers/trackers.
@@ -215,11 +232,18 @@ data class ConnectionSettings(
     val allowLanWebseeds: Boolean = true,
 )
 
-/** Default DoH ladder, mirrored from `native/src/dns.rs`. */
+/**
+ * Default forwarder ladder, mirrored from `native/src/dns.rs`.
+ *
+ * Addressed by IP with the TLS name after `#`: the resolver cannot resolve a
+ * resolver's hostname, so the address has to be literal. The three entries are
+ * a global anycast path, a mainland-China path, and a third that keeps
+ * answering where the first two are throttled.
+ */
 const val DEFAULT_DOH_PROVIDERS: String =
-    "https://cloudflare-dns.com/dns-query\n" +
-        "https://dns.alidns.com/dns-query\n" +
-        "https://doh.pub/dns-query"
+    "https://1.1.1.1/dns-query#cloudflare-dns.com\n" +
+        "https://223.5.5.5/dns-query#dns.alidns.com\n" +
+        "https://1.12.12.12/dns-query#doh.pub"
 
 
 // ---------------------------------------------------------------------------

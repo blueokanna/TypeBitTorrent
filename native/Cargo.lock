@@ -148,6 +148,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "recurse-x"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c77a3949b1647447b698fa899efec77f729bb312b420af4a8e82731fcdb64ac3"
+dependencies = [
+ "courierust",
+ "nextjson",
+ "tzcraft",
+]
+
+[[package]]
 name = "rustbinary"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,6 +280,7 @@ dependencies = [
  "getrandom",
  "jni",
  "nextjson",
+ "recurse-x",
  "typebit",
  "windows-sys",
 ]

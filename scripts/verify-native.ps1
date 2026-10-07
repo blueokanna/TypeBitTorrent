@@ -65,6 +65,25 @@ function Test-Exports {
         $script:failures.Add("$Label missing: $Binary (run scripts\build-desktop.ps1 / build-android.ps1)")
         return
     }
+    # Staleness. This script verifies binaries, it does not build them, so a
+    # green run over a library that predates the Rust source is worse than no
+    # check at all: it is a false negative that ships. Comparing against the
+    # newest source file is enough to catch the real case (edit, then verify
+    # without rebuilding), and it is why every failure message names the script
+    # that rebuilds.
+    $binaryTime = (Get-Item -LiteralPath $Binary).LastWriteTimeUtc
+    $newest = Get-ChildItem -LiteralPath (Join-Path $script:native "src") -Filter *.rs -Recurse |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    $manifest = Get-Item -LiteralPath (Join-Path $script:native "Cargo.toml")
+    if ($manifest.LastWriteTimeUtc -gt $binaryTime) { $newest = $manifest }
+    if ($newest -and $newest.LastWriteTimeUtc -gt $binaryTime) {
+        $script:failures.Add(
+            "$Label is older than $($newest.Name) - rebuild before verifying " +
+            "(scripts\build-desktop.ps1 / build-android.ps1)"
+        )
+        return
+    }
     $isPe = $Binary.EndsWith(".dll", [System.StringComparison]::OrdinalIgnoreCase)
     if ($isPe) {
         if (-not (Test-Path $script:readobj)) {

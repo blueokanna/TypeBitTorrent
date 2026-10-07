@@ -17,6 +17,12 @@ jni = { version = "0.22.4" }
 getrandom = "0.4"
 nextjson = { version = "0.1", default-features = false }
 courierust = { version = "1.0.9", default-features = false, features = ["std"] }
+recurse-x = { version = "0.2.3", default-features = false, features = [
+    "std",
+    "dot",
+    "doh",
+    "dnssec",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [

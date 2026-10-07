@@ -1364,10 +1364,13 @@ fn stats_to_json(
     w.comma();
     w.kv_u64("c_dirty_entries", st.cache_dirty_entries as u64);
     w.comma();
-    // Resolution health: how many answers came from the DoH cache versus the OS
-    // resolver, and which providers are actually up. A user whose network
-    // breaks trackers can see whether DoH is working from the stats dialog
-    // instead of guessing.
+    // Resolution health: how many answers came from the memo versus the OS
+    // resolver, whether the resolver is forwarding or walking from the root,
+    // and which upstreams are actually up. A user whose network breaks trackers
+    // can see whether name resolution is working from the stats dialog instead
+    // of guessing.
+    w.kv_u64("dns_mode", u64::from(dns.forwarded));
+    w.comma();
     w.kv_u64("dns_queries", dns.queries);
     w.comma();
     w.kv_u64("dns_cache_hits", dns.cache_hits);
@@ -1378,9 +1381,40 @@ fn stats_to_json(
     w.comma();
     w.kv_u64("dns_provider_failures", dns.provider_failures);
     w.comma();
-    w.kv_u64("dns_providers_up", dns.providers.iter().filter(|(_, up)| *up).count() as u64);
+    w.kv_u64("dns_providers_up", dns.providers.iter().filter(|p| p.up).count() as u64);
     w.comma();
     w.kv_u64("dns_providers_total", dns.providers.len() as u64);
+    w.comma();
+    w.kv_u64("dns_upstream_queries", dns.upstream_queries);
+    w.comma();
+    w.kv_u64("dns_upstream_timeouts", dns.upstream_timeouts);
+    w.comma();
+    w.kv_u64("dns_servfails", dns.servfails);
+    w.comma();
+    w.kv_u64("dns_nxdomain", dns.nxdomain);
+    w.comma();
+    w.kv_u64("dns_nodata", dns.nodata);
+    w.comma();
+    w.kv_u64("dns_rate_limited", dns.rate_limited);
+    w.comma();
+    w.kv_u64("dns_stale", dns.stale);
+    w.comma();
+    w.kv_u64("dns_dnssec_failures", dns.dnssec_failures);
+    w.comma();
+    w.kv_u64("dns_validated", dns.validated);
+    w.comma();
+    w.kv_u64("dns_resolver_cache_hits", dns.resolver_cache_hits);
+    w.comma();
+    w.kv_u64("dns_resolver_cache_misses", dns.resolver_cache_misses);
+    w.comma();
+    w.kv_u64("dns_avg_resolve_us", dns.avg_resolve_us);
+    w.comma();
+    // Why a configured upstream is *not* in use, in the user's own words: an
+    // unparsable entry, a QUIC upstream this build does not compile, or
+    // encrypted entries dropped because the platform trust store was
+    // unreadable. Silence here would leave "I added my resolver and nothing
+    // changed" with nowhere to look.
+    w.kv_string("dns_problems", &dns.problems.join(" · "));
     w.end_object();
     w.into_string()
 }

@@ -286,29 +286,44 @@ packages deliberately do *not* do, are in [`docs/nas.md`](./docs/nas.md).
 Four things in here are not "how everyone does it", and each one exists because
 the previous behaviour lost peers or corrupted data.
 
-**DNS over HTTPS, with hedging and a breaker.** The engine resolves names
-through the OS resolver, which is the weakest link on a filtered or hijacked
-network: a poisoned answer leaves every `udp://` tracker and every BEP-5 router
-unreachable, and one blocked domain can hold the whole bootstrap behind it.
-[`native/src/dns.rs`](native/src/dns.rs) is a resolver that asks
-`https://` DoH endpoints (RFC 8484, wire format, no extra dependency), with:
+**A real resolver, not a DoH client.** The engine resolves names through the OS
+resolver, which is the weakest link on a filtered or hijacked network: a poisoned
+answer leaves every `udp://` tracker and every BEP-5 router unreachable, and one
+blocked domain can hold the whole bootstrap behind it. Resolution is delegated to
+[RecurseX](https://github.com/blueokanna/RecurseX) — an iterative resolver that
+walks down from the root servers with RFC 9156 QNAME minimisation and 0x20 case
+randomisation, validates DNSSEC wherever a signature chain exists, keeps a
+multi-tier cache with serve-stale (RFC 8767), and can forward over DoT or DoH
+when you name an upstream. Writing that here would be strictly worse than using
+it.
 
-- **A TTL-aware cache** (positive *and* negative) and **single-flight**, so N
-  callers asking for the same name produce one query, not N;
-- **Hedging**: if the first provider has not answered in 250 ms the next one is
-  asked in parallel and the first answer wins — a blocker cannot make every
-  lookup cost a timeout;
-- **Circuit breakers** with a growing backoff, so a provider that is *blocked*
-  stops costing a timeout on every lookup, while a provider that failed once is
-  retried soon;
-- **An OS fallback that never blocks the engine.** The hooks the engine calls on
-  its own thread (`resolve_host` / `resolve_host_all`) read the cache, fall back
-  to the system resolver immediately, and queue a DoH refresh on a worker — the
-  tick loop is never waiting on a provider. The next lookup gets the
-  authoritative answer.
+What [`native/src/dns.rs`](native/src/dns.rs) adds is the part a resolver cannot
+have, because it is about *this* engine rather than about DNS:
 
-It is on by default and can be turned off (Settings → 连接 → 域名解析); the
-provider list is yours to edit.
+- **A non-blocking edge.** `Resolver::resolve` blocks by design, and the hooks
+  the engine calls on its own thread (`resolve_host` / `resolve_host_all`) must
+  not: they answer from a small memo of the resolver's answers (kept with their
+  TTL, clamped 30 s – 1 h), fall back to the OS resolver immediately, and warm
+  the resolver on a background worker. The next lookup gets the authoritative
+  answer. The tick loop never waits on a name.
+- **Single-flight across callers**, so six BEP-5 routers bootstrapping at once
+  are one lookup per name.
+- **A guard-compatible answer.** The SSRF guard's address check reads the memo,
+  so it is decided on the same answers the engine then dials.
+- **Upstream normalisation.** A forwarder is addressed by *IP* with the TLS name
+  after `#`, because a resolver cannot resolve its own name; well-known provider
+  hostnames are mapped to their addresses, and anything else is resolved once at
+  startup. An entry that cannot be used is reported in the log with your own
+  text, never silently dropped or silently interpreted as something else.
+
+It is on by default (Settings → 连接 → 域名解析). Turn it off and the resolver
+asks no third party anything: it starts at the root servers and walks down, which
+is the most private mode available here. HTTPS, DoT and plain upstreams are all
+acceptible in the list; encrypted ones are only used when the platform's trust
+anchors could be read, because a DoT/DoH forwarder with verification off is an
+unauthenticated server that can rewrite every answer — worse than the OS
+resolver it replaced. If they cannot be read, the encrypted entries are dropped,
+the reason is logged, and resolution continues iteratively.
 
 **A guard against torrent-supplied URLs.** Every HTTP URL this client fetches
 comes from something untrusted — a tracker list, a web-seed list, or the
@@ -404,10 +419,15 @@ engine on change.
 
 | setting | default | meaning |
 |---------|---------|---------|
-| 启用 DNS over HTTPS | on | resolve tracker / DHT-bootstrap names over RFC 8484 DoH instead of trusting the OS resolver |
-| DoH 服务商 | Cloudflare, AliDNS, DNSPod | one `https://` endpoint per line, tried in order with 250 ms hedging |
+| 使用内置解析器 | on | resolve tracker / DHT-bootstrap names with the built-in recursive resolver (iterative from the root, QNAME minimisation, 0x20, DNSSEC where a chain exists) instead of trusting the OS resolver |
+| 上游解析器 | Cloudflare, AliDNS, DNSPod | one `scheme://ip[/path][#tls-name]` upstream per line; `https://1.1.1.1/dns-query#cloudflare-dns.com` (DoH), `tls://1.1.1.1#one.one.one.one` (DoT), or a bare `223.5.5.5` (plain). Empty = iterate from the root and tell no third party anything |
 | 启用 IPv6 | on | ask for AAAA and let one dual-stack UDP socket carry IPv6 DHT and UDP trackers |
 | 允许局域网 Web 种子 | on | allow fetches that resolve to RFC 1918 / ULA (the NAS case); loopback and the cloud metadata address are refused either way |
+
+Encrypted upstreams are verified against the platform trust store, and only used
+when it could be read: `courierust` has no implicit store, so the alternative
+would be an unauthenticated TLS peer. See
+[`docs/architecture.md`](./docs/architecture.md) for what that means per platform.
 
 #### 速度 (Speed)
 

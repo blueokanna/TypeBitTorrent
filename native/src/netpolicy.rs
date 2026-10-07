@@ -211,7 +211,13 @@ pub fn url_port(url: &str) -> Option<u16> {
 /// The network policy applied to every engine-supplied HTTP request.
 #[derive(Debug, Clone)]
 pub struct NetworkPolicy {
-    /// DoH providers in priority order; empty disables DoH.
+    /// Forwarder upstream specs in priority order; empty means the resolver
+    /// walks from the root itself.
+    ///
+    /// Each entry is `scheme://address[/path][#tls-name]` (see
+    /// [`crate::dns::parse_upstream`]). Only the schemes this build can speak
+    /// survive parsing; nothing here is trusted to be well-formed, because it
+    /// comes from a settings file.
     pub doh_providers: Vec<String>,
     /// Ask for AAAA records as well as A.
     pub ipv6: bool,
@@ -262,7 +268,7 @@ impl NetworkPolicy {
                 .iter()
                 .filter_map(|v| v.as_str())
                 .map(|s| s.trim().to_string())
-                .filter(|s| s.starts_with("https://") && !s.is_empty())
+                .filter(|s| !s.is_empty())
                 .collect();
         }
         if let Some(Value::Bool(flag)) = root.get("doh_enabled") {
@@ -437,7 +443,7 @@ mod tests {
     fn config_parsing_is_tolerant() {
         let json = r#"{
             "doh_enabled": true,
-            "doh_providers": ["https://cloudflare-dns.com/dns-query", "http://evil.example/dns", ""],
+            "doh_providers": ["https://1.1.1.1/dns-query#cloudflare-dns.com", "tls://223.5.5.5#dns.alidns.com", ""],
             "ipv6_enabled": false,
             "http2_enabled": false,
             "allow_lan_webseeds": false,
@@ -445,10 +451,15 @@ mod tests {
         }"#;
         let root: nextjson::Value = nextjson::nextdecode(json.as_bytes()).unwrap();
         let policy = NetworkPolicy::from_config(&root);
-        // Only https providers survive, blank entries are dropped.
+        // Blank entries are dropped; everything else is passed through
+        // verbatim, because the upstream grammar belongs to the resolver and
+        // refusing an entry here would report the wrong thing to the user.
         assert_eq!(
             policy.doh_providers,
-            vec!["https://cloudflare-dns.com/dns-query".to_string()]
+            vec![
+                "https://1.1.1.1/dns-query#cloudflare-dns.com".to_string(),
+                "tls://223.5.5.5#dns.alidns.com".to_string()
+            ]
         );
         assert!(!policy.ipv6);
         assert!(!policy.http2);
