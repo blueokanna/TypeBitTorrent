@@ -12,19 +12,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.typebit.model.TorrentStatus
+import com.typebit.ui.i18n.LocalStrings
+import com.typebit.ui.i18n.TextKey
 import com.typebit.ui.theme.TypeBitThemeColors
 
 /** Fully-rounded MD3 status pill: tinted container + colored label. */
 @Composable
 fun StatusBadge(status: TorrentStatus, modifier: Modifier = Modifier) {
     val s = TypeBitThemeColors.status
+    val strings = LocalStrings.current
     val (label, color) = when (status) {
-        TorrentStatus.DOWNLOADING -> "下载中" to s.download
-        TorrentStatus.SEEDING -> "做种" to s.seed
-        TorrentStatus.PAUSED -> "已暂停" to s.pause
-        TorrentStatus.FETCHING_METADATA -> "获取元数据" to s.metadata
-        TorrentStatus.STOPPED -> "已停止" to s.idle
-        TorrentStatus.FAILED -> "出错" to s.error
+        TorrentStatus.DOWNLOADING -> strings[TextKey.STATUS_DOWNLOADING] to s.download
+        TorrentStatus.SEEDING -> strings[TextKey.STATUS_SEEDING] to s.seed
+        TorrentStatus.PAUSED -> strings[TextKey.STATUS_PAUSED] to s.pause
+        TorrentStatus.FETCHING_METADATA -> strings[TextKey.STATUS_FETCHING_METADATA] to s.metadata
+        TorrentStatus.STOPPED -> strings[TextKey.STATUS_STOPPED] to s.idle
+        TorrentStatus.FAILED -> strings[TextKey.STATUS_FAILED] to s.error
     }
     val bg = color.copy(alpha = 0.16f)
     Box(

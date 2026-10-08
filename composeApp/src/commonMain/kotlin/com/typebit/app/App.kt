@@ -39,6 +39,7 @@ import com.typebit.ui.screens.rss.RssScreen
 import com.typebit.ui.screens.search.SearchScreen
 import com.typebit.ui.screens.settings.SettingsScreen
 import com.typebit.ui.theme.TypeBitTheme
+import com.typebit.ui.i18n.LocalizedContent
 import com.typebit.ui.wallpaper.averageBrightness
 import com.typebit.ui.wallpaper.extractSeedColor
 import com.typebit.ui.wallpaper.loadWallpaperBitmap
@@ -111,18 +112,20 @@ fun App() {
                                 ?: wallpaper?.let { extractSeedColor(it) } ?: DEFAULT_SEED
                 }
 
-        TypeBitTheme(
-                seedArgb = seedArgb,
-                darkTheme = darkTheme,
-                amoled = appearance.themeMode == ThemeMode.AMOLED,
-                fontChoice = appearance.fontChoice,
-                wallpaper = blurredWallpaper,
-                wallpaperEnabled = appearance.wallpaperEnabled,
-                wallpaperDim = appearance.dimAlpha,
-                wallpaperFit = appearance.wallpaperFit,
-                wallpaperOffsetY = appearance.wallpaperOffsetY,
-                wallpaperBrightness = wallpaperBrightness,
-        ) { AppRoot(store) }
+        LocalizedContent(state.settings.behavior.language) {
+                TypeBitTheme(
+                        seedArgb = seedArgb,
+                        darkTheme = darkTheme,
+                        amoled = appearance.themeMode == ThemeMode.AMOLED,
+                        fontChoice = appearance.fontChoice,
+                        wallpaper = blurredWallpaper,
+                        wallpaperEnabled = appearance.wallpaperEnabled,
+                        wallpaperDim = appearance.dimAlpha,
+                        wallpaperFit = appearance.wallpaperFit,
+                        wallpaperOffsetY = appearance.wallpaperOffsetY,
+                        wallpaperBrightness = wallpaperBrightness,
+                ) { AppRoot(store) }
+        }
 }
 
 internal fun createAppStore(): AppStore =

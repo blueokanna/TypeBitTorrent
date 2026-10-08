@@ -225,14 +225,10 @@ pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<
 
     progress.begin(total);
 
-    // Stream-hash the logical byte stream, flushing one 20-byte hash per
-    // completed piece.
     let mut pieces: Vec<u8> = Vec::new();
     let mut hasher = Sha1::new();
     let mut in_piece = 0u32;
     for (i, f) in files.iter().enumerate() {
-        // Read errors and cancellation propagate: a silently short torrent
-        // would be worse than a visible failure.
         let n = read_file_chunks(&f.abs_path, progress, |data| {
             let mut off = 0usize;
             while off < data.len() {
@@ -244,17 +240,13 @@ pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<
                 off += take;
                 in_piece += take as u32;
                 if in_piece >= piece_length {
-                    // `Sha1: Default` lets mem::take swap in a fresh hasher
-                    // without moving the captured variable.
                     pieces.extend_from_slice(&core::mem::take(&mut hasher).finalize());
                     in_piece = 0;
                 }
             }
             progress.add(data.len() as u64);
         })?;
-        // The file changed under us (a writer is still appending to it):
-        // refuse rather than emit a torrent whose piece table does not match
-        // the bytes on disk — such a torrent can never complete.
+
         if n != sizes[i] {
             progress.finish();
             return Err(format!(
@@ -269,7 +261,6 @@ pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<
     }
     progress.finish();
 
-    // Build the `info` dictionary.
     let mut info: Vec<(&[u8], BVal)> = vec![
         (b"name", bytes(name.as_bytes().to_vec())),
         (b"piece length", int(piece_length as i64)),
@@ -305,8 +296,6 @@ pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<
         info.push((b"private", int(1)));
     }
 
-    // Announce tiers (BEP-12). Blank URLs are dropped; the first URL of the
-    // first non-empty tier is mirrored into the legacy `announce` key.
     let tiers: Vec<Vec<&str>> = build
         .announce_list
         .iter()
@@ -392,8 +381,7 @@ mod tests {
         let dir = scratch("multi");
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
-        // 40 KiB + 30 KiB: forces a piece that straddles the file boundary
-        // at 32 KiB piece length.
+
         std::fs::write(&f1, vec![0xABu8; 40 * 1024]).unwrap();
         std::fs::write(&f2, vec![0xCDu8; 30 * 1024]).unwrap();
         let build = TorrentBuild {

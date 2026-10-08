@@ -32,6 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.typebit.model.Torrent
 import com.typebit.model.TorrentStatus
+import com.typebit.ui.i18n.LocalStrings
+import com.typebit.ui.i18n.TextKey
 import com.typebit.ui.util.Format
 
 /**
@@ -53,18 +55,27 @@ fun TorrentActionsList(
     torrent: Torrent,
     actions: TorrentActions,
 ) {
+    val strings = LocalStrings.current
     ListItem(
-        headlineContent = { Text("重命名") },
+        headlineContent = { Text(strings[TextKey.ACTION_RENAME]) },
         leadingContent = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
         modifier = Modifier.clickable(onClick = actions.onRename),
     )
     ListItem(
-        headlineContent = { Text("分享（磁力链接）") },
+        headlineContent = { Text(strings[TextKey.ACTION_SHARE_MAGNET]) },
         leadingContent = { Icon(Icons.Default.Share, contentDescription = null) },
         modifier = Modifier.clickable(onClick = actions.onShare),
     )
     ListItem(
-        headlineContent = { Text(if (torrent.status == TorrentStatus.PAUSED) "继续" else "暂停") },
+        headlineContent = {
+            Text(
+                if (torrent.status == TorrentStatus.PAUSED) {
+                    strings[TextKey.ACTION_RESUME]
+                } else {
+                    strings[TextKey.ACTION_PAUSE]
+                },
+            )
+        },
         leadingContent = {
             Icon(
                 if (torrent.status == TorrentStatus.PAUSED) Icons.Default.PlayArrow else Icons.Default.Pause,
@@ -74,7 +85,7 @@ fun TorrentActionsList(
         modifier = Modifier.clickable(onClick = actions.onTogglePause),
     )
     ListItem(
-        headlineContent = { Text("删除", color = MaterialTheme.colorScheme.error) },
+        headlineContent = { Text(strings[TextKey.ACTION_DELETE], color = MaterialTheme.colorScheme.error) },
         leadingContent = {
             Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
         },
@@ -90,6 +101,7 @@ fun TorrentActionsSheet(
     actions: TorrentActions,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 24.dp)) {
             Text(
@@ -100,7 +112,10 @@ fun TorrentActionsSheet(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
             )
             Text(
-                "${Format.percent(torrent.progress)} · ${Format.bytes(torrent.sizeBytes)} · ${torrent.seeds} 种 / ${torrent.peers} 下载者",
+                "${Format.percent(torrent.progress)} · ${Format.bytes(torrent.sizeBytes)} · " +
+                    strings[TextKey.TORRENT_ACTION_SUMMARY]
+                        .replace("{seeds}", torrent.seeds.toString())
+                        .replace("{peers}", torrent.peers.toString()),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp),
@@ -119,16 +134,17 @@ fun RenameTorrentDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("重命名") },
+        title = { Text(strings[TextKey.RENAME_TORRENT]) },
         text = {
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
                 singleLine = true,
-                label = { Text("新名称") },
+                label = { Text(strings[TextKey.NEW_TORRENT_NAME]) },
                 modifier = Modifier.fillMaxWidth(),
             )
         },
@@ -136,10 +152,10 @@ fun RenameTorrentDialog(
             TextButton(
                 onClick = { if (text.trim().isNotEmpty()) onConfirm(text.trim()) },
                 enabled = text.trim().isNotEmpty(),
-            ) { Text("确定") }
+            ) { Text(strings[TextKey.CONFIRM]) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(strings[TextKey.CANCEL]) }
         },
     )
 }
@@ -151,15 +167,21 @@ fun DeleteTorrentDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("删除种子") },
-        text = { Text("确定删除「${torrent.name}」吗？已下载的临时文件（.part）会被清理。") },
+        title = { Text(strings[TextKey.DELETE_TORRENT]) },
+        text = {
+            Text(
+                strings[TextKey.DELETE_TORRENT_CONFIRMATION]
+                    .replace("{name}", torrent.name),
+            )
+        },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("删除") }
+            TextButton(onClick = onConfirm) { Text(strings[TextKey.ACTION_DELETE]) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(strings[TextKey.CANCEL]) }
         },
     )
 }

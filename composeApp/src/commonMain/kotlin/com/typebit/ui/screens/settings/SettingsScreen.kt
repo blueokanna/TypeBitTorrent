@@ -58,18 +58,20 @@ import com.typebit.app.Route
 import com.typebit.platform.Platform
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
+import com.typebit.ui.i18n.LocalStrings
+import com.typebit.ui.i18n.TextKey
 
-private enum class SettingsCategory(val label: String) {
-    BEHAVIOR("行为"),
-    APPEARANCE("外观"),
-    DOWNLOADS("下载"),
-    CONNECTION("连接"),
-    SPEED("速度"),
-    BIT_TORRENT("BitTorrent"),
-    BACKGROUND("后台"),
-    WEBUI("WebUI"),
-    ADVANCED("高级"),
-    RSS("RSS"),
+private enum class SettingsCategory {
+    BEHAVIOR,
+    APPEARANCE,
+    DOWNLOADS,
+    CONNECTION,
+    SPEED,
+    BIT_TORRENT,
+    BACKGROUND,
+    WEBUI,
+    ADVANCED,
+    RSS,
 }
 
 /**
@@ -86,6 +88,7 @@ fun SettingsScreen(
     /** Hidden when embedded in the mobile bottom-nav shell. */
     showBack: Boolean = true,
 ) {
+    val strings = LocalStrings.current
     var category by remember { mutableIntStateOf(0) }
     val categories = SettingsCategory.entries
     val settings = state.settings
@@ -94,11 +97,20 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
+                title = {
+                    Text(
+                        strings[TextKey.SETTINGS],
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                },
                 navigationIcon = {
                     if (showBack) {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = strings[TextKey.BACK],
+                            )
                         }
                     }
                 },
@@ -117,7 +129,7 @@ fun SettingsScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        "分类",
+                        strings[TextKey.CATEGORIES],
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -125,7 +137,7 @@ fun SettingsScreen(
                     )
                     categories.forEachIndexed { i, c ->
                         NavigationDrawerItem(
-                            label = { Text(c.label) },
+                            label = { Text(categoryLabel(c, strings)) },
                             selected = category == i,
                             onClick = { category = i },
                             icon = { Icon(categoryIcon(c), contentDescription = null) },
@@ -206,7 +218,7 @@ private fun MobileCategoryBar(
             FilterChip(
                 selected = selected == i,
                 onClick = { onSelect(i) },
-                label = { Text(c.label) },
+                label = { Text(categoryLabel(c, LocalStrings.current)) },
                 leadingIcon = {
                     Icon(
                         categoryIcon(c),
@@ -254,3 +266,21 @@ private fun categoryIcon(c: SettingsCategory): androidx.compose.ui.graphics.vect
     SettingsCategory.ADVANCED -> Icons.Default.Settings
     SettingsCategory.RSS -> Icons.Default.RssFeed
 }
+
+@Composable
+private fun categoryLabel(
+    category: SettingsCategory,
+    strings: com.typebit.ui.i18n.Strings,
+): String =
+    when (category) {
+        SettingsCategory.BEHAVIOR -> strings[TextKey.CATEGORY_BEHAVIOR]
+        SettingsCategory.APPEARANCE -> strings[TextKey.CATEGORY_APPEARANCE]
+        SettingsCategory.DOWNLOADS -> strings[TextKey.CATEGORY_DOWNLOADS]
+        SettingsCategory.CONNECTION -> strings[TextKey.CATEGORY_CONNECTION]
+        SettingsCategory.SPEED -> strings[TextKey.CATEGORY_SPEED]
+        SettingsCategory.BIT_TORRENT -> strings[TextKey.CATEGORY_BITTORRENT]
+        SettingsCategory.BACKGROUND -> strings[TextKey.CATEGORY_BACKGROUND]
+        SettingsCategory.WEBUI -> strings[TextKey.CATEGORY_WEBUI]
+        SettingsCategory.ADVANCED -> strings[TextKey.CATEGORY_ADVANCED]
+        SettingsCategory.RSS -> strings[TextKey.CATEGORY_RSS]
+    }

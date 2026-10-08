@@ -1104,7 +1104,6 @@ impl Host for NativeHost {
     }
 
     fn http_get_async(&mut self, url: &str, timeout_ms: u64) -> u64 {
-        // Tracker announces: small, latency-critical, must preempt bulk.
         self.enqueue_http_job(url, None, None, timeout_ms, true)
     }
 
@@ -1149,16 +1148,20 @@ impl Host for NativeHost {
     /// bootstrap the DHT from the BEP-5 router hostnames
     /// (`router.bittorrent.com` & co.).
     ///
-    /// Never blocks on DoH: this runs on the engine thread, and a provider
-    /// that takes two seconds to time out would stall the tick loop. It reads
-    /// the cache, falls back to the OS resolver, and queues a DoH refresh so
-    /// the *next* lookup is authoritative (which is how a poisoned answer
-    /// gets corrected without ever stalling the engine).
+    /// Resolves only from the memo and refreshes a miss in the background.
+    ///
+    /// This hook is callable from the engine tick. Calling the OS resolver
+    /// here is not safe: Android `getaddrinfo` can block for seconds, and one
+    /// dead tracker must never stall every peer and disk event. Async-capable
+    /// paths receive the refreshed result on their next attempt.
     fn resolve_host(&self, host: &str, port: u16) -> Option<NetAddr> {
-        let out = self
-            .dns
-            .resolve_blocking_os(host, port, Instant::now())
-            .addrs;
+        let out = match self.dns.cached(host, port, Instant::now()) {
+            Some(addrs) => addrs,
+            None => {
+                self.dns.refresh_async(host);
+                return None;
+            }
+        };
         // IPv4 first: the UDP socket prefers it, and a v6-only path must still
         // be usable when the network has no v4 route.
         out.iter()
@@ -1167,15 +1170,21 @@ impl Host for NativeHost {
             .copied()
     }
 
-    /// Every address record for a hostname.
+    /// Every cached address record for a hostname.
     ///
-    /// The engine walks this list when a UDP tracker fails, so returning all
-    /// records (rather than the first) is what lets a tracker with a dead A
-    /// record still work through its AAAA or second A.
+    /// UDP tracker announces run from the engine tick as well. A cache miss is
+    /// resolved asynchronously and reported as a recoverable tracker failure;
+    /// the next announce picks up the memoized answer. Returning all records
+    /// once ready lets a tracker with a dead A record work through its AAAA or
+    /// second A without blocking the client on the first lookup.
     fn resolve_host_all(&self, host: &str, port: u16) -> std::vec::Vec<NetAddr> {
-        self.dns
-            .resolve_blocking_os(host, port, Instant::now())
-            .addrs
+        match self.dns.cached(host, port, Instant::now()) {
+            Some(addrs) => addrs,
+            None => {
+                self.dns.refresh_async(host);
+                Vec::new()
+            }
+        }
     }
 
     fn resolve_host_async(&mut self, host: &str, port: u16) -> bool {

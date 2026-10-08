@@ -11,6 +11,12 @@ import com.typebit.data.ProtocolMode
 import com.typebit.data.ProxyType
 import com.typebit.data.SpeedSettings
 import com.typebit.data.StopCondition
+import com.typebit.ui.i18n.ENGLISH
+import com.typebit.ui.i18n.SIMPLIFIED_CHINESE
+import com.typebit.ui.i18n.SYSTEM_LANGUAGE
+import com.typebit.ui.i18n.TRADITIONAL_CHINESE
+import com.typebit.ui.i18n.LocalStrings
+import com.typebit.ui.i18n.TextKey
 
 // ---------------------------------------------------------------------------
 // 行为
@@ -20,48 +26,83 @@ import com.typebit.data.StopCondition
 fun BehaviorSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val s = settings.behavior
     val update: (BehaviorSettings) -> Unit = { ns -> onChange(settings.copy(behavior = ns)) }
+    val strings = LocalStrings.current
 
-    SectionCard("界面") {
+    SectionCard(strings[TextKey.BEHAVIOR_INTERFACE]) {
         SettingDropdown(
-            label = "语言",
-            options = listOf("system", "zh-CN", "en-US"),
+            label = strings[TextKey.LANGUAGE],
+            options = listOf(SYSTEM_LANGUAGE, SIMPLIFIED_CHINESE, ENGLISH, TRADITIONAL_CHINESE),
             selected = s.language,
             onSelect = { update(s.copy(language = it)) },
             labelOf = { when (it) {
-                "system" -> "跟随系统"
-                "zh-CN" -> "简体中文"
-                else -> "English"
+                SYSTEM_LANGUAGE -> strings[TextKey.LANGUAGE_SYSTEM]
+                SIMPLIFIED_CHINESE -> strings[TextKey.LANGUAGE_SIMPLIFIED_CHINESE]
+                ENGLISH -> strings[TextKey.LANGUAGE_ENGLISH]
+                TRADITIONAL_CHINESE -> strings[TextKey.LANGUAGE_TRADITIONAL_CHINESE]
+                else -> strings[TextKey.LANGUAGE_SYSTEM]
             } },
         )
         SettingSwitch(
-            "启动时最小化", "应用启动后最小化到托盘/任务栏",
+            strings[TextKey.START_MINIMIZED],
+            strings[TextKey.START_MINIMIZED_DESCRIPTION],
             s.startMinimized, { update(s.copy(startMinimized = it)) },
         )
         SettingSwitch(
-            "最小化到托盘", "关闭窗口时最小化到系统托盘而非退出",
+            strings[TextKey.MINIMIZE_TO_TRAY],
+            strings[TextKey.MINIMIZE_TO_TRAY_DESCRIPTION],
             s.minimizeToTray, { update(s.copy(minimizeToTray = it)) },
         )
         SettingSwitch(
-            "关闭到托盘", "点击关闭时最小化到托盘",
+            strings[TextKey.CLOSE_TO_TRAY],
+            strings[TextKey.CLOSE_TO_TRAY_DESCRIPTION],
             s.closeToTray, { update(s.copy(closeToTray = it)) },
         )
         SettingNumberField(
-            "刷新间隔 (ms)", s.refreshIntervalMs.toString(),
+            strings[TextKey.REFRESH_INTERVAL], s.refreshIntervalMs.toString(),
             { update(s.copy(refreshIntervalMs = it.toIntOrNull() ?: s.refreshIntervalMs)) },
         )
     }
 
-    SectionCard("确认") {
-        SettingSwitch("退出时确认", "退出应用前弹出确认对话框", s.confirmOnExit, { update(s.copy(confirmOnExit = it)) })
-        SettingSwitch("删除时确认", "删除种子前弹出确认对话框", s.confirmOnDelete, { update(s.copy(confirmOnDelete = it)) })
-        SettingSwitch("移除标签时确认", "", s.confirmOnRemoveTag, { update(s.copy(confirmOnRemoveTag = it)) })
+    SectionCard(strings[TextKey.BEHAVIOR_CONFIRMATION]) {
+        SettingSwitch(
+            strings[TextKey.CONFIRM_ON_EXIT],
+            strings[TextKey.CONFIRM_ON_EXIT_DESCRIPTION],
+            s.confirmOnExit,
+            { update(s.copy(confirmOnExit = it)) },
+        )
+        SettingSwitch(
+            strings[TextKey.CONFIRM_ON_DELETE],
+            strings[TextKey.CONFIRM_ON_DELETE_DESCRIPTION],
+            s.confirmOnDelete,
+            { update(s.copy(confirmOnDelete = it)) },
+        )
+        SettingSwitch(
+            strings[TextKey.CONFIRM_ON_REMOVE_TAG],
+            "",
+            s.confirmOnRemoveTag,
+            { update(s.copy(confirmOnRemoveTag = it)) },
+        )
     }
 
-    SectionCard("通知") {
-        SettingSwitch("启用通知", "下载事件系统通知", s.showNotifications, { update(s.copy(showNotifications = it)) })
-        SettingSwitch("添加种子时通知", "", s.notifyOnDownloadAdded, { update(s.copy(notifyOnDownloadAdded = it)) })
-        SettingSwitch("下载完成时通知", "", s.notifyOnDownloadFinished, { update(s.copy(notifyOnDownloadFinished = it)) })
-        SettingSwitch("新版本通知", "检测到新版本时提示", s.notifyOnNewVersion, { update(s.copy(notifyOnNewVersion = it)) })
+    SectionCard(strings[TextKey.BEHAVIOR_NOTIFICATIONS]) {
+        SettingSwitch(
+            strings[TextKey.ENABLE_NOTIFICATIONS],
+            strings[TextKey.ENABLE_NOTIFICATIONS_DESCRIPTION],
+            s.showNotifications,
+            { update(s.copy(showNotifications = it)) },
+        )
+        SettingSwitch(strings[TextKey.NOTIFY_DOWNLOAD_ADDED], "", s.notifyOnDownloadAdded, {
+            update(s.copy(notifyOnDownloadAdded = it))
+        })
+        SettingSwitch(strings[TextKey.NOTIFY_DOWNLOAD_FINISHED], "", s.notifyOnDownloadFinished, {
+            update(s.copy(notifyOnDownloadFinished = it))
+        })
+        SettingSwitch(
+            strings[TextKey.NOTIFY_NEW_VERSION],
+            strings[TextKey.NOTIFY_NEW_VERSION_DESCRIPTION],
+            s.notifyOnNewVersion,
+            { update(s.copy(notifyOnNewVersion = it)) },
+        )
     }
 }
 
