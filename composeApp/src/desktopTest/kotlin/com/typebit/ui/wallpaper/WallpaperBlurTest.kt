@@ -46,8 +46,6 @@ class WallpaperBlurTest {
         assertEquals(w, blurred.width)
         assertEquals(h, blurred.height)
 
-        // Read back the blurred center row: the edge pixel (x=32) must now be
-        // a blend (mid-gray), not pure black or white.
         val row = IntArray(w)
         blurred.readPixels(row, 0, h / 2, w, 1, 0, w)
         val edge = row[w / 2]

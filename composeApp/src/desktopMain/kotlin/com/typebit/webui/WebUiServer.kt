@@ -513,7 +513,6 @@ class WebUiServer(
                         webUi = current.webUi.copy(passwordHash = WebUiCrypto.hash(req.password)),
                     )
                 )
-                // Old sessions die with the password they were created under.
                 sessions.closeAll()
                 ok(exchange, "密码已更新，请重新登录")
             }

@@ -1,4 +1,4 @@
-﻿//! NativeHost — a complete `typebit::Host` implementation backed by std.
+//! NativeHost — a complete `typebit::Host` implementation backed by std.
 //!
 //! Everything the engine needs from the OS is implemented here:
 //!
@@ -311,7 +311,10 @@ impl NativeHost {
             Ok(anchors) => push_log(
                 &logs,
                 LogLevel::Info,
-                &format!("TLS 信任库: {} 个根证书（{}）", anchors.count, anchors.source),
+                &format!(
+                    "TLS 信任库: {} 个根证书（{}）",
+                    anchors.count, anchors.source
+                ),
             ),
             Err(why) => push_log(
                 &logs,
@@ -786,11 +789,6 @@ fn tls_settings(
         Ok(anchors) => Some(courierust::courierust_client::TlsSettings {
             roots: anchors.roots.clone(),
             verify: true,
-            // The ALPN list has to match the wire format the client will speak:
-            // offering `h2` and then sending HTTP/1.1 on the negotiated
-            // connection is a protocol error waiting to happen, and offering
-            // only `http/1.1` when HTTP/2 is wanted loses the multiplexing that
-            // web seeds depend on.
             alpn: if http2 {
                 vec![b"h2".to_vec(), b"http/1.1".to_vec()]
             } else {
@@ -832,13 +830,9 @@ fn build_client(policy: &NetworkPolicy, http2: bool) -> courierust::courierust_c
         // Identify honestly: some private trackers reject unknown agents, and
         // a tracker operator deserves to know who is hammering them.
         user_agent: Some(format!("TypeBitTorrent/{}", VERSION)),
-        // A tracker body is bencode and a web-seed body is blocks; both are
-        // bounded well below the default cap, and the cap is the last line of
-        // defence against a hostile server streaming forever.
+        // A tracker body is bencode and a web-seed body is blocks
         max_body: 32 * 1024 * 1024,
-        // Idempotent GETs are retried on transport failure: on a flaky mobile
-        // link this is the difference between "announce lost" and "announce
-        // delivered", and a retried GET has no side effects.
+        // Idempotent GETs are retried on transport failure
         retry: Some(courierust::courierust_client::RetryPolicy {
             attempts: 2,
             base_backoff: Duration::from_millis(250),
@@ -894,7 +888,6 @@ fn execute_job(
         Some(Duration::from_millis(job.timeout_ms))
     };
 
-    // ---- guard 1: the URL itself (no socket opened yet) ----
     if let Err(reject) = policy.check_url(&job.url) {
         return Err(log_guard_reject(job, reject));
     }
@@ -903,17 +896,6 @@ fn execute_job(
         .unwrap_or_default();
     let port = crate::netpolicy::url_port(&job.url).unwrap_or(80);
 
-    // ---- guard 2: what the name resolves to ----
-    // An IP literal was already checked above; a name needs an answer before it
-    // can be dialled, and the answer is what the guard must inspect: a hostile
-    // `.torrent` can name a domain it controls and point it at loopback or at
-    // the cloud metadata service. The DoH cache answers when it can (free of
-    // charge, and authoritative), the OS resolver otherwise.
-    //
-    // The request still goes out under its own name — the resolver inside
-    // `courierust` dials it, and it must, because the name is also the TLS
-    // identity and the virtual host. That is exactly why the check happens
-    // here, before the connection, instead of trusting the transport.
     if host.parse::<std::net::IpAddr>().is_err() {
         let now = Instant::now();
         let addrs = match dns.cached(&host, port, now) {
@@ -925,27 +907,24 @@ fn execute_job(
                 if !policy.allows_address(ip) {
                     return Err(log_guard_reject(
                         job,
-                        crate::netpolicy::UrlReject::BlockedAddress(
-                            crate::netpolicy::classify(ip),
-                        ),
+                        crate::netpolicy::UrlReject::BlockedAddress(crate::netpolicy::classify(ip)),
                     ));
                 }
             }
         }
     }
 
-    let mut builder = client.request(&job.url, match &job.post_body {
-        Some(_) => Method::POST,
-        None => Method::GET,
-    });
+    let mut builder = client.request(
+        &job.url,
+        match &job.post_body {
+            Some(_) => Method::POST,
+            None => Method::GET,
+        },
+    );
     if let Some(t) = deadline {
         builder = builder.timeout(t);
     }
-    // RFC 9218: 0 = highest urgency for the small, latency-critical announce;
-    // 5 (and incremental) for bulk ranges, so a slow range cannot hold up the
-    // announce sharing its connection. A POST here is always UPnP SOAP, which
-    // is interactive by definition: it decides whether inbound traffic can
-    // reach this client at all.
+
     let interactive = job.range.is_none();
     builder = builder.priority(if interactive {
         courierust::courierust_h2::priority::Priority {
@@ -962,7 +941,6 @@ fn execute_job(
         builder = builder.header("range", format!("bytes={start}-{end}"));
     }
     if let Some(body) = &job.post_body {
-        // UPnP SOAP: the content type and action are part of the protocol.
         builder = builder
             .header("content-type", "text/xml; charset=\"utf-8\"")
             .header("soapaction", "\"#AddPortMapping\"")
@@ -976,13 +954,14 @@ fn execute_job(
             if status != 200 {
                 return Err(Error::Tracker);
             }
-            resp.body.collect().map(|b| b.to_vec()).map_err(|_| Error::Io)
+            resp.body
+                .collect()
+                .map(|b| b.to_vec())
+                .map_err(|_| Error::Io)
         }
         Some((start, end)) => {
             let window = (end - start + 1) as usize;
             if status == 206 {
-                // The server honoured the range: the body must be exactly the
-                // window, or it is not the data we asked for.
                 let body = resp
                     .body
                     .collect_limited(window)
@@ -995,17 +974,6 @@ fn execute_job(
             if status != 200 {
                 return Err(Error::Tracker);
             }
-            // The server ignored `Range` and sent the whole entity instead.
-            // There is exactly one shape of that which is safe to use: the
-            // request was for the start of the entity (`start == 0`) and the
-            // declared length *is* the window, so the body is aligned by
-            // construction.
-            //
-            // Anything else is refused. Reading `window` bytes and assuming
-            // they start at `start` is how a client writes file offset 0 into
-            // offset 1000: with a chunked response (no length to check against)
-            // the truncation is invisible and only a piece-hash failure, long
-            // after the bandwidth is spent, reveals it.
             let declared = resp
                 .headers
                 .get("content-length")
@@ -1043,7 +1011,9 @@ fn log_guard_reject(job: &HttpJob, reject: crate::netpolicy::UrlReject) -> Error
 /// The IP of a `NetAddr`, if it has one.
 fn netaddr_ip(addr: NetAddr) -> Option<std::net::IpAddr> {
     match addr {
-        NetAddr::V4(ip, _) => Some(std::net::IpAddr::V4(Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]))),
+        NetAddr::V4(ip, _) => Some(std::net::IpAddr::V4(Ipv4Addr::new(
+            ip[0], ip[1], ip[2], ip[3],
+        ))),
         NetAddr::V6(ip, _) => Some(std::net::IpAddr::V6(Ipv6Addr::from(ip))),
     }
 }
@@ -1075,7 +1045,6 @@ impl Host for NativeHost {
 
     fn fill_random(&mut self, buf: &mut [u8]) {
         if getrandom::fill(buf).is_err() {
-            // Last-resort fallback (never for key material): clock hash.
             let t = self.now_ms();
             for (i, b) in buf.iter_mut().enumerate() {
                 *b = (t >> (i % 64)) as u8 ^ (i as u8).wrapping_mul(131);
@@ -1146,13 +1115,7 @@ impl Host for NativeHost {
         range_end: u64,
         timeout_ms: u64,
     ) -> u64 {
-        self.enqueue_http_job(
-            url,
-            Some((range_start, range_end)),
-            None,
-            timeout_ms,
-            false,
-        )
+        self.enqueue_http_job(url, Some((range_start, range_end)), None, timeout_ms, false)
     }
 
     fn http_take_done(&mut self) -> std::vec::Vec<(u64, Result<Vec<u8>>)> {
@@ -1316,11 +1279,6 @@ impl Host for NativeHost {
         if self.udp.is_some() {
             return Ok(());
         }
-        // Dual-stack first: one AF_INET6 socket with IPV6_V6ONLY=0 carries both
-        // v4 and v6 datagrams, which is what makes the IPv6 half of the DHT and
-        // of the UDP tracker swarm reachable at all. The previous v4-only bind
-        // silently dropped every `NetAddr::V6` send (WSAEAFNOSUPPORT), which is
-        // why the resolver had to prefer IPv4.
         for (label, addr) in [
             ("dual-stack", format!("[::]:{port}")),
             ("ipv4", format!("0.0.0.0:{port}")),
@@ -1334,10 +1292,6 @@ impl Host for NativeHost {
                 Ok(sock) => {
                     let _ = sock.set_nonblocking(true);
                     if sock.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) {
-                        // Accept v4-mapped datagrams on the same socket; a
-                        // failure here (a system with v6 disabled) is not fatal
-                        // because the v4 fallback below is what would have been
-                        // used anyway.
                         let _ = crate::netinfo::set_dual_stack(&sock, true);
                     }
                     let actual = sock.local_addr().map(|a| a.port()).unwrap_or(port);
@@ -1349,10 +1303,7 @@ impl Host for NativeHost {
                     return Ok(());
                 }
                 Err(e) => {
-                    self.log_internal(
-                        LogLevel::Debug,
-                        &format!("udp bind {addr} failed: {e}"),
-                    );
+                    self.log_internal(LogLevel::Debug, &format!("udp bind {addr} failed: {e}"));
                 }
             }
         }
@@ -1498,8 +1449,6 @@ impl Host for NativeHost {
                 self.lsd_udp = Some(s);
                 Ok(())
             }
-            // Port 6771 in use (another local client, or the OS) — LSD
-            // receive degrades gracefully; outgoing announces still work.
             Err(_) => Err(Error::Io),
         }
     }
@@ -1625,16 +1574,8 @@ impl Host for NativeHost {
         let mode = self.alloc_mode.get(&id).copied().unwrap_or(1);
         {
             let file = self.files.get_mut(&id).ok_or(Error::NotFound)?;
-            // Reserves the full logical extent: the OS lays out clusters
-            // contiguously in one pass instead of growing the file as
-            // pieces land in random order (the main fragmentation driver).
             file.set_len(size).map_err(|_| Error::Io)?;
         }
-        // Full allocation: physically commit the extent so filesystems
-        // without sparse semantics still get contiguous clusters. Capped at
-        // 1 GiB of zero-fill per file — beyond that the set_len reservation
-        // is kept and the fill is skipped so the engine thread never blocks
-        // for minutes on multi-GB torrents.
         if mode == 2 && size <= (1 << 30) {
             if let Some(file) = self.files.get(&id) {
                 let _ = fill_file(file, size);
@@ -1724,10 +1665,6 @@ fn sock_to_netaddr(a: SocketAddr) -> NetAddr {
             NetAddr::V4(ip, v4.port())
         }
         SocketAddr::V6(v6) => {
-            // Unmap v4-mapped peers so the engine sees the same `NetAddr` it
-            // would have seen on an IPv4 socket: a DHT node at
-            // `::ffff:1.2.3.4` is simply `1.2.3.4`, and the compact peer
-            // format it builds from this address stays valid.
             if let Some(v4) = v6.ip().to_ipv4_mapped() {
                 return NetAddr::V4(v4.octets(), v6.port());
             }
@@ -1841,9 +1778,6 @@ mod tests {
                 Err(_) => break,
             }
         }
-        // Drain the declared body: answering before a client finishes writing
-        // resets the connection, which is not what any of these tests mean to
-        // exercise.
         let content_length = head
             .lines()
             .find_map(|l| {
@@ -1891,16 +1825,18 @@ mod tests {
     /// them to anyone on the path.
     #[test]
     fn the_https_client_verifies_against_the_platform_store() {
-        // An unreadable store is refused outright, not turned into trust-all.
         assert!(tls_settings(no_store(), true).is_none());
         let Ok(anchors) = crate::tlsroots::anchors() else {
-            // A host with no readable trust store: the `None` path above is the
-            // whole behaviour, and HTTPS stays refused rather than unverified.
             return;
-        };        let tls = tls_settings(Ok(anchors), true).expect("configured");
+        };
+        let tls = tls_settings(Ok(anchors), true).expect("configured");
         assert!(tls.verify, "certificate verification must never be off");
         assert_eq!(tls.roots.len(), anchors.count);
-        assert!(!tls.roots.is_empty(), "a store with no roots verifies nothing");        assert_eq!(tls.alpn, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+        assert!(
+            !tls.roots.is_empty(),
+            "a store with no roots verifies nothing"
+        );
+        assert_eq!(tls.alpn, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
 
         // ALPN has to match the wire format the client will speak.
         let h1 = tls_settings(Ok(anchors), false).expect("configured");
@@ -1922,9 +1858,10 @@ mod tests {
             )
             .timeout(Duration::from_secs(3))
             .send();
-        // The server answers HTTP on a plain socket, so a TLS client cannot be
-        // satisfied by it.
-        assert!(result.is_err(), "a plaintext server must not answer an HTTPS request");
+        assert!(
+            result.is_err(),
+            "a plaintext server must not answer an HTTPS request"
+        );
         for head in server.requests() {
             assert!(
                 !head.starts_with("GET ") && !head.starts_with("POST "),
@@ -1985,9 +1922,6 @@ mod tests {
 
     #[test]
     fn a_range_request_served_as_200_is_only_accepted_when_it_is_aligned() {
-        // Case 1: the server ignored `Range` but the body *is* the window
-        // (start 0, declared length == window). Aligned by construction, so it
-        // is used.
         let server = TestServer::start(4, |_| http_response("200 OK", "", &entity(20)));
         let client = build_client(&loopback_policy(), false);
         let out = execute_job(
@@ -2002,9 +1936,6 @@ mod tests {
         .expect("aligned 200");
         assert_eq!(out, entity(20));
 
-        // Case 2: the body is the whole entity but the request starts in the
-        // middle. Taking the first `window` bytes would write file offset 0
-        // into the middle of the file; the request is refused instead.
         let server = TestServer::start(4, |_| http_response("200 OK", "", &entity(100)));
         let err = execute_job(
             &client,
@@ -2018,9 +1949,6 @@ mod tests {
         .expect_err("misaligned 200 must be refused");
         assert!(matches!(err, Error::Protocol));
 
-        // Case 3: no declared length (chunked / delimiter-terminated). There is
-        // nothing to check alignment against, so it is refused too — this is
-        // the shape that used to pass the old length check and corrupt data.
         let server = TestServer::start(4, |_| {
             let mut out = b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n".to_vec();
             out.extend_from_slice(&entity(100));
@@ -2041,8 +1969,6 @@ mod tests {
 
     #[test]
     fn a_206_body_must_be_exactly_the_window() {
-        // A short 206 is refused rather than padding the caller's buffer with
-        // whatever happened to arrive.
         let client = build_client(&loopback_policy(), false);
         let server = TestServer::start(4, |_| {
             http_response(
@@ -2204,7 +2130,10 @@ mod tests {
         let policy = NetworkPolicy::default();
         let svc = DnsService::new(&policy, dns::IpFamily::V4Only);
         let resolved = svc.resolve("cloudflare-dns.com", 443, std::time::Instant::now());
-        println!("live resolve: {:?} -> {:?}", resolved.source, resolved.addrs);
+        println!(
+            "live resolve: {:?} -> {:?}",
+            resolved.source, resolved.addrs
+        );
         println!("dns stats: {}", svc.stats().summary());
         assert!(
             !resolved.addrs.is_empty(),

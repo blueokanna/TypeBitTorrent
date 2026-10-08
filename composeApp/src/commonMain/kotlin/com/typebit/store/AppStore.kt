@@ -213,10 +213,6 @@ class AppStore(
     private suspend fun boot() {
         val settings = settingsRepo.load()
         val configured = settings.downloads.defaultSavePath
-        // Never hand the engine a directory this process cannot write to:
-        // on Android the public Downloads path is denied by scoped storage,
-        // so the platform resolves a usable directory instead (and reports
-        // the substitution to the user).
         val saveDir = Platform.resolveSaveDir(configured)
         val saveDirSubstituted = configured.isNotBlank() && saveDir != configured.trim()
         val started = engine.start(EngineConfigJson.engineConfig(settings), saveDir)
@@ -227,22 +223,9 @@ class AppStore(
             _state.update { it.copy(lastError = "引擎启动失败：$detail") }
             return
         }
-        // The restored settings (never the defaults): every recovery step
-        // below is best-effort, but the user's appearance/limits MUST reach
-        // the UI even if one step throws — otherwise the app would silently
-        // run on default theme/font after a single bad record or a transient
-        // JNI failure.
         var effectiveSettings = settings
         try {
-            // Restore app-level torrent records. One malformed record must
-            // not abort the whole boot (reAddRecord already reports per
-            // record, but a defensive catch keeps the boot total).
             records = torrentRepo.loadRecords()
-            // Retarget records that point at an unwritable directory (an
-            // Android record saved before scoped storage was accounted for,
-            // or a path on a removed drive). Safe by construction: a
-            // directory that cannot be written cannot hold partial data, so
-            // nothing is lost by moving the target to a usable one.
             var retargeted = 0
             records =
                     records.map { rec ->
@@ -259,26 +242,17 @@ class AppStore(
             for (rec in records) {
                 reAddRecord(rec)
             }
-            // Pre-populate the info cache so the first tick renders full rows;
-            // it is refetched whenever the snapshot reports new metadata.
             for (rec in records) {
                 engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
             }
-            // Restore verified-piece bitfields + DHT table.
             torrentRepo.loadResumeState()?.let { engine.loadState(it) }
 
-            // Sync the community tracker list (best.txt) BEFORE any torrent
-            // starts, so a fresh launch announces to the most-reliable trackers
-            // first — the "tracker highly available from the very beginning"
-            // requirement. The fetch is best-effort: on failure the existing
-            // (persisted) tracker set is kept and downloads proceed.
             val (synced, addedTrackers) = syncCommunityTrackers(settings)
             effectiveSettings = synced
             if (addedTrackers.isNotEmpty()) {
                 for (rec in records) {
                     for (url in addedTrackers) engine.addTracker(rec.hash, url)
                 }
-                // Refresh the mirrors so the Tracker tab shows the new URLs.
                 for (rec in records) {
                     engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
                 }
@@ -286,9 +260,6 @@ class AppStore(
                 settingsRepo.save(effectiveSettings)
             }
 
-            // Start torrents that were not paused. A magnet that never received
-            // its per-file commit (app died mid-add-dialog) is held again so it
-            // keeps fetching metadata but cannot silently download everything.
             for (rec in records) {
                 if (rec.kind == "MAGNET" && rec.pendingSelection) {
                     engine.setHoldData(rec.hash, hold = true)
@@ -298,8 +269,6 @@ class AppStore(
             // Apply speed limits.
             applyLimits(effectiveSettings)
         } catch (t: Throwable) {
-            // A restore hiccup must never take the whole app down: keep the
-            // loaded settings, keep whatever records recovered, and continue.
             _state.update { it.copy(lastError = "恢复部分数据时出错：${t.message ?: t::class.simpleName}") }
         }
 
@@ -323,10 +292,6 @@ class AppStore(
             )
         }
         refreshStats()
-
-        // A cancelled boot (activity torn down mid-restore) must not launch a
-        // poll loop on the dead scope — it would be cancelled instantly and
-        // leave the app with no stats updates at all.
         if (engineScope.isActive) {
             pollJob = onEngineJob { pollLoop() }
         }
@@ -410,13 +375,6 @@ class AppStore(
             withTimeoutOrNull(5_000) {
                 settingsSaveJob?.cancel()
                 settingsRepo.save(_state.value.settings)
-                // Records are normally persisted on every mutation, but a
-                // mutation queued on [engineScope] is cancelled by the
-                // `engineScope.cancel()` above. Re-persisting here means the
-                // latest in-memory library always reaches disk — otherwise a
-                // just-added torrent (or a just-applied priority/tracker
-                // change) could silently vanish on the next launch, orphaning
-                // its `.part` files on disk.
                 persistRecords()
                 persistResume()
             }
@@ -555,8 +513,6 @@ class AppStore(
                 )
         records = records + record
         persistRecords()
-        // File priorities can only be applied once the metadata arrives;
-        // refreshStats does that when the snapshot reports `meta` flips.
         if (!record.paused) engine.start(hash)
         refreshStats()
     }
@@ -625,9 +581,6 @@ class AppStore(
             lastUpSeen.remove(hash)
             records = records.filterNot { it.hash == hash }
             persistRecords()
-            // Authoritative removal — also re-covers the (rare) case where a
-            // poll tick between the optimistic update and this coroutine
-            // rebuilt the row from the not-yet-updated records list.
             _state.update {
                 it.copy(
                         torrents = it.torrents.filterNot { t -> t.hash == hash },
@@ -684,8 +637,6 @@ class AppStore(
         addedAtMs: Long,
     ): ReceiptExportResult = withContext(engineScope.coroutineContext) {
         val nowSec = System.currentTimeMillis() / 1000
-        // A sane attestation window: never negative, never before the
-        // torrent was added.
         val addedSec = (addedAtMs / 1000).coerceIn(nowSec - 365L * 24 * 3600, nowSec)
         val start = 0L
         val end = downloadedBytes.coerceAtLeast(0L)
@@ -758,10 +709,6 @@ class AppStore(
                 records = records + record
                 persistRecords()
                 engine.start(hash)
-                // Hold data until the user commits their per-file selection:
-                // the engine fetches metadata + runs discovery but requests
-                // NO data pieces, so a slow choice never downloads the whole
-                // torrent (this was the "only wanted 4 GB, got 9 GB" bug).
                 engine.setHoldData(hash, hold = true)
                 refreshStats()
                 hash
@@ -797,10 +744,6 @@ class AppStore(
      */
     fun commitMagnetSelection(hash: String, filePriorities: List<Int>, paused: Boolean = false) =
             onEngine {
-                // Atomic engine-side commit: replaces every priority AND
-                // releases the data hold in one engine-thread step, so the
-                // torrent can never start requesting all files between the
-                // hold and the selection being applied.
                 engine.setFilePriorities(hash, filePriorities)
                 records =
                         records.map { rec ->
@@ -949,22 +892,17 @@ class AppStore(
     }
 
     private suspend fun applySettings(settings: AppSettings) {
-        // 1) Live speed limits — only when the effective value moved.
         val limits = effectiveLimits(settings.speed)
         if (limits != lastAppliedLimits) {
             engine.setGlobalLimits(limits.first, limits.second)
             lastAppliedLimits = limits
         }
-        // 2) Session defaults for future torrents — only when changed.
         val cfg = EngineConfigJson.sessionConfig(settings)
         if (cfg != lastAppliedSessionConfig) {
             engine.setSessionConfig(cfg)
             lastAppliedSessionConfig = cfg
         }
-        // 3) Newly imported extra trackers → add to ALL running torrents
-        //    right away (the engine only reads the session config for
-        //    torrents added afterwards, so a tracker-list import must be
-        //    pushed to existing sessions explicitly).
+
         val trackersNow =
                 settings.bitTorrent
                         .extraTrackers
@@ -986,12 +924,6 @@ class AppStore(
             }
             lastAppliedExtraTrackers = trackersNow
         }
-        // 4) Persist the settings immediately (no debounce). Losing the
-        //    user's theme/font/limit choices to a killed process inside a
-        //    400 ms window is a real data-loss bug; a settings.json write is
-        //    a few KB and the engine scope is serialized, so saving on every
-        //    committed edit is cheap. `settingsSaveJob` coalesces rapid
-        //    edits by cancelling the previous queued write.
         settingsSaveJob?.cancel()
         settingsSaveJob = onEngineJob {
             settingsRepo.save(settings)
@@ -1113,19 +1045,10 @@ class AppStore(
             val interval = _state.value.settings.behavior.refreshIntervalMs.coerceIn(200, 5000)
             delay(interval.toLong())
 
-            // 1) Drain engine events first (cheap, authoritative). Returns
-            //    true when a torrent completed or metadata arrived — both
-            //    states must be persisted IMMEDIATELY, not up to 30 s later
-            //    (otherwise a freshly-completed download reverts to an older
-            //    partial state after an app restart).
             val saveNow = drainEvents(engine.takeEvents())
 
-            // 2) Refresh per-torrent stats + global rates in ONE native
-            //    snapshot call and ONE state update.
             refreshStats()
 
-            // 3) Persist resume data on a slow cadence (like qBittorrent),
-            //    or right away when an event demands it.
             val now = System.currentTimeMillis()
             if (saveNow || now - lastSaveAt > 30_000) {
                 lastSaveAt = now
@@ -1141,8 +1064,6 @@ class AppStore(
      */
     private fun drainEvents(events: List<EngineEventDto>): Boolean {
         if (events.isEmpty()) return false
-        // Declared outside the state-update lambda so the function can
-        // report whether an immediate persist is warranted.
         val complete = HashSet<String>()
         val metadata = HashSet<String>()
         _state.update { s ->
@@ -1178,7 +1099,6 @@ class AppStore(
                             }
                     10 ->
                             if (antiLeechOn) {
-                                // Built-in anti-leech engine banned a peer (0.1.1).
                                 leechCount++
                                 val reason =
                                         when (ev.r) {
@@ -1288,11 +1208,6 @@ class AppStore(
                 if (lastTotals == null) 0L else (totals.second - lastTotals!!.second) * 1000 / dt
         lastTotals = totals
         lastGlobalPoll = now
-
-        // Metadata arrived for a magnet → refresh the full mirror once, apply
-        // the persisted per-file priorities + renames (their indices only
-        // exist after the file table arrives), and PERSIST the raw info dict
-        // so a future restart never re-fetches metadata.
         for (row in snap.torrents) {
             if (row.meta && infoCache[row.h]?.metadata_ready != true) {
                 engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
@@ -1301,7 +1216,6 @@ class AppStore(
                     if (rec.filePriorities.isNotEmpty()) applyPriorities(row.h, rec.filePriorities)
                     if (rec.renames.isNotEmpty()) applyRenames(row.h, rec.renames)
                     engine.torrentInfo(row.h)?.let { infoCache[row.h] = it }
-                    // Persist the fetched metadata once (never refetch).
                     val raw = engine.torrentInfoRaw(row.h)
                     if (raw != null && raw != rec.infoBase64) {
                         records =
@@ -1338,12 +1252,6 @@ class AppStore(
                     lsdPeers = snap.lsd_peers,
             )
         }
-
-        // Background mode: keep the Android foreground service (and the
-        // process alive) exactly while any torrent is running, so downloads
-        // survive locking the screen — unless the user disabled background
-        // downloads in settings (the "锁屏后继续下载" master switch). The
-        // service is idempotent — cheap to call every poll.
         val anyActive =
                 _state.value.torrents.any {
                     it.status == TorrentStatus.DOWNLOADING ||
@@ -1452,9 +1360,10 @@ class AppStore(
         val fromMeta =
                 base?.trackers
                         ?: info?.announce_list.orEmpty().flatten().map { TrackerInfo(url = it) }
-        if (base != null || rec.trackers.isEmpty()) return fromMeta
+        if (base != null || rec.trackers.isEmpty()) return fromMeta.distinctBy { it.url }
         val known = fromMeta.mapTo(HashSet()) { it.url }
-        return fromMeta + rec.trackers.filter { it !in known }.map { TrackerInfo(url = it) }
+        return (fromMeta + rec.trackers.filter { it !in known }.map { TrackerInfo(url = it) })
+                .distinctBy { it.url }
     }
 
     // ---- persistence helpers ----

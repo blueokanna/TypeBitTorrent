@@ -2,7 +2,6 @@
 name = "typebit_native"
 version = "0.1.1"
 edition = "2021"
-rust-version = "1.95"
 license-file = "../LICENSE"
 description = "JNI bridge embedding the TypeBit BitTorrent engine for Android and JVM desktop."
 readme = "README.md"

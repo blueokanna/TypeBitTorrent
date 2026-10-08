@@ -184,7 +184,6 @@ pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<
     let mut files: Vec<&FileSpec> = build.files.iter().collect();
     files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
-    // Validate every file and accumulate the total payload size.
     let mut sizes: Vec<u64> = Vec::with_capacity(files.len());
     let mut total = 0u64;
     for f in &files {
@@ -211,8 +210,7 @@ pub fn create_torrent(build: &TorrentBuild, progress: &BuildProgress) -> Result<
     if total == 0 {
         return Err("total size is zero".into());
     }
-    // A multi-file torrent needs distinct paths, otherwise the same file is
-    // listed twice and clients write it twice.
+
     if files.len() > 1 {
         let mut seen = std::collections::HashSet::with_capacity(files.len());
         for f in &files {

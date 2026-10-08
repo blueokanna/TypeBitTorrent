@@ -38,9 +38,6 @@ internal class WebUiHost(private val store: AppStore) {
                     stop()
                     return@collectLatest
                 }
-                // Loopback unless the user explicitly opens it to the LAN:
-                // an accidentally reachable client is a real risk on a shared
-                // network, and the NAS image binds 0.0.0.0 explicitly.
                 val endpoint =
                     Endpoint(
                         host = if (settings.remoteAccess) BIND_ALL else BIND_LOOPBACK,

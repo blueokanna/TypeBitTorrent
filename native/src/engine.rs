@@ -1381,7 +1381,10 @@ fn stats_to_json(
     w.comma();
     w.kv_u64("dns_provider_failures", dns.provider_failures);
     w.comma();
-    w.kv_u64("dns_providers_up", dns.providers.iter().filter(|p| p.up).count() as u64);
+    w.kv_u64(
+        "dns_providers_up",
+        dns.providers.iter().filter(|p| p.up).count() as u64,
+    );
     w.comma();
     w.kv_u64("dns_providers_total", dns.providers.len() as u64);
     w.comma();

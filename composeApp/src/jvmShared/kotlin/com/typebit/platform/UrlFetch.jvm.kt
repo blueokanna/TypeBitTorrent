@@ -16,7 +16,6 @@ actual fun fetchUrlText(url: String, timeoutMs: Long): String? {
         }
         val bytes = conn.inputStream.use { it.readBytes() }
         conn.disconnect()
-        // UTF-8 with BOM tolerance; HTML pages are re-decoded by the parser.
         String(bytes, Charsets.UTF_8).removePrefix("\uFEFF")
     } catch (_: Throwable) {
         null

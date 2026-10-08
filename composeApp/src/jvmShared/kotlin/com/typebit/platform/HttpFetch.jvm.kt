@@ -47,9 +47,6 @@ actual fun fetchHttp(
                     out.toByteArray()
                 }
         conn.disconnect()
-        // Sites serve UTF-8 today; strip a UTF-8 BOM. (Per-site charset
-        // overrides could be added if a mirror ever shifts to another
-        // encoding — the parsers only need ASCII markup + the title bytes.)
         HttpFetchResponse(
                 status = status,
                 headers = respHeaders,

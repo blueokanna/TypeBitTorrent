@@ -233,12 +233,16 @@ fn parse_upstream(spec: &str) -> Result<ParsedUpstream, String> {
 
     let mut notes = Vec::new();
     let (ip, port, name) = match split_authority(authority) {
-        Some((ip, port)) => (ip, port.unwrap_or(default_port), identity.map(|s| s.to_string())),
+        Some((ip, port)) => (
+            ip,
+            port.unwrap_or(default_port),
+            identity.map(|s| s.to_string()),
+        ),
         None => {
             // A hostname: resolve it once, here, so that a broken OS resolver
             // cannot break the resolver.
-            let (name, port) = split_name_port(authority)
-                .map_err(|why| format!("{original}: {why}"))?;
+            let (name, port) =
+                split_name_port(authority).map_err(|why| format!("{original}: {why}"))?;
             let port = port.unwrap_or(default_port);
             let ip = well_known_or_os(&name, port)
                 .ok_or_else(|| format!("{original}: 无法解析 {name} 的地址（请直接写 IP）"))?;
@@ -268,9 +272,8 @@ fn parse_upstream(spec: &str) -> Result<ParsedUpstream, String> {
         });
     }
 
-    let name = name.ok_or_else(|| {
-        format!("{original}: 加密上游需要 TLS 名称，请追加 #dns.example")
-    })?;
+    let name =
+        name.ok_or_else(|| format!("{original}: 加密上游需要 TLS 名称，请追加 #dns.example"))?;
     let mut forwarder = Forwarder::encrypted(endpoint, name);
     if let Some(p) = path {
         if !p.is_empty() {
@@ -472,8 +475,7 @@ impl Memo {
             if entry.negative {
                 Pending::Negative
             } else {
-                let mut addrs: Vec<IpAddr> =
-                    entry.v4.iter().copied().map(IpAddr::V4).collect();
+                let mut addrs: Vec<IpAddr> = entry.v4.iter().copied().map(IpAddr::V4).collect();
                 if want_v6 {
                     addrs.extend(entry.v6.iter().copied().map(IpAddr::V6));
                 }
@@ -681,9 +683,7 @@ impl DnsService {
                     );
                 }
                 Err(why) => {
-                    problems.push(format!(
-                        "加密上游已停用（{why}）：改用从根开始的迭代解析"
-                    ));
+                    problems.push(format!("加密上游已停用（{why}）：改用从根开始的迭代解析"));
                     let kept: Vec<Upstream> = upstreams
                         .iter()
                         .filter(|u| matches!(u.endpoint.proto, Proto::Udp | Proto::Tcp))
@@ -704,7 +704,14 @@ impl DnsService {
         let forwarded = !forwarders.is_empty();
         let resolver = Resolver::new(resolver_config(forwarders));
         let maintenance = resolver.spawn_maintenance();
-        DnsService::wrap(resolver, maintenance, upstreams, forwarded, problems, family)
+        DnsService::wrap(
+            resolver,
+            maintenance,
+            upstreams,
+            forwarded,
+            problems,
+            family,
+        )
     }
 
     fn wrap(
@@ -993,10 +1000,7 @@ impl DnsService {
     }
 
     fn memo(&self) -> std::sync::MutexGuard<'_, Memo> {
-        self.inner
-            .memo
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.inner.memo.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Registers a lookup, returning the caller's role.
@@ -1155,9 +1159,7 @@ impl DnsService {
         if answered + missing > 0 && !transient_failure {
             return Outcome::NotFound;
         }
-        self.inner
-            .provider_failures
-            .fetch_add(1, Ordering::Relaxed);
+        self.inner.provider_failures.fetch_add(1, Ordering::Relaxed);
         Outcome::Failed
     }
 
@@ -1240,7 +1242,14 @@ impl DnsService {
         let forwarded = !upstreams.is_empty();
         let resolver = Resolver::new(config);
         let maintenance = resolver.spawn_maintenance();
-        DnsService::wrap(resolver, maintenance, upstreams, forwarded, Vec::new(), family)
+        DnsService::wrap(
+            resolver,
+            maintenance,
+            upstreams,
+            forwarded,
+            Vec::new(),
+            family,
+        )
     }
 }
 
@@ -1478,10 +1487,14 @@ mod tests {
 
     #[test]
     fn an_explicit_port_and_ipv6_literal_are_honoured() {
-        let parsed = parse_upstream("https://[2606:4700:4700::1111]:8443/dns-query#cloudflare-dns.com")
-            .expect("parses");
+        let parsed =
+            parse_upstream("https://[2606:4700:4700::1111]:8443/dns-query#cloudflare-dns.com")
+                .expect("parses");
         assert_eq!(parsed.forwarder.endpoint.port, 8443);
-        assert_eq!(parsed.forwarder.endpoint.ip.to_string(), "2606:4700:4700::1111");
+        assert_eq!(
+            parsed.forwarder.endpoint.ip.to_string(),
+            "2606:4700:4700::1111"
+        );
     }
 
     #[test]
@@ -1503,8 +1516,7 @@ mod tests {
         assert!(why.contains("ftp://"), "{why}");
         let why = parse_upstream("").expect_err("must be rejected");
         assert!(why.contains("空"), "{why}");
-        let why =
-            parse_upstream("https://1.1.1.1/dns-query").expect_err("no identity for DoH");
+        let why = parse_upstream("https://1.1.1.1/dns-query").expect_err("no identity for DoH");
         assert!(why.contains("TLS 名称"), "{why}");
         let why = parse_upstream("tls://1.1.1.1/foo#name").expect_err("path on a non-DoH upstream");
         assert!(why.contains("路径"), "{why}");
@@ -1575,7 +1587,11 @@ mod tests {
         let stats = svc.stats();
         assert_eq!(stats.providers.len(), 1);
         assert_eq!(stats.problems.len(), 1);
-        assert!(stats.problems[0].contains("ftp://"), "{}", stats.problems[0]);
+        assert!(
+            stats.problems[0].contains("ftp://"),
+            "{}",
+            stats.problems[0]
+        );
         svc.shutdown();
     }
 
@@ -1603,7 +1619,13 @@ mod tests {
     fn the_memo_expires_negative_and_is_bounded() {
         let now = Instant::now();
         let mut memo = Memo::default();
-        memo.put("a.example", &[Ipv4Addr::new(1, 2, 3, 4)], &[], Duration::from_secs(60), now);
+        memo.put(
+            "a.example",
+            &[Ipv4Addr::new(1, 2, 3, 4)],
+            &[],
+            Duration::from_secs(60),
+            now,
+        );
         assert_eq!(
             memo.get("a.example", now, false),
             Lookup::Fresh(vec![IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))])
@@ -1616,7 +1638,11 @@ mod tests {
         memo.put_negative("gone.example", now);
         assert_eq!(memo.get("gone.example", now, true), Lookup::Negative);
         assert_eq!(
-            memo.get("gone.example", now + MEMO_NEGATIVE_TTL + Duration::from_secs(1), true),
+            memo.get(
+                "gone.example",
+                now + MEMO_NEGATIVE_TTL + Duration::from_secs(1),
+                true
+            ),
             Lookup::Expired
         );
 
@@ -1663,24 +1689,52 @@ mod tests {
     fn memoised_ttls_are_clamped_at_both_ends() {
         let now = Instant::now();
         let mut memo = Memo::default();
-        memo.put("short.example", &[Ipv4Addr::LOCALHOST], &[], Duration::from_secs(1), now);
+        memo.put(
+            "short.example",
+            &[Ipv4Addr::LOCALHOST],
+            &[],
+            Duration::from_secs(1),
+            now,
+        );
         assert!(matches!(
-            memo.get("short.example", now + MEMO_MIN_TTL - Duration::from_secs(1), false),
+            memo.get(
+                "short.example",
+                now + MEMO_MIN_TTL - Duration::from_secs(1),
+                false
+            ),
             Lookup::Fresh(_)
         ));
         assert_eq!(
-            memo.get("short.example", now + MEMO_MIN_TTL + Duration::from_secs(1), false),
+            memo.get(
+                "short.example",
+                now + MEMO_MIN_TTL + Duration::from_secs(1),
+                false
+            ),
             Lookup::Expired
         );
 
         let mut memo = Memo::default();
-        memo.put("long.example", &[Ipv4Addr::LOCALHOST], &[], Duration::from_secs(86_400), now);
+        memo.put(
+            "long.example",
+            &[Ipv4Addr::LOCALHOST],
+            &[],
+            Duration::from_secs(86_400),
+            now,
+        );
         assert!(matches!(
-            memo.get("long.example", now + MEMO_MAX_TTL - Duration::from_secs(1), false),
+            memo.get(
+                "long.example",
+                now + MEMO_MAX_TTL - Duration::from_secs(1),
+                false
+            ),
             Lookup::Fresh(_)
         ));
         assert_eq!(
-            memo.get("long.example", now + MEMO_MAX_TTL + Duration::from_secs(1), false),
+            memo.get(
+                "long.example",
+                now + MEMO_MAX_TTL + Duration::from_secs(1),
+                false
+            ),
             Lookup::Expired
         );
     }
@@ -1935,7 +1989,11 @@ mod tests {
         assert!(stats.provider_failures >= 1);
 
         let second = svc.resolve("localhost", 80, Instant::now());
-        assert_eq!(second.source, Source::Cache, "the fallback answer is memoised");
+        assert_eq!(
+            second.source,
+            Source::Cache,
+            "the fallback answer is memoised"
+        );
         assert_eq!(svc.stats().os_fallbacks, 1, "and not repeated");
         svc.shutdown();
     }
@@ -2003,7 +2061,10 @@ mod tests {
         let _ = svc.resolve("localhost", 80, Instant::now());
         let after = svc.stats();
         assert!(after.provider_failures >= 1, "{after:?}");
-        assert!(!after.providers[0].up, "a failed upstream must not read as up");
+        assert!(
+            !after.providers[0].up,
+            "a failed upstream must not read as up"
+        );
         assert_eq!(after.providers[0].successes, 0);
         svc.shutdown();
     }

@@ -54,10 +54,7 @@ pub struct TrustAnchors {
 /// failure is a value the caller can log, not a panic.
 pub fn anchors() -> Result<&'static TrustAnchors, &'static str> {
     static CACHE: OnceLock<Result<TrustAnchors, String>> = OnceLock::new();
-    CACHE
-        .get_or_init(load)
-        .as_ref()
-        .map_err(|why| why.as_str())
+    CACHE.get_or_init(load).as_ref().map_err(|why| why.as_str())
 }
 
 fn load() -> Result<TrustAnchors, String> {

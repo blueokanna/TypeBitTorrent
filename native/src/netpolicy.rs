@@ -159,9 +159,7 @@ impl UrlReject {
             UrlReject::Scheme => "scheme is not http(s)",
             UrlReject::Authority => "host missing or contains userinfo",
             UrlReject::BlockedAddress(AddrScope::Loopback) => "host is a loopback address",
-            UrlReject::BlockedAddress(AddrScope::Metadata) => {
-                "host is a cloud metadata address"
-            }
+            UrlReject::BlockedAddress(AddrScope::Metadata) => "host is a cloud metadata address",
             UrlReject::BlockedAddress(AddrScope::Special) => "host is a special-use address",
             UrlReject::BlockedAddress(_) => "host address refused",
             UrlReject::TooLong => "url too long",
@@ -205,7 +203,11 @@ pub fn url_port(url: &str) -> Option<u16> {
         return port;
     }
     let (scheme, _) = url.split_once("://")?;
-    Some(if scheme.eq_ignore_ascii_case("https") { 443 } else { 80 })
+    Some(if scheme.eq_ignore_ascii_case("https") {
+        443
+    } else {
+        80
+    })
 }
 
 /// The network policy applied to every engine-supplied HTTP request.
@@ -350,7 +352,10 @@ mod tests {
             AddrScope::Metadata
         );
         // Allowed: the LAN (the NAS case) and the internet.
-        assert_eq!(classify("192.168.1.10".parse().unwrap()), AddrScope::Private);
+        assert_eq!(
+            classify("192.168.1.10".parse().unwrap()),
+            AddrScope::Private
+        );
         assert_eq!(classify("10.0.0.5".parse().unwrap()), AddrScope::Private);
         assert_eq!(classify("172.16.4.4".parse().unwrap()), AddrScope::Private);
         assert_eq!(classify("100.64.1.1".parse().unwrap()), AddrScope::Private);
@@ -365,10 +370,7 @@ mod tests {
         assert_eq!(classify("224.0.0.1".parse().unwrap()), AddrScope::Special);
         assert_eq!(classify("0.0.0.0".parse().unwrap()), AddrScope::Special);
         assert_eq!(classify("fe80::1".parse().unwrap()), AddrScope::Special);
-        assert_eq!(
-            classify("2001:db8::1".parse().unwrap()),
-            AddrScope::Special
-        );
+        assert_eq!(classify("2001:db8::1".parse().unwrap()), AddrScope::Special);
         // IPv4-mapped v6 is classified by the embedded address: the exact
         // bypass a naive guard would miss.
         assert_eq!(
@@ -389,8 +391,12 @@ mod tests {
         assert!(policy.check_url("http://0.0.0.0/").is_err());
         assert!(policy.check_url("http://224.0.0.1/").is_err());
         // Real tracker and web-seed URLs pass, including the LAN NAS case.
-        assert!(policy.check_url("https://tracker.example.org/announce").is_ok());
-        assert!(policy.check_url("http://tracker.example.org:6969/announce").is_ok());
+        assert!(policy
+            .check_url("https://tracker.example.org/announce")
+            .is_ok());
+        assert!(policy
+            .check_url("http://tracker.example.org:6969/announce")
+            .is_ok());
         assert!(policy.check_url("http://192.168.1.50/files/seed").is_ok());
         assert!(policy.check_url("http://[fd00::50]:8080/seed").is_ok());
         // Non-http(s) schemes and userinfo do not pass.
@@ -402,7 +408,10 @@ mod tests {
             policy.check_url("http://user@127.0.0.1/"),
             Err(UrlReject::Authority)
         );
-        assert_eq!(policy.check_url("http:///nohost"), Err(UrlReject::Authority));
+        assert_eq!(
+            policy.check_url("http:///nohost"),
+            Err(UrlReject::Authority)
+        );
         // Length cap.
         let long = format!("http://example.com/{}", "a".repeat(MAX_URL_LEN));
         assert_eq!(policy.check_url(&long), Err(UrlReject::TooLong));
@@ -436,7 +445,10 @@ mod tests {
         assert_eq!(url_port("https://a.example/x"), Some(443));
         assert_eq!(url_port("http://a.example:81/x"), Some(81));
         assert_eq!(url_host_port("not a url"), None);
-        assert_eq!(url_host_port("http://host:port/x"), Some(("host:port", None)));
+        assert_eq!(
+            url_host_port("http://host:port/x"),
+            Some(("host:port", None))
+        );
     }
 
     #[test]
