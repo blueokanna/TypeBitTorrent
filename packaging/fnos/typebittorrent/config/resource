@@ -1,8 +1,5 @@
 {
   "data-share": {
-    "shares": [
-      { "name": "typebittorrent/downloads" },
-      { "name": "typebittorrent/config" }
-    ]
+    "shares": [{ "name": "typebittorrent/downloads" }]
   }
 }

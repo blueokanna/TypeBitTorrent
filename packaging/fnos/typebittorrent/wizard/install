@@ -1,0 +1,21 @@
+[
+  {
+    "stepTitle": "TypeBitTorrent",
+    "items": [
+      {
+        "type": "password",
+        "field": "wizard_webui_password",
+        "label": "WebUI 登录密码",
+        "helpText": "用户名固定为 admin。安装后用它首次登录，随后可在 WebUI 的“设置 → WebUI”中修改。",
+        "rules": [
+          { "required": true, "message": "请设置 WebUI 登录密码" },
+          { "min": 8, "message": "密码至少 8 位" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "下载文件默认保存到共享文件夹 <code>typebittorrent/downloads</code>；在 WebUI 中登录后可添加磁力/种子、管理任务与修改设置。"
+      }
+    ]
+  }
+]

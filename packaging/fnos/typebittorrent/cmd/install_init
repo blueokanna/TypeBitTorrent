@@ -1,0 +1,8 @@
+#!/bin/bash
+# fnOS install init — runs before the payload is unpacked.
+#
+# Nothing to prepare: the package ships its own JRE and the shares declared in
+# `config/resource` are created by fnOS itself. The file exists because the
+# lifecycle contract asks for it (fnpack refuses to pack a package without it).
+set -u
+exit 0

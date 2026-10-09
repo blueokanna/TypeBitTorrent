@@ -1,0 +1,7 @@
+#!/bin/bash
+# fnOS config callback — runs after a configuration change was applied.
+#
+# See `config_init`: there is no framework-side configuration to apply, the
+# WebUI writes everything itself.
+set -u
+exit 0

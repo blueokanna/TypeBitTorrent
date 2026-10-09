@@ -57,6 +57,14 @@ class WebUiServer(
     private val settings: () -> WebUiSettings,
     private val bindAddress: String,
     private val port: Int,
+    /**
+     * Explicit `frame-ancestors` CSP source list for deployments that are
+     * *meant* to be embedded: the 飞牛 fnOS App Center card is an iframe, and
+     * its origin (the NAS UI port) is not known in advance, so `cmd/main`
+     * starts the server with `--frame-ancestors=*`. `null` keeps the desktop
+     * default — [WebUiSettings.clickjackingProtection] decides.
+     */
+    private val frameAncestors: String? = null,
     /** Startup banner / advisories. */
     private val log: (String) -> Unit = { println(it) },
 ) {
@@ -138,9 +146,18 @@ class WebUiServer(
     }
 
     private fun applyApiHeaders(exchange: HttpExchange) {
-        if (settings().clickjackingProtection) {
-            exchange.responseHeaders.add("X-Frame-Options", "DENY")
-            exchange.responseHeaders.add("Content-Security-Policy", "frame-ancestors 'none'")
+        // `X-Frame-Options` cannot express "any ancestor", so a framed
+        // deployment gets the CSP directive only.
+        when {
+            frameAncestors != null ->
+                exchange.responseHeaders.add(
+                    "Content-Security-Policy",
+                    "frame-ancestors $frameAncestors",
+                )
+            settings().clickjackingProtection -> {
+                exchange.responseHeaders.add("X-Frame-Options", "DENY")
+                exchange.responseHeaders.add("Content-Security-Policy", "frame-ancestors 'none'")
+            }
         }
         exchange.responseHeaders.add("X-Content-Type-Options", "nosniff")
         exchange.responseHeaders.add("Referrer-Policy", "no-referrer")
@@ -158,11 +175,7 @@ class WebUiServer(
             }
         val headers = exchange.responseHeaders
         headers.add("Content-Type", contentTypeOf(asset))
-        headers.add(
-            "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
-                "connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
-        )
+        headers.add("Content-Security-Policy", staticCsp())
         headers.add("X-Content-Type-Options", "nosniff")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
@@ -176,6 +189,22 @@ class WebUiServer(
             "svg" -> "image/svg+xml"
             else -> "application/octet-stream"
         }
+
+    /**
+     * Document CSP. `frame-ancestors` follows the same policy as
+     * [applyApiHeaders]: an explicit [frameAncestors] wins, then the
+     * clickjacking switch; with protection off the directive is omitted, which
+     * CSP reads as "no restriction".
+     */
+    private fun staticCsp(): String {
+        val base =
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+                "connect-src 'self'; form-action 'none'; base-uri 'none'"
+        val directive =
+            frameAncestors?.let { "frame-ancestors $it" }
+                ?: if (settings().clickjackingProtection) "frame-ancestors 'none'" else null
+        return if (directive == null) base else "$base; $directive"
+    }
 
     /** Serializes any DTO/list/DTO-tree into a JSON element. */
     private inline fun <reified T> jsonOf(value: T): JsonElement = json.encodeToJsonElement(value)

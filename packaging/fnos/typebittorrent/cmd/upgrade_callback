@@ -1,0 +1,11 @@
+#!/bin/bash
+# fnOS upgrade callback — runs after the payload was replaced.
+#
+# The data directories are untouched by an upgrade, so this only records which
+# version replaced which, which is the first thing to look at when a NAS misbehaves
+# after an update.
+set -u
+VAR="${TRIM_PKGVAR:-$(cd "$(dirname "$0")/.." && pwd)/var}"
+echo "$(date '+%F %T') upgrade: ${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?}" \
+    >>"${VAR}/typebit.log" 2>/dev/null || true
+exit 0

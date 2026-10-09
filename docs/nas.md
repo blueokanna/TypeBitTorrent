@@ -10,6 +10,12 @@ bin/TypeBitTorrent --headless --bind=0.0.0.0 --port=8080 \
                    --username=admin --password='…'
 ```
 
+Flags beyond the credentials (`--bind`, `--port`, `--data`, `--downloads`,
+`--username`, `--password`) are `--frame-ancestors=<sources>`, which relaxes the
+WebUI's `X-Frame-Options`/CSP default so a NAS dashboard may embed it (`*` for
+"any ancestor" — the fnOS package passes that), and the matching environment
+variables `TYPEBIT_*` for containers.
+
 Nothing is reimplemented for the NAS: the headless mode boots the same
 `AppStore`, the same Rust engine worker, the same `NativeHost` (sockets, disk
 staging, HTTP/DNS workers) and the same persistence files. The browser talks to
@@ -49,31 +55,56 @@ fnOS packages are directories wrapped by `fnpack`:
 
 ```
 packaging/fnos/typebittorrent/
-├── manifest              # INI, no extension — appname/version/display_name/…
-├── config/privilege      # {"defaults":{"run-as":"package"}}
-├── config/resource       # shared folders
-├── cmd/main              # start | stop | status  (exit 0 / 3 / 1)
-├── app/ui/config         # App-Center entry (iframe → the WebUI port)
-├── app/bin|lib|runtime   # payload: the self-contained Linux app image
-├── wizard/               # (required directory)
-└── ICON.PNG, ICON_256.PNG
+├── manifest                    # INI, no extension — appname/version/platform/…
+├── config/privilege            # {"defaults":{"run-as":"package"}}
+├── config/resource             # shared folders (the download folder)
+├── cmd/main                    # start | stop | status  (exit 0 / 3 / 1)
+├── cmd/install_callback        # first-run WebUI password from the wizard
+├── cmd/uninstall_init|callback # stop the client, honour the keep/delete answer
+├── cmd/install_init|upgrade_*|config_*   # required lifecycle slots, no-ops here
+├── wizard/install|uninstall    # App Center forms (password / keep data)
+├── app/ui/config               # App-Center entry (iframe → the WebUI port)
+├── app/ui/images/icon_*.png    # card icons
+├── app/bin|lib|runtime         # payload: the self-contained app image
+└── ICON.PNG, ICON_256.PNG      # 64×64 / 256×256 package icons
 ```
 
-Build it on a Linux x86_64 host:
+`fnOS` unpacks the *contents* of `app/` into `$TRIM_APPDEST`, so the payload ends
+up as `$TRIM_APPDEST/bin/TypeBitTorrent` (+ `lib/`, `runtime/`) and `cmd/main`
+execs exactly that — not an `app/bin/…` path.
+
+Build **both** architectures on a Linux host (x86_64 for the tooling, the
+aarch64 add-ons listed below):
 
 ```bash
 # one-time: the official packaging tool
 curl -fLO https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
 chmod +x fnpack-1.2.3-linux-amd64 && sudo mv fnpack-1.2.3-linux-amd64 /usr/local/bin/fnpack
 
-sudo apt install python3-pil        # to render ICON.PNG / ICON_256.PNG
-bash packaging/fnos/build-fpk.sh    # builds the payload, renders icons, runs fnpack build
+# one-time for the arm64 package: an aarch64 JDK 17 + the cross linker
+curl -fL -o jdk-arm64.tar.gz \
+  'https://api.adoptium.net/v3/binary/latest/17/ga/linux/aarch64/jdk/hotspot/normal/eclipse'
+mkdir -p ~/jdks/arm64 && tar xzf jdk-arm64.tar.gz -C ~/jdks/arm64 --strip-components=1
+sudo apt install gcc-aarch64-linux-gnu python3-pil
+
+# both packages (or: x86_64 / aarch64)
+packaging/fnos/build-fpk.sh all
+ls packaging/fnos/dist/     # typebittorrent_<ver>_x86.fpk  typebittorrent_<ver>_arm.fpk
 ```
+
+`jpackage` cannot cross-build an app image, so the arm64 payload is assembled by
+the same script to the same layout: the launcher and the runtime come from the
+aarch64 JDK (`jdk.jpackage` jmod + a cross `jlink`), the Rust engine is
+cross-compiled with `aarch64-linux-gnu-gcc`, and skiko's arm64 native replaces
+the x64 one. `manifest`'s `platform=` (`x86` / `arm`) is what tells fnOS which
+package belongs on which device — `fnpack` has no arch flag, and the App Center
+expects one `.fpk` per architecture.
 
 Install on the NAS (per the fnOS CLI docs):
 
 ```bash
-appcenter-cli install-fpk packaging/fnos/typebittorrent/typebittorrent.fpk
+appcenter-cli install-fpk packaging/fnos/dist/typebittorrent_0.1.9_x86.fpk   # x86_64 设备
+appcenter-cli install-fpk packaging/fnos/dist/typebittorrent_0.1.9_arm.fpk   # arm64 设备
 appcenter-cli start typebittorrent
 ```
 
@@ -82,18 +113,31 @@ Notes and honest caveats:
 * **The package ships its own JRE.** fnOS supports `install_dep_apps=java-21-openjdk`,
   but bundling the runtime removes a whole class of "the NAS Java is too old"
   failures; the payload is ~150 MB larger.
+* **The first-run WebUI password comes from the install wizard** (`wizard/install`,
+  username `admin`). Installing from the CLI (`appcenter-cli install-fpk`) shows
+  no form, so the first start generates one and keeps it in
+  `<app data>/initial-password.txt` — on a default install that is
+  `/vol1/@appdata/typebittorrent/initial-password.txt`. Change it later in the
+  WebUI under *设置 → WebUI*.
 * `manifest.service_port=8080` + `"port": "8080"` in `app/ui/config` make the
-  App Center card open the WebUI in an iframe. The published WebUI port is the
-  *service* port; change it in both files if 8080 is taken.
+  App Center card open the WebUI in an iframe. That is why `cmd/main` starts the
+  server with `--frame-ancestors=*`: the WebUI's default `X-Frame-Options: DENY`
+  / `frame-ancestors 'none'` would otherwise leave the card blank. Change the
+  port in both files *and* in the iframe URL if 8080 is taken.
+* The download folder is the `typebittorrent/downloads` share (`TRIM_DATA_SHARE_PATHS`);
+  settings, task records and resume data live in `TRIM_PKGVAR`
+  (`/vol1/@appdata/typebittorrent`), so they survive upgrades. Uninstall asks
+  whether to delete that runtime data — downloaded files are never touched.
 * `cmd/main` stops the client with `SIGTERM` so the resume data is flushed and
-  the engine worker is joined (`status` follows the documented 0/3/1 contract).
+  the engine worker is joined (`status` follows the documented 0/3/1 contract,
+  and a start that cannot bind the port reports the log tail to the user).
+* Icons: `ICON.PNG` (64×64) and `ICON_256.PNG` (256×256) at the package root plus
+  `app/ui/images/icon_{64,256}.png` for the card, all rendered from
+  `assets/typebittorrent.png`. They are committed, so `python3-pil` is only
+  needed when you regenerate them.
 * Publishing to the fnOS App Center currently goes through their developer
   group (there is no self-serve portal yet) — see
   <https://developer.fnnas.com/docs/quick-started/publish-application/>.
-* `.fpk` is verified by `fnpack build` (manifest fields, JSON configs, icons,
-  `app/`, `cmd/`, `wizard/`). The archive container itself is not publicly
-  documented; `fnpack` is the supported way to produce it and is used verbatim
-  here.
 
 ---
 

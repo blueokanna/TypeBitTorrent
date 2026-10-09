@@ -67,6 +67,7 @@ object Headless {
                 settings = { store.state.value.settings.webUi },
                 bindAddress = opts.bind,
                 port = opts.port ?: webUi.port,
+                frameAncestors = opts.frameAncestors,
             )
         try {
             server.start()
@@ -78,6 +79,7 @@ object Headless {
 
         println("  保存目录 : ${settings.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }}")
         println("  用户名   : ${webUi.username}")
+        opts.frameAncestors?.let { println("  允许嵌套 : frame-ancestors $it（NAS 应用中心内嵌 WebUI）") }
         opts.generatedPassword?.let {
             println("  初始密码 : $it   ← 首次运行随机生成，请登录后在设置中修改")
         }
@@ -92,7 +94,6 @@ object Headless {
             }
         }
         Runtime.getRuntime().addShutdownHook(Thread(shutdown, "typebit-shutdown"))
-
         // Park forever; the shutdown hook does the teardown (SIGTERM from
         // Docker / `appcenter-cli stop` lands there too).
         try {
@@ -167,6 +168,7 @@ object Headless {
         var password: String? = null
         var dataDir: String? = null
         var downloadsDir: String? = null
+        var frameAncestors: String? = null
         var generatedPassword: String? = null
     }
 
@@ -186,6 +188,7 @@ object Headless {
                 "--password" -> if (value.isNotEmpty()) o.password = value
                 "--data", "--data-dir", "--config" -> if (value.isNotBlank()) o.dataDir = value
                 "--downloads", "--save" -> if (value.isNotBlank()) o.downloadsDir = value
+                "--frame-ancestors" -> normalizeFrameAncestors(value)?.let { o.frameAncestors = it }
             }
         }
         // Environment fallbacks keep the container command short.
@@ -196,6 +199,9 @@ object Headless {
         System.getenv("TYPEBIT_DOWNLOADS")?.takeIf { it.isNotBlank() }?.let {
             if (o.downloadsDir == null) o.downloadsDir = it
         }
+        System.getenv("TYPEBIT_FRAME_ANCESTORS")?.takeIf { it.isNotBlank() }?.let {
+            if (o.frameAncestors == null) normalizeFrameAncestors(it)?.let { v -> o.frameAncestors = v }
+        }
         System.getProperty(DATA_DIR_PROPERTY)?.takeIf { it.isNotBlank() }?.let {
             if (o.dataDir == null) o.dataDir = it
         }
@@ -204,4 +210,26 @@ object Headless {
 
     /** Set to relocate the app data dir (containers mount `/config`). */
     const val DATA_DIR_PROPERTY = "typebit.data.dir"
+
+    /** One `frame-ancestors` source: `*`, a keyword, or an http(s) origin. */
+    private const val FRAME_SOURCE = """\*|'self'|'none'|https?://[A-Za-z0-9.\-]+(?::\d{1,5})?"""
+
+    private val FRAME_SOURCES = Regex("^($FRAME_SOURCE)( ($FRAME_SOURCE))*$")
+
+    /**
+     * Normalizes `--frame-ancestors` (e.g. `*`, `'self'`, `http://nas:5666`)
+     * into a CSP source list. The value ends up verbatim in a response header,
+     * so anything that is not a plain source list is dropped — that rules out
+     * header injection, not just typos.
+     */
+    private fun normalizeFrameAncestors(raw: String): String? {
+        val value =
+            raw.trim().split(',', ' ', '\t').filter { it.isNotEmpty() }.joinToString(" ")
+        if (value.isEmpty()) return null
+        if (!FRAME_SOURCES.matches(value)) {
+            System.err.println("忽略非法的 --frame-ancestors 值: $raw")
+            return null
+        }
+        return value
+    }
 }

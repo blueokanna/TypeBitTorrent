@@ -1,0 +1,8 @@
+#!/bin/bash
+# fnOS upgrade init — runs before the payload is replaced.
+#
+# No migration needed: settings, task records and resume data live in
+# TRIM_PKGVAR, outside the payload. fnOS stops the app around an upgrade; a
+# simultaneous start is harmless because `cmd/main start` is idempotent.
+set -u
+exit 0

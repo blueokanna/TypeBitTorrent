@@ -34,11 +34,13 @@ Thumbs.db
 *.log
 
 # NAS packaging: the payload is produced by scripts/build-linux.sh and is far
-# too large (and platform specific) to keep in git.
+# too large (and platform specific) to keep in git. ICON.PNG / ICON_256.PNG and
+# app/ui/images/* are committed instead — fnpack requires them and they change
+# only when the logo does.
+packaging/fnos/build/
+packaging/fnos/dist/
 packaging/fnos/typebittorrent/app/bin/
 packaging/fnos/typebittorrent/app/lib/
 packaging/fnos/typebittorrent/app/runtime/
-packaging/fnos/typebittorrent/*.fpk
-packaging/fnos/typebittorrent/ICON.PNG
-packaging/fnos/typebittorrent/ICON_256.PNG
+*.fpk
 build-TypeBitTorrent-linux-*.tar.gz

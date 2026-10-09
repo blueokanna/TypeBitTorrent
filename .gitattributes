@@ -1,0 +1,22 @@
+# Line endings that the *payload* depends on.
+#
+# The NAS packages (飞牛 fnOS .fpk, Unraid, Docker) are assembled straight from
+# the working tree, and fnOS runs `cmd/*` through /bin/bash while parsing
+# `manifest`, `config/*` and `app/ui/config` as plain text. A Windows checkout
+# with core.autocrlf=true would otherwise ship CRLF: the shebang turns into
+# `#!/bin/bash\r`, INI values keep a trailing `\r` (so `appname` no longer
+# matches) and the install/start scripts fail on the device.
+*.sh         text eol=lf
+gradlew      text eol=lf
+Dockerfile   text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+packaging/** text eol=lf
+
+# Images must never be normalised — keep them byte-exact.
+*.png binary
+*.jpg binary
+*.ico binary
+*.fpk binary
+*.so  binary
+*.dll binary

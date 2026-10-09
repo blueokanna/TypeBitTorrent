@@ -252,7 +252,7 @@ URL）、单文件优先级与改名、tracker、peer 列表、分块图、全�
 |----------|------|------|
 | Docker（amd64/arm64） | `packaging/docker` | 多阶段构建、精简 JRE、非 root 运行、`/config` + `/downloads` 卷 |
 | Unraid | `packaging/unraid/typebittorrent.xml` | Container v2 模板；配 `/mnt/user/appdata/typebittorrent` + 你的下载共享 |
-| 飞牛 fnOS | `packaging/fnos` | `fnpack` 源码 + `build-fpk.sh`，`cmd/main` 支持 start/stop/status |
+| 飞牛 fnOS | `packaging/fnos` | `build-fpk.sh` 产出 x86_64 与 arm64 两个 `.fpk`；`cmd/main` 实现 start/stop/status，安装向导设置 WebUI 密码 |
 | 任意 Linux | `scripts/build-linux.sh` | 生成上面两个平台要用的 app image |
 
 完整说明——包括反向代理/TLS 的做法、以及这些包**故意不做**什么——见
@@ -684,7 +684,7 @@ jar 里面，正常。这个坑每个版本都会坑一个人。每个版本。
 | `native/src/jni_glue.rs` | JNI 表面层，保持薄：只做解析和默认值 |
 | `composeApp/src/commonMain/kotlin/com/typebit/engine/TorrentEngine.kt` | 崩溃安全门面：调用失败退化成默认值，而不是把异常扔进协程 |
 | `composeApp/src/desktopMain/kotlin/com/typebit/webui/WebUiServer.kt` | NAS 端的产品面（同一个 store，换成 HTTP） |
-| `packaging/` | Docker / Unraid / fnOS 打包，基于 `scripts/build-linux.sh` 产物 |
+| `packaging/` | Docker / Unraid / fnOS 打包，基于 `scripts/build-linux.sh` 产物（fnOS 的 arm64 载荷由 `packaging/fnos/build-fpk.sh` 交叉组装） |
 
 ## 文档与许可证
 

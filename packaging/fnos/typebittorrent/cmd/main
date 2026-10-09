@@ -1,71 +1,153 @@
 #!/bin/bash
 # fnOS lifecycle entry point for TypeBitTorrent.
 #
-# Contract (developer.fnnas.com/docs/core-concepts/framework): `status` exits 0
-# when the service runs, 3 when it does not, 1 on a real failure; `start` and
-# `stop` must be idempotent.
+# Contract (developer.fnnas.com/docs/core-concepts/framework):
+#   start  -> 0 when the service runs, 1 on a real failure (idempotent)
+#   stop   -> 0 (idempotent)
+#   status -> 0 running, 3 not running, 1 on a real failure
 #
-# The package ships a self-contained app image (its own JRE), so no runtime
-# dependency is declared in `manifest` — the NAS needs nothing installed.
+# Layout: fnOS unpacks the *contents* of the package's `app/` payload into
+# `TRIM_APPDEST` (developer.fnnas.com/docs/core-concepts/environment-variables),
+# so the jpackage launcher lands at `$TRIM_APPDEST/bin/TypeBitTorrent` with its
+# `lib/` and `runtime/` siblings — there is no extra `app/` path component.
 #
-# Environment provided by fnOS (see the framework docs):
-#   TRIM_APPDEST   install root, e.g. /var/apps/typebittorrent/target
-#   TRIM_TEMP_LOGFILE, TRIM_SERVICE_PORT, TRIM_DATA_SHARE_PATHS, TRIM_PKGVAR …
+# The package ships a self-contained app image (its own JRE), so `manifest`
+# declares no dependency and the NAS needs nothing pre-installed.
+#
+# Environment provided by fnOS:
+#   TRIM_APPDEST           installed payload root (/var/apps/typebittorrent/target)
+#   TRIM_PKGVAR            run data; survives restarts and upgrades
+#   TRIM_PKGTMP            scratch space
+#   TRIM_TEMP_LOGFILE      file whose content fnOS shows to the user on failure
+#   TRIM_SERVICE_PORT      the port declared in `manifest` (8080)
+#   TRIM_DATA_SHARE_PATHS  ':'-separated paths of the shares in `config/resource`
 set -u
 
 APPNAME="typebittorrent"
-# TRIM_APPDEST is where fnOS installs the package payload; fall back to the
-# script's own location so the package can also be driven by hand while
-# debugging (`./cmd/main start` from an unpacked .fpk).
-APPDEST="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd | sed 's#/cmd$##')}"
-BIN="${APPDEST}/app/bin/TypeBitTorrent"
-CONFIG_DIR="${TRIM_PKGVAR:-${APPDEST}/var}/config"
-DOWNLOAD_DIR="${TRIM_DATA_SHARE_PATHS:-/vol1/typebittorrent}/downloads"
-PIDFILE="${CONFIG_DIR}/typebit.pid"
-LOGFILE="${TRIM_TEMP_LOGFILE:-${CONFIG_DIR}/typebit.log}"
+# Fall back to the staging layout of the package source (`<pkg>/app/bin/...`) so
+# the script can also be driven by hand while debugging.
+APPDEST="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)/app}"
+BIN="${APPDEST}/bin/TypeBitTorrent"
+VAR="${TRIM_PKGVAR:-${APPDEST}/var}"
+TMP="${TRIM_PKGTMP:-${APPDEST}/tmp}"
+PIDFILE="${VAR}/typebit.pid"
+LOGFILE="${VAR}/typebit.log"
+# First-run credentials: `cmd/install_callback` writes the install-wizard answer
+# here, `start` applies it exactly once and then records that it did — so a
+# password change made later in the WebUI is not overwritten at every boot.
+INITIAL_PW_FILE="${VAR}/initial-password.txt"
+PW_APPLIED="${VAR}/.pw-applied"
 PORT="${TRIM_SERVICE_PORT:-8080}"
+START_TIMEOUT="${TYPEBIT_START_TIMEOUT:-60}"
+STOP_TIMEOUT="${TYPEBIT_STOP_TIMEOUT:-20}"
+
+# The first share declared in `config/resource` is the download folder: fnOS
+# creates it at install time and hands its path over in TRIM_DATA_SHARE_PATHS.
+DOWNLOAD_DIR="$(printf '%s' "${TRIM_DATA_SHARE_PATHS:-}" | cut -d: -f1)"
+[ -n "$DOWNLOAD_DIR" ] || DOWNLOAD_DIR="${VAR}/downloads"
 
 log() { echo "$(date '+%F %T') $*" >>"$LOGFILE" 2>/dev/null || true; }
+
+# fnOS shows this file to the user when a lifecycle step fails, so every
+# failure has to leave a short, actionable line (plus the tail of the log).
+user_error() {
+    log "ERROR: $1"
+    [ -n "${TRIM_TEMP_LOGFILE:-}" ] || return 0
+    {
+        printf '%s\n' "$1"
+        printf -- '--- %s ---\n' "$LOGFILE"
+        tail -n 20 "$LOGFILE" 2>/dev/null
+    } >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+}
 
 is_running() {
     [ -f "$PIDFILE" ] || return 1
     local pid
     pid="$(cat "$PIDFILE" 2>/dev/null)"
     [ -n "$pid" ] || return 1
-    kill -0 "$pid" 2>/dev/null
+    kill -0 "$pid" 2>/dev/null || return 1
+    # A reboot can hand a stale pid to an unrelated process; the JVM command
+    # line carries the install path, so use it to tell the two apart.
+    if [ -r "/proc/$pid/cmdline" ]; then
+        tr '\0' '\n' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$APPDEST" || return 1
+    fi
+    return 0
 }
+
+# Pure-bash TCP probe — no curl/wget dependency on the NAS.
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") >/dev/null 2>&1; }
+
+# 20-char [A-Za-z0-9] secret; the client would otherwise invent its own and
+# print it to a log file that the NAS UI never shows.
+gen_password() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 20; }
 
 start() {
     if is_running; then
         return 0
     fi
-    mkdir -p "$CONFIG_DIR" "$DOWNLOAD_DIR"
+    mkdir -p "$VAR" "$TMP" "$DOWNLOAD_DIR"
     if [ ! -x "$BIN" ]; then
-        log "missing executable: $BIN"
+        user_error "找不到可执行文件 $BIN：安装似乎不完整，请重新安装应用。"
         return 1
     fi
-    # A password must exist: without one the server generates a random one and
-    # prints it to the log, which is unhelpful in a NAS UI — so default to a
-    # generated-but-persisted value on first start and tell the user to change
-    # it in the WebUI settings.
-    if [ ! -f "${CONFIG_DIR}/.initialized" ]; then
-        touch "${CONFIG_DIR}/.initialized"
+
+    # `--frame-ancestors=*`: the App Center card is an iframe whose origin (the
+    # NAS UI port) cannot be known at build time. Without it the WebUI's default
+    # `frame-ancestors 'none'` renders the card blank.
+    local -a args=(
+        --headless
+        --bind=0.0.0.0
+        --port="$PORT"
+        --data="$VAR"
+        --downloads="$DOWNLOAD_DIR"
+        --frame-ancestors='*'
+    )
+
+    # Apply the first-run password once (`appcenter-cli install-fpk` installs
+    # without a form, hence the generate-and-keep fallback).
+    local first_pw="" pw_arg=""
+    if [ ! -f "$PW_APPLIED" ]; then
+        if [ ! -s "$INITIAL_PW_FILE" ]; then
+            umask 077
+            gen_password >"$INITIAL_PW_FILE" 2>/dev/null || true
+        fi
+        first_pw="$(cat "$INITIAL_PW_FILE" 2>/dev/null || true)"
     fi
-    log "starting: $BIN --headless --data=$CONFIG_DIR --downloads=$DOWNLOAD_DIR --port=$PORT"
-    nohup "$BIN" --headless \
-        --bind=0.0.0.0 \
-        --port="$PORT" \
-        --data="$CONFIG_DIR" \
-        --downloads="$DOWNLOAD_DIR" \
-        >>"$LOGFILE" 2>&1 &
+    # Passed through the environment, not argv: /proc/<pid>/environ is only
+    # readable by the app user, while /proc/<pid>/cmdline is world-readable.
+    local -a pw_env=()
+    if [ -n "$first_pw" ]; then
+        pw_env=(TYPEBIT_PASSWORD="$first_pw")
+        pw_arg=" (首次密码来自 $INITIAL_PW_FILE)"
+    fi
+
+    log "starting: $BIN --headless --port=$PORT --data=$VAR --downloads=$DOWNLOAD_DIR$pw_arg"
+    nohup env ${pw_env[@]+"${pw_env[@]}"} "$BIN" "${args[@]}" >>"$LOGFILE" 2>&1 &
     echo $! >"$PIDFILE"
-    sleep 2
-    if is_running; then
-        log "started pid $(cat "$PIDFILE")"
-        return 0
-    fi
-    log "failed to start"
-    return 1
+
+    # Wait for the WebUI socket: the JVM and the engine worker need a moment on
+    # a NAS CPU, and "the port is already taken" must not look like success
+    # (the client exits with code 2 when it cannot bind).
+    local waited=0
+    while [ "$waited" -lt "$START_TIMEOUT" ]; do
+        if ! is_running; then
+            rm -f "$PIDFILE"
+            user_error "TypeBitTorrent 启动失败（端口 $PORT 可能被占用），日志：$LOGFILE"
+            return 1
+        fi
+        if port_open; then
+            log "started pid $(cat "$PIDFILE"), WebUI on port $PORT"
+            if [ -n "$first_pw" ]; then
+                : >"$PW_APPLIED"
+                log "initial WebUI password applied (stored in $INITIAL_PW_FILE; change it in 设置 → WebUI)"
+            fi
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    log "warning: port $PORT did not open within ${START_TIMEOUT}s, process is alive — leaving it running"
+    return 0
 }
 
 stop() {
@@ -73,14 +155,15 @@ stop() {
         rm -f "$PIDFILE"
         return 0
     fi
-    local pid
+    local pid waited=0
     pid="$(cat "$PIDFILE")"
     # SIGTERM first: the client flushes resume data and joins the engine worker
     # before exiting, so a clean stop never loses progress.
     kill "$pid" 2>/dev/null
-    for _ in $(seq 1 20); do
+    while [ "$waited" -lt "$STOP_TIMEOUT" ]; do
         is_running || break
-        sleep 0.5
+        sleep 1
+        waited=$((waited + 1))
     done
     if is_running; then
         log "graceful stop timed out, sending SIGKILL to $pid"
@@ -97,7 +180,7 @@ case "${1:-}" in
         if is_running; then exit 0; else exit 3; fi
         ;;
     *)
-        log "unknown command: ${1:-}"
+        user_error "未知命令：${1:-}（支持 start / stop / status）"
         exit 1
         ;;
 esac

@@ -1,0 +1,20 @@
+#!/bin/bash
+# fnOS uninstall callback.
+#
+# `wizard/uninstall` asks whether the app's own data should go; the answer
+# arrives as `wizard_delete_data` (developer.fnnas.com/docs/core-concepts/wizard).
+# Only the app's private runtime data is ever removed — downloaded files live in
+# the `typebittorrent/downloads` share and are deliberately left alone.
+set -u
+
+VAR="${TRIM_PKGVAR:-$(cd "$(dirname "$0")/.." && pwd)/var}"
+
+if [ "${wizard_delete_data:-false}" = "true" ]; then
+    # Refuse to recurse into anything that is not an app data directory, so a
+    # missing/odd TRIM_PKGVAR can never turn into `rm -rf /`.
+    case "$VAR" in
+        */@appdata/*|*/@appdata|*/var) rm -rf -- "${VAR:?}" ;;
+        *) echo "uninstall: refusing to delete unexpected path: $VAR" >&2 ;;
+    esac
+fi
+exit 0

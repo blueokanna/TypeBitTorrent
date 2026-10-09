@@ -1,0 +1,22 @@
+[
+  {
+    "stepTitle": "卸载 TypeBitTorrent",
+    "items": [
+      {
+        "type": "radio",
+        "field": "wizard_delete_data",
+        "label": "应用数据",
+        "initValue": "false",
+        "options": [
+          { "label": "保留（推荐，重新安装可继续原有任务）", "value": "false" },
+          { "label": "删除应用配置与运行数据", "value": "true" }
+        ],
+        "helpText": "只会删除应用自身的设置、任务记录和续传数据；共享文件夹里已下载的文件始终保留。"
+      },
+      {
+        "type": "tips",
+        "helpText": "已下载的文件位于共享文件夹 <code>typebittorrent/downloads</code>，如需删除请到“文件”中手动处理。"
+      }
+    ]
+  }
+]

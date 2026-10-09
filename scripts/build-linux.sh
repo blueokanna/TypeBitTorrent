@@ -11,8 +11,11 @@
 # image) the usual jpackage prerequisites (`binutils`).
 #
 # Usage:
-#   scripts/build-linux.sh                 # host architecture
-#   ARCH=aarch64 scripts/build-linux.sh    # cross/native arm64 build
+#   scripts/build-linux.sh                 # payload for the host architecture
+#
+# `jpackage` can only build for the machine it runs on, so cross-architecture
+# payloads (the arm64 .fpk) are assembled by packaging/fnos/build-fpk.sh, which
+# calls the same cargo/gradle steps plus a cross jlink.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -184,6 +184,12 @@ data class TorrentRecord(
     val filePriorities: List<Int> = emptyList(),
     /** Extra tracker URLs added at runtime (persisted across restarts). */
     val trackers: List<String> = emptyList(),
+    /**
+     * Metainfo tracker URLs the user removed at runtime. The engine re-reads
+     * the announce list from the metainfo on every restart, so a removal has to
+     * be remembered here and re-applied, exactly like [trackers] is for adds.
+     */
+    val removedTrackers: List<String> = emptyList(),
     /** Per-file renames: file index → new relative path (persisted). */
     val renames: Map<Int, String> = emptyMap(),
     /**

@@ -1,0 +1,21 @@
+#!/bin/bash
+# fnOS install callback.
+#
+# `wizard/install` collects the WebUI password; fnOS hands wizard answers to
+# the lifecycle scripts as environment variables named after the wizard
+# `field` (developer.fnnas.com/docs/core-concepts/wizard). The value is stashed
+# so `cmd/main` can apply it exactly once, on the first start — after that the
+# client owns the (PBKDF2-hashed) password and the user can change it in the
+# WebUI without the install answer overriding it at every boot.
+set -u
+
+VAR="${TRIM_PKGVAR:-$(cd "$(dirname "$0")/.." && pwd)/var}"
+mkdir -p "$VAR" 2>/dev/null || true
+
+if [ -n "${wizard_webui_password:-}" ]; then
+    umask 077
+    printf '%s' "$wizard_webui_password" >"${VAR}/initial-password.txt"
+    echo "$(date '+%F %T') install: WebUI password taken from the install wizard" \
+        >>"${VAR}/typebit.log" 2>/dev/null || true
+fi
+exit 0

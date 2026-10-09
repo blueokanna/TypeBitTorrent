@@ -1,0 +1,8 @@
+#!/bin/bash
+# fnOS config init — runs before a configuration change is applied.
+#
+# The package ships no `wizard/config`: everything user-facing (save path,
+# ports, DHT/LSD, rate limits, the WebUI password) is edited in the WebUI, which
+# needs no framework round-trip. Kept so the lifecycle set is complete.
+set -u
+exit 0

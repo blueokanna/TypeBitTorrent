@@ -854,8 +854,13 @@ class AppStore(
         if (engine.addTracker(hash, trimmed)) {
             records =
                     records.map { rec ->
-                        if (rec.hash == hash && trimmed !in rec.trackers) {
-                            rec.copy(trackers = rec.trackers + trimmed)
+                        if (rec.hash == hash) {
+                            rec.copy(
+                                    trackers =
+                                            if (trimmed in rec.trackers) rec.trackers
+                                            else rec.trackers + trimmed,
+                                    removedTrackers = rec.removedTrackers - trimmed,
+                            )
                         } else rec
                     }
             persistRecords()
@@ -864,10 +869,19 @@ class AppStore(
 
     /** Removes a tracker URL from a running torrent and persists it. */
     fun removeTracker(hash: String, url: String) = onEngine {
-        if (engine.removeTracker(hash, url)) {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return@onEngine
+        if (engine.removeTracker(hash, trimmed)) {
             records =
                     records.map { rec ->
-                        if (rec.hash == hash) rec.copy(trackers = rec.trackers - url) else rec
+                        if (rec.hash == hash) {
+                            rec.copy(
+                                    trackers = rec.trackers - trimmed,
+                                    removedTrackers =
+                                            if (trimmed in rec.removedTrackers) rec.removedTrackers
+                                            else rec.removedTrackers + trimmed,
+                            )
+                        } else rec
                     }
             persistRecords()
         }
@@ -1325,7 +1339,7 @@ class AppStore(
                 createdBy = info?.created_by,
                 comment = info?.comment,
                 kind = info?.kind ?: rec.kind,
-                trackers = buildTrackers(info, rec, base),
+                trackers = buildTrackers(rec.hash, info, rec, base),
                 // Prefer the FRESH metainfo mirror (infoCache) — it is
                 // updated when metadata arrives. Falling back to the previous
                 // frame's list made `files` permanently empty when the first
@@ -1348,22 +1362,27 @@ class AppStore(
     }
 
     /**
-     * The tracker list shown in the detail tab: the metainfo announce tiers plus any runtime-added
-     * trackers persisted on the record. `base` (the previous frame) already carries the merged
-     * list, so the merge only runs when a frame is first built.
+     * The tracker list shown in the detail tab. The engine session owns the
+     * announce list — it starts from the metainfo and is then mutated by
+     * [addTracker]/[removeTracker] — so it is the source of truth; the metainfo
+     * plus the record only stand in while the engine cannot answer. [base]
+     * supplies the last known per-URL state (status, seeds, …).
      */
     private fun buildTrackers(
+            hash: String,
             info: TorrentInfoDto?,
             rec: TorrentRecord,
             base: Torrent?
     ): List<TrackerInfo> {
-        val fromMeta =
-                base?.trackers
-                        ?: info?.announce_list.orEmpty().flatten().map { TrackerInfo(url = it) }
-        if (base != null || rec.trackers.isEmpty()) return fromMeta.distinctBy { it.url }
-        val known = fromMeta.mapTo(HashSet()) { it.url }
-        return (fromMeta + rec.trackers.filter { it !in known }.map { TrackerInfo(url = it) })
-                .distinctBy { it.url }
+        val known = base?.trackers.orEmpty().associateBy { it.url }
+        val live = engine.trackers(hash)?.takeIf { it.isNotEmpty() }
+        val urls =
+                live
+                        ?: (info?.announce_list.orEmpty().flatten().filterNot {
+                            it in rec.removedTrackers
+                        } + rec.trackers)
+                                .distinct()
+        return urls.map { url -> known[url] ?: TrackerInfo(url = url) }
     }
 
     // ---- persistence helpers ----
@@ -1394,6 +1413,9 @@ class AppStore(
         // saved state, so the app-level record is the source of truth).
         for (t in rec.trackers) {
             engine.addTracker(hash, t)
+        }
+        for (t in rec.removedTrackers) {
+            engine.removeTracker(hash, t)
         }
         // Magnet priorities are applied once refreshStats sees metadata.
         if (rec.kind != "MAGNET" && rec.filePriorities.isNotEmpty()) {
