@@ -72,7 +72,7 @@ object EngineConfigJson {
             put("gamma", bt.schedulerGamma)
             put("delta", bt.schedulerDelta)
             put("edge_bytes", bt.schedulerEdgeBytes)
-            put("trackers", parseTrackers(bt.extraTrackers))
+            put("trackers", parseTrackers(bt.allTrackers))
             // ---- network policy (see native/src/netpolicy.rs) ----
             put("doh_enabled", conn.enableDoh && conn.dohProviders.isNotBlank())
             put("doh_providers", parseLines(conn.dohProviders))
@@ -110,7 +110,7 @@ object EngineConfigJson {
             put("gamma", bt.schedulerGamma)
             put("delta", bt.schedulerDelta)
             put("edge_bytes", bt.schedulerEdgeBytes)
-            put("trackers", parseTrackers(bt.extraTrackers))
+            put("trackers", parseTrackers(bt.allTrackers))
         }.toString()
     }
 

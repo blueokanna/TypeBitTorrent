@@ -225,10 +225,14 @@
 
     <!-- 设置 -->
     <section id="view-settings" class="view">
-      <p class="muted">修改后点击保存；保存会立即应用到运行中的引擎（限速、并发、端口等）。</p>
+      <p class="muted">
+        修改后点击保存。限速、并发、优先级类设置立即生效；DHT / LSD / 监听端口 / 端口映射 /
+        解析器这类在引擎创建时读取的设置，保存后会自动重启引擎来应用（任务与已下载数据不受影响）。
+      </p>
       <div id="settings-form" class="settings"></div>
       <div class="row sticky-actions">
         <button id="settings-save" class="primary">保存设置</button>
+        <button id="engine-restart">重启引擎</button>
         <span class="muted" id="settings-msg"></span>
       </div>
     </section>

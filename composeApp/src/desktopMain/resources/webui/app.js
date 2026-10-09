@@ -623,6 +623,43 @@ $('rss-refresh').addEventListener('click', refreshRss);
 
 /* ------------------------------------------------------------------ stats */
 
+/** UPnP/NAT-PMP phase → what the user can act on (see EngineDtos.kt). */
+function portMapLabel(phase, port) {
+  const names = {
+    0: '未启用（设置里打开 UPnP / NAT-PMP）',
+    1: '正在探测网关（NAT-PMP）',
+    2: '正在探测网关（NAT-PMP）',
+    3: '正在请求映射（UPnP）',
+    4: '正在请求映射（UPnP）',
+    5: '正在请求映射（UPnP）',
+    6: port > 0 ? '已映射端口 ' + port : '已映射',
+    7: '正在移除映射',
+    8: '映射已取消',
+    9: '失败：路由器不支持或未开启 UPnP/NAT-PMP',
+  };
+  return names[phase] || String(phase);
+}
+
+/** The resolver's own counters, in terms a NAS user can act on. */
+function dnsLines(stats) {
+  if (!stats) return [];
+  const up = Number(stats.dns_providers_up || 0);
+  const total = Number(stats.dns_providers_total || 0);
+  const lines = [];
+  const mode = total > 0 ? '转发 ' + up + '/' + total + ' 个上游可用' : '从根迭代解析';
+  lines.push(mode + ' · 查询 ' + (stats.dns_queries || 0)
+    + ' · 缓存命中 ' + (stats.dns_cache_hits || 0)
+    + ' · 系统解析回退 ' + (stats.dns_os_fallbacks || 0));
+  lines.push('解析成功 ' + (stats.dns_provider_ok || 0)
+    + ' / 失败 ' + (stats.dns_provider_failures || 0)
+    + ' · 权威查询 ' + (stats.dns_upstream_queries || 0)
+    + ' / 超时 ' + (stats.dns_upstream_timeouts || 0)
+    + ' · DNSSEC 通过 ' + (stats.dns_validated || 0)
+    + ' / 失败 ' + (stats.dns_dnssec_failures || 0));
+  if (stats.dns_problems) lines.push(String(stats.dns_problems));
+  return lines;
+}
+
 async function refreshStats() {
   const { data } = await api('/api/state');
   const { data: stats } = await api('/api/stats');
@@ -633,6 +670,7 @@ async function refreshStats() {
       ['下载速率', fmtSpeed(data.downRate)], ['上传速率', fmtSpeed(data.upRate)],
       ['本次下载', fmtBytes(data.totalDownloaded)], ['本次上传', fmtBytes(data.totalUploaded)],
       ['任务数', String(data.torrents.length)], ['DHT 节点', String(data.dhtNodes)],
+      ['活动 Tracker', String(data.activeTrackers || 0)],
       ['LSD 收发', data.lsdSent + ' / ' + data.lsdRecv], ['LSD 发现', String(data.lsdPeers)],
       ['防吸血计数', String(data.antiLeechCount)],
     ];
@@ -644,13 +682,19 @@ async function refreshStats() {
     const rows = [
       ['监听端口', String(data.listenPort || '—')],
       ['外网地址', data.extIp ? data.extIp + ':' + data.extPort : '—'],
-      ['UPnP/NAT-PMP', data.portMapPhase + (data.portMapPort ? ' · 端口 ' + data.portMapPort : '')],
+      ['UPnP/NAT-PMP', portMapLabel(data.portMapPhase, data.portMapPort)],
       ['Peer ID', data.peerId || '—'],
       ['最近错误', data.lastError || '—'],
       ['防吸血客户端', (data.antiLeechClients || []).join('、') || '—'],
     ];
     for (const [k, v] of rows) {
       net.appendChild(el('div', { class: 'item' }, [el('span', { class: 'k', text: k }), el('span', { class: 'v', text: v })]));
+    }
+    for (const line of dnsLines(stats)) {
+      net.appendChild(el('div', { class: 'item' }, [
+        el('span', { class: 'k', text: '域名解析' }),
+        el('span', { class: 'v', text: line }),
+      ]));
     }
   }
   const box = $('engine-stats');
@@ -670,6 +714,14 @@ async function loadSettings() {
   renderSettings(data);
 }
 
+/* Field names are the *model* names of `AppSettings` on the server. They used
+ * to disagree (`port` vs `listenPort`, `dhtEnabled` vs `enableDht`, …), and a
+ * wrong name is silently dropped on the wire — the user sees "设置已保存" while
+ * nothing changed. The server now rejects unknown fields instead, so a typo
+ * here fails loudly rather than quietly.
+ *
+ * The fourth element marks a restart-only field: the engine reads it when it is
+ * created, so saving one rebuilds the engine (the response says so). */
 const SETTING_SECTIONS = [
   {
     title: '保存 / 下载', key: 'downloads',
@@ -683,43 +735,56 @@ const SETTING_SECTIONS = [
     ],
   },
   {
-    title: '连接', key: 'connection',
+    title: '连接 / 端口', key: 'connection',
     fields: [
-      ['port', 'num', '监听端口（TCP）'],
-      ['randomPort', 'bool', '随机端口'],
-      ['upnpEnabled', 'bool', '启用 UPnP / NAT-PMP'],
-      ['dhtEnabled', 'bool', '启用 DHT'],
-      ['pexEnabled', 'bool', '启用 PEX'],
-      ['lsdEnabled', 'bool', '启用 LSD 局域网发现'],
-      ['encryptionMode', 'num', '加密模式（0 关 1 允许 2 强制）'],
-      ['enableDoh', 'bool', '内置递归解析器（迭代解析 + DNSSEC 校验，绕过被投毒的 DNS）'],
-      ['dohProviders', 'text', '上游解析器（每行 `协议://地址[/路径][#TLS 名称]`，地址须是 IP）'],
-      ['enableIpv6', 'bool', '启用 IPv6（AAAA + 双栈 UDP）'],
-      ['allowLanWebseeds', 'bool', '允许局域网 Web 种子（NAS 内网做种）'],
+      ['listenPort', 'num', '监听端口（TCP）', true],
+      ['useRandomPort', 'bool', '随机端口', true],
+      ['maxConnections', 'num', '全局最大连接数', true],
+      ['maxConnectionsPerTorrent', 'num', '每任务最大连接数'],
+      ['enableDoh', 'bool', '内置递归解析器（迭代解析 + DNSSEC 校验，绕过被投毒的 DNS）', true],
+      ['dohProviders', 'textarea', '上游解析器（每行 `协议://地址[/路径][#TLS 名称]`，地址须是 IP）', true],
+      ['enableIpv6', 'bool', '启用 IPv6（AAAA + 双栈 UDP）', true],
+      ['allowLanWebseeds', 'bool', '允许局域网 Web 种子（NAS 内网做种）', true],
+    ],
+  },
+  {
+    title: 'BitTorrent · DHT · Tracker', key: 'bitTorrent',
+    fields: [
+      ['enableDht', 'bool', '启用 DHT（分布式哈希表）', true],
+      // PEX and MSE/encryption switches exist in the settings model and in the
+      // desktop UI, but the bundled engine (typebit 0.1.9) exposes no config
+      // for either — shown as read-only so nobody expects them to do anything.
+      ['enablePex', 'info', '启用 PEX（对等交换）：引擎暂不支持此开关，当前值仅作保存'],
+      ['enableLsd', 'bool', '启用 LSD 局域网发现', true],
+      ['enableUpnp', 'bool', '启用 UPnP 端口映射', true],
+      ['enableNatPmp', 'bool', '启用 NAT-PMP 端口映射', true],
+      ['useDefaultTrackers', 'bool', '新任务使用内置 Tracker 列表'],
+      ['extraTrackers', 'textarea', '附加 Tracker 列表（每行一条，保存后会加入所有任务与新任务）'],
+      ['trackerUpdateUrl', 'textarea', 'Tracker 订阅地址（每行一个；留空 = 使用内置公共列表 cf.trackerslist.com/best.txt）'],
+      ['trackerUpdateHours', 'num', 'Tracker 订阅自动更新间隔（小时，0 = 只手动更新）'],
+      ['encryptionMode', 'info', '加密模式（MSE/PE）：引擎暂不支持加密，当前值仅作保存'],
+      ['blockLeechClients', 'bool', '屏蔽吸血客户端（迅雷 / 旋风等）'],
+      ['maxPeersPerTorrent', 'num', '每任务最大连接数'],
+      ['requestPipeline', 'num', '请求流水线深度'],
+      ['requestTimeoutMs', 'num', '单块请求超时（毫秒）'],
+      ['cacheBytes', 'num', '磁盘写缓存（字节）', true],
     ],
   },
   {
     title: '速度', key: 'speed',
     fields: [
-      ['globalDownLimitKib', 'num', '全局下载限速 (KiB/s, 0=不限)'],
-      ['globalUpLimitKib', 'num', '全局上传限速 (KiB/s, 0=不限)'],
-    ],
-  },
-  {
-    title: 'BitTorrent', key: 'bitTorrent',
-    fields: [
-      ['maxPeersPerTorrent', 'num', '每任务最大连接数'],
-      ['requestPipeline', 'num', '请求流水线深度'],
-      ['antiLeechEnabled', 'bool', '启用反吸血'],
-      ['extraTrackers', 'text', '附加 Tracker 列表（每行一条）'],
+      ['globalDownloadLimitKib', 'num', '全局下载限速 (KiB/s, 0=不限)'],
+      ['globalUploadLimitKib', 'num', '全局上传限速 (KiB/s, 0=不限)'],
     ],
   },
   {
     title: 'WebUI', key: 'webUi',
     fields: [
       ['username', 'text', '用户名'],
-      ['port', 'num', 'WebUI 端口'],
-      ['remoteAccess', 'bool', '允许局域网访问（桌面版，重启生效）'],
+      // The package passes `--port` from the manifest, so the port is owned by
+      // the fnOS control panel: a value typed here is replaced at the next boot.
+      ['port', 'info', 'WebUI 端口：由飞牛应用中心管理（manifest 中的 8080），此处修改无效'],
+      ['remoteAccess', 'info', '局域网访问：NAS 版由启动参数 --bind=0.0.0.0 决定，始终允许'],
       ['sessionTimeoutMinutes', 'num', '会话超时（分钟）'],
       ['maxAuthFailCount', 'num', '允许的连续登录失败次数'],
       ['csrfProtection', 'bool', 'CSRF 防护'],
@@ -738,23 +803,37 @@ function renderSettings(settings) {
   for (const section of SETTING_SECTIONS) {
     const obj = settings[section.key] || {};
     const fs = el('fieldset', {}, [el('legend', { text: section.title })]);
-    for (const [field, kind, label] of section.fields) {
+    for (const [field, kind, label, restartOnly] of section.fields) {
       const value = obj[field];
-      if (kind === 'bool') {
+      const text = restartOnly ? label + '（保存后自动重启引擎）' : label;
+      if (kind === 'info') {
+        // Stored in the model but with nothing behind it in this build — shown
+        // so the value is visible, never editable (an edit would be a lie).
+        fs.appendChild(el('label', { class: 'row' },
+          [el('span', { class: 'muted', text })]));
+      } else if (kind === 'bool') {
         const cb = el('input', { type: 'checkbox' });
         cb.checked = !!value;
         cb.addEventListener('change', () => { settings[section.key][field] = cb.checked; });
         fs.appendChild(el('label', { class: 'row' },
-          [cb, el('span', { text: label })]));
+          [cb, el('span', { text })]));
+      } else if (kind === 'textarea') {
+        // Multi-line on purpose: the tracker/upstream lists are newline
+        // separated, which a single-line <input> cannot express.
+        const ta = el('textarea', { rows: '4', value: value === undefined || value === null ? '' : String(value) });
+        ta.value = value === undefined || value === null ? '' : String(value);
+        ta.addEventListener('change', () => { settings[section.key][field] = ta.value; });
+        fs.appendChild(el('label', {}, [el('span', { text }), ta]));
       } else {
         const input = el('input', { value: value === undefined || value === null ? '' : String(value) });
         input.addEventListener('change', () => {
           settings[section.key][field] = kind === 'num' ? Number(input.value) || 0 : input.value;
         });
-        fs.appendChild(el('label', {}, [el('span', { text: label }), input]));
+        fs.appendChild(el('label', {}, [el('span', { text }), input]));
       }
     }
     form.appendChild(fs);
+    if (section.key === 'bitTorrent') fs.appendChild(subscriptionStatus(obj));
   }
   // Password change: hashed server-side, never stored in the page.
   const pw = el('fieldset', {}, [el('legend', { text: '修改 WebUI 密码' })]);
@@ -782,11 +861,56 @@ function renderSettings(settings) {
   form.appendChild(pw);
 }
 
+/* Tracker 订阅状态 + 手动更新：把「订阅有没有真的取回东西」摆在同一屏里，
+ * 而不是让用户去猜为什么 Tracker 一直是 0。 */
+function subscriptionStatus(bt) {
+  const wrap = el('div', { class: 'row', style: 'gap:8px;align-items:center' });
+  const count = String(bt.subscribedTrackers || '').split('\n').filter((l) => l.trim()).length;
+  const last = Number(bt.trackerUpdateLastMs || 0);
+  const when = last > 0 ? new Date(last).toLocaleString() : '从未';
+  wrap.appendChild(el('span', { class: 'muted',
+    text: '订阅状态：' + count + ' 条，上次更新 ' + when }));
+  const btn = el('button', { text: '立即更新订阅' });
+  btn.addEventListener('click', async () => {
+    $('settings-msg').textContent = '正在更新 Tracker 订阅…';
+    const { data } = await api('/api/trackers/update', { body: {} });
+    $('settings-msg').textContent = (data && data.message) || '';
+    // The fetch runs in the background server-side; watch the timestamp so the
+    // result appears without the user having to press anything else.
+    let done = false;
+    for (let i = 0; i < 10 && !done; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      await loadSettings();
+      const now = Number((state.settings.bitTorrent || {}).trackerUpdateLastMs || 0);
+      if (now > last) done = true;
+    }
+    $('settings-msg').textContent = done
+      ? 'Tracker 订阅已更新（新地址已加入所有任务）'
+      : '订阅未更新：请检查订阅地址与 NAS 外网访问（.torrent 里的 Tracker 仍会照常使用）';
+  });
+  wrap.appendChild(btn);
+  return wrap;
+}
+
 $('settings-save').addEventListener('click', async () => {
   if (!state.settings) return;
-  const { data } = await api('/api/settings', { body: state.settings });
+  const { status, data } = await api('/api/settings', { body: state.settings });
   $('settings-msg').textContent = (data && data.message) || '';
+  if (status !== 200) {
+    toast('设置未保存');
+    return;
+  }
   toast('设置已保存');
+  // Re-read what the server actually stored: a rejected field, a clamped
+  // number or an engine rebuild all show up here, and the form must not keep
+  // displaying a value that was not saved.
+  await loadSettings();
+});
+
+$('engine-restart').addEventListener('click', async () => {
+  $('settings-msg').textContent = '正在重启引擎…';
+  const { data } = await api('/api/engine/restart', { body: {} });
+  $('settings-msg').textContent = (data && data.message) || '';
 });
 
 /* ------------------------------------------------------------------- logs */

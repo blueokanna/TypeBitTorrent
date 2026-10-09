@@ -35,6 +35,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.isoDayNumber
@@ -50,6 +52,15 @@ import kotlinx.serialization.json.jsonPrimitive
  * first moment.
  */
 private const val COMMUNITY_TRACKERS_URL = "https://cf.trackerslist.com/best.txt"
+
+/** How often the subscription loop looks whether a refresh is due. */
+private const val TRACKER_UPDATE_POLL_MS = 5 * 60 * 1000L
+
+/** Per-URL timeout for a subscription fetch. */
+private const val TRACKER_UPDATE_TIMEOUT_MS = 15_000L
+
+/** Subscription URLs honoured per pass (the rest stay stored). */
+private const val MAX_SUBSCRIPTION_URLS = 5
 
 /**
  * The single source of truth for the UI.
@@ -137,6 +148,32 @@ class AppStore(
                     SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + storeFailureHandler
             )
 
+    /**
+     * Drives an in-place engine restart (settings that are only read at engine
+     * creation). Separate from every other scope on purpose: it stops the
+     * engine — which cancels [engineScope] — and then boots a fresh one.
+     */
+    private fun newRestartScope(): CoroutineScope =
+            CoroutineScope(
+                    SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + storeFailureHandler
+            )
+
+    private var restartScope: CoroutineScope = newRestartScope()
+
+    /**
+     * Set as soon as the application starts going down, cleared by [start].
+     *
+     * A pending restart reads it before and after tearing the engine down, so
+     * a window close can never be overtaken by a settings-driven reboot.
+     */
+    @Volatile private var shutdownBegan = false
+
+    /** The subscription loop; cancelled with [systemScope] on teardown. */
+    private var trackerUpdateJob: Job? = null
+
+    /** Serializes subscription passes (see [refreshTrackerSubscription]). */
+    private val trackerUpdateLock = Mutex()
+
     // Persisted app-level records (engine cannot carry category/tags/source).
     // Only touched from [engineScope] — never from the UI thread.
     private var records: List<TorrentRecord> = emptyList()
@@ -188,6 +225,7 @@ class AppStore(
 
     /** Boots the engine, restores state and starts the poll loop. */
     fun start() {
+        shutdownBegan = false
         if (_state.value.engineRunning) return
         if (bootJob?.isActive == true) return
         if (!engineScope.isActive) engineScope = newEngineScope()
@@ -247,19 +285,6 @@ class AppStore(
             }
             torrentRepo.loadResumeState()?.let { engine.loadState(it) }
 
-            val (synced, addedTrackers) = syncCommunityTrackers(settings)
-            effectiveSettings = synced
-            if (addedTrackers.isNotEmpty()) {
-                for (rec in records) {
-                    for (url in addedTrackers) engine.addTracker(rec.hash, url)
-                }
-                for (rec in records) {
-                    engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
-                }
-                lastAppliedExtraTrackers = trackersSet(effectiveSettings)
-                settingsRepo.save(effectiveSettings)
-            }
-
             for (rec in records) {
                 if (rec.kind == "MAGNET" && rec.pendingSelection) {
                     engine.setHoldData(rec.hash, hold = true)
@@ -295,41 +320,130 @@ class AppStore(
         if (engineScope.isActive) {
             pollJob = onEngineJob { pollLoop() }
         }
+        // Off the engine thread on purpose: the old startup fetch ran inside
+        // boot() and held the (single-thread) engine executor for as long as
+        // the HTTP request took, delaying every restore action behind it.
+        startTrackerUpdates()
+    }
+
+    // ------------------------------------------------------------------
+    // tracker subscription
+    // ------------------------------------------------------------------
+
+    /**
+     * Periodic tracker-list refresh, on [systemScope] so a slow or dead URL
+     * can never stall the engine.
+     *
+     * A public trackerslist is the only way a client behind NAT/DHT trouble
+     * finds peers, and the list itself rots within weeks: without this a NAS
+     * that has been up for months announces to trackers that no longer exist.
+     */
+    private fun startTrackerUpdates() {
+        trackerUpdateJob?.cancel()
+        trackerUpdateJob =
+                systemScope.launch {
+                    while (isActive && !shutdownBegan) {
+                        runCatching { refreshTrackerSubscription(force = false) }
+                        delay(TRACKER_UPDATE_POLL_MS)
+                    }
+                }
     }
 
     /**
-     * Fetches the community tracker list (`best.txt`), merges the new URLs
-     * into the persisted `extraTrackers` setting and returns the effective
-     * settings plus the set of newly-added trackers. Best-effort: returns
-     * `(settings, emptySet())` unchanged on any network/parse failure.
+     * Runs one subscription pass and returns how many new URLs were merged in.
+     *
+     * `force` ignores the interval (the "立即更新" button and a settings edit);
+     * otherwise a pass only happens when the interval is due. Failures are
+     * deliberately non-destructive: if every URL fails, the previous list and
+     * its timestamp stay, and the next poll retries.
+     *
+     * Passes are serialized by [trackerUpdateLock]: the startup pass can be
+     * several seconds into a slow fetch when the user sets a subscription URL
+     * and asks for an update, and the slower of the two must not win.
      */
-    private suspend fun syncCommunityTrackers(
-        settings: AppSettings,
-    ): Pair<AppSettings, Set<String>> {
-        val existing = trackersSet(settings)
-        val text =
-                withContext(Dispatchers.IO) {
-                    com.typebit.platform.fetchUrlText(COMMUNITY_TRACKERS_URL, 15_000)
-                } ?: return settings to emptySet()
-        val parsed =
-                text.lineSequence()
-                        .map { it.trim() }
-                        .filter { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("udp://") }
-                        .toSet()
-        val added = parsed - existing
-        if (added.isEmpty()) return settings to emptySet()
-        val merged = (existing + parsed).toList().sorted().joinToString("\n")
-        val effective =
-                settings.copy(
-                        bitTorrent = settings.bitTorrent.copy(extraTrackers = merged),
-                )
-        return effective to added
+    suspend fun refreshTrackerSubscription(force: Boolean): Int =
+            trackerUpdateLock.withLock {
+                val current = _state.value.settings
+                val bt = current.bitTorrent
+                if (!force && bt.trackerUpdateHours <= 0) return@withLock 0
+                val intervalMs = bt.trackerUpdateHours.coerceAtLeast(1).toLong() * 3_600_000L
+                val now = System.currentTimeMillis()
+                if (!force && bt.trackerUpdateLastMs > 0 && now - bt.trackerUpdateLastMs < intervalMs) {
+                    return@withLock 0
+                }
+                val urls = subscriptionUrls(bt)
+                if (urls.isEmpty()) return@withLock 0
+
+                val fetched = LinkedHashSet<String>()
+                var answered = false
+                for (url in urls.take(MAX_SUBSCRIPTION_URLS)) {
+                    val text =
+                            withContext(Dispatchers.IO) {
+                                com.typebit.platform.fetchUrlText(url, TRACKER_UPDATE_TIMEOUT_MS)
+                            } ?: continue
+                    answered = true
+                    fetched += com.typebit.data.parseSubscriptionList(text)
+                }
+                if (!answered) return@withLock 0
+
+                val previous = parseTrackerLines(bt.subscribedTrackers)
+                val stored = fetched.joinToString("\n")
+                // Re-read the *latest* settings when storing: the fetch takes
+                // seconds, and a settings save that landed meanwhile (a switch
+                // the user just flipped) must not be reverted by this pass
+                // writing a stale snapshot.
+                var effective: AppSettings? = null
+                _state.update { state ->
+                    if (subscriptionUrls(state.settings.bitTorrent) != urls) {
+                        // The subscription changed while we were fetching: this
+                        // answer belongs to a list nobody asked for any more.
+                        state
+                    } else {
+                        val merged =
+                                state.settings.copy(
+                                        bitTorrent =
+                                                state.settings.bitTorrent.copy(
+                                                        subscribedTrackers = stored,
+                                                        trackerUpdateLastMs = now,
+                                                ),
+                                )
+                        effective = merged
+                        state.copy(settings = merged)
+                    }
+                }
+                val applied = effective ?: return@withLock 0
+                // applySettings diffs the announce list against what is already
+                // applied and pushes only the new URLs to every torrent (plus
+                // new ones), then persists — the same path a manual edit in 设置
+                // takes.
+                onEngine { applySettings(applied) }
+                (fetched - previous).size
+            }
+
+    /** Subscription URLs; the built-in community list is the default. */
+    private fun subscriptionUrls(bt: com.typebit.data.BitTorrentSettings): List<String> {
+        val configured = parseTrackerLines(bt.trackerUpdateUrl).toList()
+        return configured.ifEmpty { listOf(COMMUNITY_TRACKERS_URL) }
     }
 
-    /** Parsed `extraTrackers` as a set of trimmed URLs. */
+    /**
+     * Starts a subscription refresh without waiting for it.
+     *
+     * The WebUI has to answer immediately (the user is looking at a spinner)
+     * while a dead URL can take 15 seconds per host to time out.
+     */
+    fun requestTrackerSubscriptionRefresh() {
+        if (!systemScope.isActive) return
+        systemScope.launch { runCatching { refreshTrackerSubscription(force = true) } }
+    }
+
+    private fun parseTrackerLines(raw: String): Set<String> =
+            raw.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    /** Parsed announce list (manual + subscribed) as a set of trimmed URLs. */
     private fun trackersSet(settings: AppSettings): Set<String> =
             settings.bitTorrent
-                    .extraTrackers
+                    .allTrackers
                     .lineSequence()
                     .map { it.trim() }
                     .filter { it.isNotEmpty() }
@@ -346,14 +460,20 @@ class AppStore(
      * them on the main thread froze the UI for seconds and could be killed as
      * an ANR, so they always run on [shutdownScope].
      */
-    fun stop() = teardown(blocking = false)
+    fun stop() {
+        shutdownBegan = true
+        teardown(blocking = false)
+    }
 
     /**
      * Blocking variant for process-exit paths (desktop window close), where
      * the process may be gone a moment later and the engine must be joined
      * deterministically. Idempotent with [stop].
      */
-    fun stopBlocking() = teardown(blocking = true)
+    fun stopBlocking() {
+        shutdownBegan = true
+        teardown(blocking = true)
+    }
 
     private fun teardown(blocking: Boolean) {
         synchronized(teardownLock) {
@@ -362,6 +482,7 @@ class AppStore(
         }
         bootJob?.cancel()
         pollJob?.cancel()
+        trackerUpdateJob?.cancel()
         engineScope.cancel()
         peersScope.cancel()
         systemScope.cancel()
@@ -905,6 +1026,61 @@ class AppStore(
         onEngine { applySettings(settings) }
     }
 
+    /**
+     * True when the edit can only take effect by rebuilding the engine.
+     *
+     * These fields are read once, at engine creation ([EngineConfigJson.engineConfig]):
+     * the listen port, DHT/LSD switches, UPnP/NAT-PMP, the resolver and IPv6
+     * policy, the SOCKS5 proxy and the disk cache. Everything else — limits,
+     * concurrency, per-session defaults, extra trackers — is applied live.
+     */
+    fun settingsNeedEngineRestart(before: AppSettings, after: AppSettings): Boolean {
+        val bc = before.connection
+        val ac = after.connection
+        val bb = before.bitTorrent
+        val ab = after.bitTorrent
+        return bc.listenPort != ac.listenPort ||
+            bc.useRandomPort != ac.useRandomPort ||
+            bc.maxConnections != ac.maxConnections ||
+            bc.enableDoh != ac.enableDoh ||
+            bc.dohProviders != ac.dohProviders ||
+            bc.enableIpv6 != ac.enableIpv6 ||
+            bc.allowLanWebseeds != ac.allowLanWebseeds ||
+            bc.proxyType != ac.proxyType ||
+            bc.proxyHost != ac.proxyHost ||
+            bc.proxyPort != ac.proxyPort ||
+            bc.proxyAuthEnabled != ac.proxyAuthEnabled ||
+            bc.proxyUsername != ac.proxyUsername ||
+            bc.proxyPassword != ac.proxyPassword ||
+            bb.enableDht != ab.enableDht ||
+            bb.enableLsd != ab.enableLsd ||
+            bb.enableUpnp != ab.enableUpnp ||
+            bb.enableNatPmp != ab.enableNatPmp ||
+            bb.cacheBytes != ab.cacheBytes
+    }
+
+    /**
+     * Rebuilds the engine in place so creation-time settings apply.
+     *
+     * The teardown flushes resume data, settings and records before the engine
+     * goes down, and [start] re-adds every record, so a restart is the same
+     * event as an app restart — without dropping the WebUI or the process.
+     * Runs on its own one-thread scope: the engine executor must stay free for
+     * the teardown that is about to cancel it.
+     */
+    fun restartEngine() {
+        if (!restartScope.isActive) restartScope = newRestartScope()
+        restartScope.launch {
+            if (shutdownBegan) return@launch
+            teardown(blocking = true)
+            // An application exit that started while we were tearing down wins:
+            // booting an engine after `engine.stop()` would leak the native
+            // worker and race the next start on the same port and `.part` files.
+            if (shutdownBegan) return@launch
+            start()
+        }
+    }
+
     private suspend fun applySettings(settings: AppSettings) {
         val limits = effectiveLimits(settings.speed)
         if (limits != lastAppliedLimits) {
@@ -919,7 +1095,7 @@ class AppStore(
 
         val trackersNow =
                 settings.bitTorrent
-                        .extraTrackers
+                        .allTrackers
                         .lineSequence()
                         .map { it.trim() }
                         .filter { it.isNotEmpty() }

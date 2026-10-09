@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer
 import com.typebit.data.AppSettings
 import com.typebit.data.RssRepository
 import com.typebit.data.WebUiSettings
+import com.typebit.data.decodeSettings
 import com.typebit.data.fetchRssFeed
 import com.typebit.engine.PeerDto
 import com.typebit.model.Torrent
@@ -74,6 +75,18 @@ class WebUiServer(
             encodeDefaults = true
             explicitNulls = false
         }
+
+    /**
+     * Settings are the one request body where an unknown field is a *user*
+     * error worth reporting: the WebUI form used to send `port` / `dhtEnabled`
+     * instead of `listenPort` / `enableDht`, and because unknown keys were
+     * dropped silently the switch appeared to reset itself after every save.
+     */
+    private val strictJson = Json {
+        ignoreUnknownKeys = false
+        encodeDefaults = true
+        explicitNulls = false
+    }
 
     private val rssRepo = RssRepository()
 
@@ -175,6 +188,9 @@ class WebUiServer(
             }
         val headers = exchange.responseHeaders
         headers.add("Content-Type", contentTypeOf(asset))
+        // Never let a stale SPA hide a server fix: a cached app.js once kept
+        // sending settings field names the server had stopped accepting.
+        headers.add("Cache-Control", "no-cache")
         headers.add("Content-Security-Policy", staticCsp())
         headers.add("X-Content-Type-Options", "nosniff")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -248,6 +264,21 @@ class WebUiServer(
             ?.firstOrNull { it.startsWith("$key=") }
             ?.substringAfter('=')
             ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8) }
+
+    /** Turns a strict-decode failure into an actionable sentence. */
+    private fun unknownSettingField(json: Json, body: String): String {
+        val message =
+            runCatching { json.decodeFromString<AppSettings>(body) }
+                .exceptionOrNull()
+                ?.message
+                .orEmpty()
+        val key = Regex("Unexpected JSON key '([^']+)'").find(message)?.groupValues?.getOrNull(1)
+        return if (key != null) {
+            "设置未保存：不认识的设置项 “$key”。请按 Ctrl+F5 强制刷新页面后重试。"
+        } else {
+            "设置未保存：${message.take(160)}"
+        }
+    }
 
     private fun clientAddress(exchange: HttpExchange): String =
         exchange.remoteAddress?.address?.hostAddress ?: "unknown"
@@ -519,12 +550,47 @@ class WebUiServer(
                 else fail(exchange, 400, result.error ?: "导出失败")
             }
             "/api/settings" -> {
-                val incoming = readBody(exchange)?.let { decode<AppSettings>(it) } ?: run {
+                val body = readBody(exchange) ?: run {
                     fail(exchange, 400, "bad request")
                     return
                 }
+                // Strict on purpose (see [strictJson]): an unknown field is a
+                // client bug the user must hear about, not a silent no-op.
+                val incoming =
+                    decodeSettings(strictJson, body)
+                        ?: run {
+                            fail(exchange, 400, unknownSettingField(strictJson, body))
+                            return
+                        }
+                val before = store.state.value.settings
+                // DHT / LSD / port / UPnP / proxy / resolver settings are read
+                // once, when the engine is created — applying them means
+                // rebuilding it. Transfers keep their resume data.
+                val needsRestart = store.settingsNeedEngineRestart(before, incoming)
                 store.updateSettings(incoming)
-                ok(exchange, "设置已保存")
+                val subscriptionChanged =
+                    before.bitTorrent.trackerUpdateUrl != incoming.bitTorrent.trackerUpdateUrl ||
+                        before.bitTorrent.trackerUpdateHours != incoming.bitTorrent.trackerUpdateHours
+                if (subscriptionChanged) {
+                    // Fire and forget: a dead subscription URL must not turn a
+                    // settings save into a 15-second request.
+                    store.requestTrackerSubscriptionRefresh()
+                }
+                val suffix = if (subscriptionChanged) "；正在更新 Tracker 订阅…" else ""
+                if (needsRestart) {
+                    store.restartEngine()
+                    ok(exchange, "设置已保存；引擎正在重启以应用 DHT / 端口 / 解析器等设置（任务会自动恢复）$suffix")
+                } else {
+                    ok(exchange, "设置已保存$suffix")
+                }
+            }
+            "/api/trackers/update" -> {
+                store.requestTrackerSubscriptionRefresh()
+                ok(exchange, "正在更新 Tracker 订阅…取回后会加入所有任务（本页会自动刷新结果）")
+            }
+            "/api/engine/restart" -> {
+                store.restartEngine()
+                ok(exchange, "引擎正在重启，任务会从续传数据继续")
             }
             "/api/settings/password" -> {
                 val req = readBody(exchange, maxBytes = 64 * 1024)?.let { decode<PasswordRequest>(it) }
@@ -579,6 +645,7 @@ class WebUiServer(
             platform = Platform.name,
             peerId = s.peerId,
             dhtNodes = s.dhtNodes,
+            activeTrackers = s.trackerCount,
             listenPort = s.listenPort,
             extIp = s.extIp,
             extPort = s.extPort,

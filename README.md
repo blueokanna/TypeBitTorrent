@@ -441,7 +441,7 @@ would be an unauthenticated TLS peer. See
 
 | setting | default | meaning |
 |---------|---------|---------|
-| DHT / PEX / LSD | on | discovery mechanisms (BEP-5 / PEX / BEP-14) |
+| DHT / PEX / LSD | on | discovery mechanisms (BEP-5 / BEP-14; the **PEX switch is stored only** — the engine exposes no PEX config) |
 | UPnP / NAT-PMP | on | dual-protocol port mapping (both protocols actually mapped) |
 | 每任务最大 Peers | 80 | swarm cap per torrent |
 | **请求管线** | 32 | per-peer in-flight 16 KiB blocks (≤512 KiB/peer) |
@@ -452,6 +452,7 @@ would be an unauthenticated TLS peer. See
 | 反吸血 | on | fingerprint + reputation + hard bans |
 | **屏蔽吸血客户端** | on | Xunlei/Thunder/FlashGet etc. are never unchoked |
 | 额外 Tracker | empty | one URL per line, applied to running torrents on change |
+| **Tracker subscription** | built-in community list | trackerslist URLs (one per line) + refresh interval in hours (0 = manual only); results land in `subscribedTrackers` and new URLs are pushed to every existing and new torrent |
 | 磁盘缓存 | 256 MiB | write-back cache budget |
 | **磁盘分配** | 稀疏 | OFF (grow) / **SPARSE** (reserve, recommended) / FULL (zero-fill) |
 | 做种/下载槽 | 8 / 8 | unchoke slots |

@@ -348,6 +348,22 @@ data class BitTorrentSettings(
     val blockLeechClients: Boolean = true,
     /** Extra tracker announce URLs, one per line. */
     val extraTrackers: String = "",
+    /**
+     * Tracker subscription URLs, one per line.
+     *
+     * Each URL must answer with a trackerslist document (one announce URL per
+     * line) — [parseTrackerList] filters it, and the result is stored in
+     * [subscribedTrackers] and announced for every torrent, existing and new.
+     * This is what keeps a stale tracker list from silently starving a NAS
+     * that runs for months.
+     */
+    val trackerUpdateUrl: String = "",
+    /** Subscription refresh interval in hours; 0 disables automatic updates. */
+    val trackerUpdateHours: Int = 12,
+    /** Epoch millis of the last successful subscription fetch (0 = never). */
+    val trackerUpdateLastMs: Long = 0,
+    /** Result of the last subscription fetch, one announce URL per line. */
+    val subscribedTrackers: String = "",
     /** Disk write-back cache budget in bytes. */
     val cacheBytes: Long = 256L * 1024 * 1024,
     /**
@@ -369,7 +385,23 @@ data class BitTorrentSettings(
     val schedulerEdgeBytes: Long = 4L * 1024 * 1024,
     val contentLayout: ContentLayout = ContentLayout.ORIGINAL,
     val anonymousMode: Boolean = false,
-)
+) {
+    /**
+     * Every announce URL the client should use: the hand-written
+     * [extraTrackers] plus whatever the subscription last delivered.
+     *
+     * Kept as one derived value so the engine config, the per-torrent tracker
+     * merge and the WebUI all see the same list — a subscription that only
+     * affected new torrents would be useless on a box that is already seeding.
+     */
+    val allTrackers: String
+        get() =
+            when {
+                subscribedTrackers.isBlank() -> extraTrackers
+                extraTrackers.isBlank() -> subscribedTrackers
+                else -> extraTrackers.trimEnd() + "\n" + subscribedTrackers.trim()
+            }
+}
 
 // ---------------------------------------------------------------------------
 // WebUI

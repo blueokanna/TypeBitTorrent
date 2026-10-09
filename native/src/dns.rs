@@ -49,7 +49,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -612,9 +612,28 @@ struct Inner {
     os_fallbacks: AtomicU64,
     provider_ok: AtomicU64,
     provider_failures: AtomicU64,
+    /// Upstream lookups that failed *in a row*; at [BREAKER_TRIP_AFTER] the
+    /// resolver is temporarily skipped in favour of the system resolver.
+    consecutive_failures: AtomicU32,
+    /// Lookups served while the breaker is open, so the upstreams still get a
+    /// periodic re-probe ([BREAKER_REPROBE_EVERY]).
+    breaker_skips: AtomicU32,
     dnssec_failures: AtomicU64,
     validated: AtomicU64,
 }
+
+/// Failed upstream lookups in a row before the resolver is skipped.
+///
+/// With every configured upstream unreachable, one lookup spends the whole
+/// resolver budget (measured in seconds) before the system-resolver fallback
+/// runs. That is fatal for the callers that cannot wait: the engine's DHT
+/// bootstrap gives hostname resolution 10 s, so "slow" reads as "impossible"
+/// — the symptom is a DHT stuck at 0-1 nodes and zero tracker announces.
+const BREAKER_TRIP_AFTER: u32 = 3;
+
+/// Lookups served from the system resolver before the upstreams get another
+/// chance, so a transient outage heals without a restart.
+const BREAKER_REPROBE_EVERY: u32 = 30;
 
 /// One resolution outcome, with the provenance the log line and the counters
 /// report.
@@ -739,6 +758,8 @@ impl DnsService {
                 os_fallbacks: AtomicU64::new(0),
                 provider_ok: AtomicU64::new(0),
                 provider_failures: AtomicU64::new(0),
+                consecutive_failures: AtomicU32::new(0),
+                breaker_skips: AtomicU32::new(0),
                 dnssec_failures: AtomicU64::new(0),
                 validated: AtomicU64::new(0),
             }),
@@ -811,7 +832,17 @@ impl DnsService {
             resolver_cache_misses: snap.cache_misses,
             avg_resolve_us: snap.avg_resolve_us,
             providers,
-            problems: self.inner.problems.clone(),
+            problems: {
+                let mut problems = self.inner.problems.clone();
+                if self.breaker_open() {
+                    problems.push(format!(
+                        "上游解析器连续 {} 次失败（名单见上），已临时改用系统解析，每 {} 次查询重试一次上游",
+                        self.inner.consecutive_failures.load(Ordering::Relaxed),
+                        BREAKER_REPROBE_EVERY
+                    ));
+                }
+                problems
+            },
         }
     }
 
@@ -1031,11 +1062,33 @@ impl DnsService {
     }
 
     /// The resolver, then the OS resolver for the cases it cannot cover.
+    /// True when the configured upstreams have failed often enough in a row
+    /// that a fresh lookup should go straight to the system resolver.
+    fn breaker_open(&self) -> bool {
+        self.inner.forwarded
+            && self
+                .inner
+                .consecutive_failures
+                .load(Ordering::Relaxed)
+                >= BREAKER_TRIP_AFTER
+    }
+
     fn resolve_uncached(&self, key: &str, port: u16) -> Resolved {
         let now = Instant::now();
+        // Circuit breaker: see [BREAKER_TRIP_AFTER]. Skipping is a *lookup*-
+        // level decision and never disables the configured upstreams (the
+        // periodic re-probe keeps them in play).
+        if self.breaker_open() {
+            let served = self.inner.breaker_skips.fetch_add(1, Ordering::Relaxed) + 1;
+            if !served.is_multiple_of(BREAKER_REPROBE_EVERY) {
+                return self.os_fallback(key, port, now);
+            }
+        }
         match self.via_resolver(key) {
             Outcome::Addrs { v4, v6, ttl } => {
                 self.inner.provider_ok.fetch_add(1, Ordering::Relaxed);
+                self.inner.consecutive_failures.store(0, Ordering::Relaxed);
+                self.inner.breaker_skips.store(0, Ordering::Relaxed);
                 self.put_memo(key, &v4, &v6, ttl, now);
                 Resolved {
                     addrs: to_netaddrs(&v4, &v6, port),
@@ -1044,6 +1097,8 @@ impl DnsService {
             }
             Outcome::NotFound => {
                 self.inner.provider_ok.fetch_add(1, Ordering::Relaxed);
+                self.inner.consecutive_failures.store(0, Ordering::Relaxed);
+                self.inner.breaker_skips.store(0, Ordering::Relaxed);
                 self.put_negative(key, now);
                 Resolved {
                     addrs: Vec::new(),
@@ -1061,7 +1116,12 @@ impl DnsService {
                     source: Source::Negative,
                 }
             }
-            Outcome::Failed => self.os_fallback(key, port, now),
+            Outcome::Failed => {
+                self.inner
+                    .consecutive_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                self.os_fallback(key, port, now)
+            }
         }
     }
 

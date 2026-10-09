@@ -70,6 +70,8 @@ data class StateDto(
     val platform: String = "",
     val peerId: String = "",
     val dhtNodes: Int = 0,
+    /** Trackers currently announcing successfully across all torrents. */
+    val activeTrackers: Int = 0,
     val listenPort: Int = 0,
     val extIp: String = "",
     val extPort: Int = 0,

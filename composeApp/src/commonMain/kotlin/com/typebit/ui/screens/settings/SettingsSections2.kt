@@ -117,7 +117,7 @@ fun BitTorrentSection(
 
     SectionCard("对等网络") {
         SettingSwitch("启用 DHT", "分布式哈希表（重启引擎后生效）", s.enableDht, { update(s.copy(enableDht = it)) })
-        SettingSwitch("启用 PEX", "Peer 交换（BEP-11）", s.enablePex, { update(s.copy(enablePex = it)) })
+        SettingSwitch("启用 PEX", "Peer 交换（BEP-11）——引擎暂不支持此开关，仅保存", s.enablePex, { update(s.copy(enablePex = it)) })
         SettingSwitch(
                 "启用本地对等发现 (LSD)",
                 "在局域网内广播当前种子并发现同网段的对等节点（BEP-14，重启引擎后生效）",
@@ -235,6 +235,20 @@ fun BitTorrentSection(
                 placeholder = "每行一个 announce URL"
         )
         TrackerImportRow(s, update)
+        // Subscription: the list that keeps itself current on a NAS that runs
+        // for months. Empty URL = the built-in community list; 0 hours = manual.
+        SettingTextField(
+                "Tracker 订阅地址",
+                s.trackerUpdateUrl,
+                { update(s.copy(trackerUpdateUrl = it)) },
+                placeholder = "每行一个 trackerslist 地址；留空 = 内置 cf.trackerslist.com/best.txt"
+        )
+        SettingNumberField(
+                "订阅更新间隔",
+                s.trackerUpdateHours.toString(),
+                { update(s.copy(trackerUpdateHours = (it.toIntOrNull() ?: 12).coerceIn(0, 168))) },
+                suffix = "小时"
+        )
         SettingNumberField(
                 "磁盘缓存 (MiB)",
                 (s.cacheBytes / 1024 / 1024).toString(),

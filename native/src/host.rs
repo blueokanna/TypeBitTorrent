@@ -57,6 +57,28 @@ const HTTP_WORKERS: usize = 4;
 /// How long `local_ip` is trusted before the interface list is consulted again.
 const LOCAL_IP_TTL: Duration = Duration::from_secs(30);
 
+/// Additional DHT router hostnames, resolved through the app's own resolver.
+///
+/// The engine ships the classic BEP-5 list, and it is not enough on its own:
+/// some of those routers have been unreachable for years and others are blocked
+/// outright on many networks (which is why a client can sit at "DHT 0-1 nodes"
+/// forever while the rest of the internet works). Every extra name that answers
+/// is one more entry point into the global routing table.
+const EXTRA_DHT_BOOTSTRAP: &[(&str, u16)] = &[
+    ("dht.libtorrent.org", 25401),
+    ("dht.aelitis.com", 6881),
+    ("tracker.opentrackr.org", 1337),
+];
+
+/// Minimum spacing between extended-router resolutions.
+const EXTRA_SEED_KICK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Upper bound on remembered peer addresses offered as DHT seeds.
+const MAX_PEER_SEEDS: usize = 48;
+
+/// How many peer seeds to hand to the engine per request.
+const MAX_PEER_SEEDS_PER_CALL: usize = 8;
+
 /// Shared log ring: `(level, message)` pairs, oldest first.
 pub type LogBuffer = Arc<Mutex<VecDeque<(u8, String)>>>;
 
@@ -267,6 +289,18 @@ pub struct NativeHost {
     /// Async DNS resolver (lazily spawned); lets the engine bootstrap the
     /// DHT from the BEP-5 router hostnames without blocking on DNS.
     resolve_worker: Option<ResolveWorkerHandle>,
+    /// Addresses of peers we actually connected to, offered back to the engine
+    /// as extra DHT seeds. The BEP-5 routers are a single point of failure —
+    /// some have been dead for years and others are blocked outright in whole
+    /// countries — and a client with a working tracker and an empty DHT cannot
+    /// find peers for anything else. A peer that speaks the wire protocol is a
+    /// fine DHT entry point: at worst it ignores the ping.
+    peer_seeds: Vec<NetAddr>,
+    /// Extra bootstrap hostnames, resolved on the same worker and handed to the
+    /// engine as if its own routers had answered.
+    extra_seed_hosts_last_kick: Option<std::time::Instant>,
+    /// One-shot flag so "offering peers as seeds" is logged once, not per batch.
+    peer_seeds_announced: bool,
     /// Completed HTTP jobs not yet handed to the engine.
     http_pending_results: VecDeque<(u64, Result<Vec<u8>>)>,
     /// Monotonic job id allocator (1-based).
@@ -344,6 +378,9 @@ impl NativeHost {
             alloc_mode: HashMap::new(),
             http_worker: None,
             resolve_worker: None,
+            peer_seeds: Vec::new(),
+            extra_seed_hosts_last_kick: None,
+            peer_seeds_announced: false,
             http_pending_results: VecDeque::new(),
             next_http_job: 0,
             policy,
@@ -400,6 +437,17 @@ impl NativeHost {
                 }
             }
         }
+    }
+
+    /// Remembers a peer address as a DHT seed candidate (bounded, deduped).
+    fn remember_peer_seed(&mut self, addr: NetAddr) {
+        if !seedable_addr(&addr) || self.peer_seeds.contains(&addr) {
+            return;
+        }
+        if self.peer_seeds.len() >= MAX_PEER_SEEDS {
+            self.peer_seeds.remove(0);
+        }
+        self.peer_seeds.push(addr);
     }
 
     /// The actual TCP port we are bound to (0 = not listening). This is the
@@ -1196,6 +1244,30 @@ impl Host for NativeHost {
             host: host.to_string(),
             port,
         });
+        // The engine only asks for one of its router hostnames while it is
+        // trying to bootstrap, which is exactly the moment the extra list is
+        // worth resolving. Rate-limited so a retry storm cannot multiply into
+        // DNS traffic, and the results come back through the same channel (the
+        // engine cannot tell — and does not care — which host answered).
+        let now = std::time::Instant::now();
+        let due = self
+            .extra_seed_hosts_last_kick
+            .map(|t| now.duration_since(t) >= EXTRA_SEED_KICK_INTERVAL)
+            .unwrap_or(true);
+        if due {
+            self.extra_seed_hosts_last_kick = Some(now);
+            for (host, port) in EXTRA_DHT_BOOTSTRAP {
+                h.queue.push_interactive(ResolveJob {
+                    host: (*host).to_string(),
+                    port: *port,
+                });
+            }
+            push_log(
+                &self.logs,
+                LogLevel::Info,
+                "DHT: asking an extended router list (the built-in BEP-5 routers are unreachable in many networks)",
+            );
+        }
         true
     }
 
@@ -1208,6 +1280,25 @@ impl Host for NativeHost {
                 }
             }
         }
+        // Peers we are already connected to are valid DHT entry points — and
+        // the only ones left when every router is dead or blocked. The engine
+        // asks for seeds only while its routing table is small, so handing them
+        // over here is the same moment a normal client would add them.
+        let take = self.peer_seeds.len().min(MAX_PEER_SEEDS_PER_CALL);
+        if take > 0 {
+            let offered: Vec<NetAddr> = self.peer_seeds.drain(..take).collect();
+            if !self.peer_seeds_announced {
+                self.peer_seeds_announced = true;
+                push_log(
+                    &self.logs,
+                    LogLevel::Info,
+                    "DHT: offering connected peers as bootstrap nodes",
+                );
+            }
+            for addr in offered {
+                out.push(("peer".to_string(), netaddr_port(addr), addr));
+            }
+        }
         out
     }
 
@@ -1218,6 +1309,7 @@ impl Host for NativeHost {
         if self.conns.len() + self.pending_connects >= MAX_OPEN_CONNS {
             return Err(Error::Full);
         }
+        self.remember_peer_seed(*addr);
         let id = self.next_conn;
         self.next_conn = self.next_conn.wrapping_add(1);
         let target = netaddr_to_sockaddr(*addr).ok_or(Error::InvalidInput)?;
@@ -1622,6 +1714,34 @@ fn fill_file(file: &std::fs::File, size: u64) -> Result<()> {
 }
 
 // ---------- address conversion helpers ----------
+
+/// True when an address is worth offering to the DHT as a seed.
+///
+/// Loopback, link-local and port-less addresses can never be routed by anyone
+/// else, so offering them would only waste pings.
+fn seedable_addr(addr: &NetAddr) -> bool {
+    match addr {
+        NetAddr::V4(ip, port) => {
+            let ip = Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]);
+            *port != 0 && !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local()
+        }
+        NetAddr::V6(ip, port) => {
+            let mut o = [0u16; 8];
+            for (i, chunk) in ip.chunks(2).enumerate() {
+                o[i] = u16::from_be_bytes([chunk[0], chunk[1]]);
+            }
+            let ip = Ipv6Addr::from(o);
+            *port != 0 && !ip.is_loopback() && !ip.is_unspecified()
+        }
+    }
+}
+
+/// The port half of a [`NetAddr`].
+fn netaddr_port(addr: NetAddr) -> u16 {
+    match addr {
+        NetAddr::V4(_, port) | NetAddr::V6(_, port) => port,
+    }
+}
 
 fn netaddr_to_sockaddr(a: NetAddr) -> Option<SocketAddr> {
     match a {
@@ -2172,6 +2292,36 @@ mod tests {
             "expected a fallback port, got {fallback}"
         );
         assert_eq!(host.listen_port(), fallback);
+    }
+
+    #[test]
+    fn peer_seed_filter_skips_unroutable_addresses() {
+        assert!(seedable_addr(&NetAddr::V4([93, 158, 213, 92], 6881)));
+        assert!(!seedable_addr(&NetAddr::V4([127, 0, 0, 1], 6881)));
+        assert!(!seedable_addr(&NetAddr::V4([0, 0, 0, 0], 6881)));
+        assert!(!seedable_addr(&NetAddr::V4([169, 254, 1, 2], 6881)));
+        assert!(!seedable_addr(&NetAddr::V4([93, 158, 213, 92], 0)));
+        assert!(seedable_addr(&NetAddr::V6(
+            [0x20, 0x01, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88],
+            6881
+        )));
+        assert!(!seedable_addr(&NetAddr::V6([0; 16], 6881)));
+        assert_eq!(netaddr_port(NetAddr::V4([1, 2, 3, 4], 51413)), 51413);
+        assert_eq!(netaddr_port(NetAddr::V6([0; 16], 6881)), 6881);
+    }
+
+    #[test]
+    fn peer_seeds_are_deduped_and_bounded() {
+        let mut host = NativeHost::new(LogBuffer::default());
+        for i in 0..(MAX_PEER_SEEDS as u8 + 8) {
+            host.remember_peer_seed(NetAddr::V4([93, 158, 213, i], 6881));
+        }
+        assert_eq!(host.peer_seeds.len(), MAX_PEER_SEEDS);
+        let before = host.peer_seeds.clone();
+        host.remember_peer_seed(before[0]);
+        assert_eq!(host.peer_seeds, before, "a duplicate must not be queued twice");
+        host.remember_peer_seed(NetAddr::V4([127, 0, 0, 1], 6881));
+        assert_eq!(host.peer_seeds.len(), MAX_PEER_SEEDS, "loopback must be ignored");
     }
 
     #[test]

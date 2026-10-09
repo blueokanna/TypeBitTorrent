@@ -31,12 +31,12 @@ statistics, settings, search, RSS and torrent creation.
 | --- | --- |
 | Transfers | add magnet / upload `.torrent`, pause, resume, remove, live progress, speeds, ETA, ratio, seeds/peers |
 | Files | per-file priority (skip / normal / high), bulk priority for every file, per-file rename |
-| Trackers | add and remove announce URLs on a running torrent |
+| Trackers | add and remove announce URLs on a running torrent, plus a tracker subscription (see below) |
 | Peers | live swarm list (address, client fingerprint, country, phase, rates, in-flight blocks) |
 | Info | infohash, save path, piece size/count, verified pieces, private flag, comment, creation date |
 | Receipts | export a signed proof-of-download receipt for a torrent |
-| Statistics | session rates/totals, DHT nodes, LSD counters, listen port, UPnP/NAT-PMP state, engine cache counters |
-| Settings | save path, queue limits, connection (ports, DHT/PEX/LSD, encryption), speed limits, BitTorrent options, WebUI options and password |
+| Statistics | session rates/totals, DHT nodes, active trackers, LSD counters, listen port, UPnP/NAT-PMP state, resolver health, engine cache counters |
+| Settings | save path, queue limits, connection (ports, DHT/PEX/LSD, encryption), speed limits, BitTorrent options, tracker subscription, WebUI options and password |
 | Search | the same multi-site search the desktop app uses, results → add |
 | RSS | feed list, article list, magnet extraction → add |
 | Create torrent | server-side directory walk (keeps the directory structure), name, piece size (auto ≈2000 pieces), announce tiers, `source`, `private` (BEP-27), comment, live progress, cancel, download or add-and-seed |
@@ -46,6 +46,41 @@ resume data (`.fastresume`-style state), receipts and the torrent records — so
 NAS instance and a desktop instance are interchangeable (point them at the same
 `--data` directory only if you know what you are doing; the engine is a
 single-instance-per-process worker).
+
+### Tracker 订阅（自动更新）
+
+A public trackerslist is the only way a client that cannot reach the DHT
+bootstrap routers finds peers, and the list rots within weeks. *设置 →
+BitTorrent · DHT · Tracker* therefore has two related fields:
+
+* **附加 Tracker 列表** — your own announce URLs, one per line. Saving adds the
+  new ones to every existing torrent and to new ones.
+* **Tracker 订阅地址 / 自动更新间隔** — one or more trackerslist URLs
+  (`https://cf.trackerslist.com/best.txt`, `https://raw.githubusercontent.com/ngosang/trackerslist/master/trackerslist.txt`,
+  a private tracker's `all.txt`, …) and how often to refresh them. Leaving the
+  field empty keeps the built-in community list (`cf.trackerslist.com/best.txt`),
+  and `0` hours turns automatic updates off (the *立即更新订阅* button still works).
+  The status line next to the button shows how many URLs the subscription
+  currently holds and when it was last fetched.
+
+The fetch runs on a background scope, never on the engine thread, and a failure
+is non-destructive: the previously fetched list stays in place and the next poll
+retries. The result is stored in `bitTorrent.subscribedTrackers`, so
+`settings.json` always shows exactly what is being announced.
+
+### 哪些设置需要重启引擎
+
+The engine reads some settings once, when it is created: listen port / random
+port, DHT, LSD, UPnP / NAT-PMP, disk cache size, the resolver (`enableDoh`,
+upstream list), IPv6 policy, LAN web seeds and the SOCKS5 proxy. The WebUI
+labels those fields *（保存后自动重启引擎）*; saving one rebuilds the engine in
+place — the WebUI stays up and every transfer resumes from its resume data.
+Everything else (speed limits, concurrency, per-torrent defaults, trackers,
+WebUI security) applies live. *重启引擎* next to *保存设置* forces a rebuild by
+hand.
+
+Switches that the bundled engine (`typebit 0.1.9`) has no support for — PEX and
+MSE/encryption — are displayed read-only instead of pretending to work.
 
 ---
 
@@ -131,6 +166,21 @@ Notes and honest caveats:
 * `cmd/main` stops the client with `SIGTERM` so the resume data is flushed and
   the engine worker is joined (`status` follows the documented 0/3/1 contract,
   and a start that cannot bind the port reports the log tail to the user).
+* **`status` never guesses.** It identifies the service by the pid file *and*
+  the process command line, tolerating an install root that is a symlink
+  (`/var/apps/typebittorrent/target` → `/vol1/@appstore/…`) and a lifecycle call
+  that arrives without `TRIM_APPDEST`/`TRIM_PKGVAR`. If it reported "stopped"
+  while the client was alive, the App Center would start a second instance that
+  cannot bind the port — the install then looks permanently broken ("启动失败",
+  "已停用"). `start` and `stop` also reap orphaned instances (a crash followed
+  by a restart, or an interrupted upgrade) that still hold the WebUI port.
+* **If the app stops by itself**, the log tells you why: `<app data>/typebit.log`
+  (default `/vol1/@appdata/typebittorrent/typebit.log`). The client's working
+  directory is that same folder, so a JVM or engine crash also leaves
+  `hs_err_pid*.log` next to it. A start after an unexpected exit logs
+  `previous instance (pid …) is gone`, so the two events can be matched up.
+* **Nothing is written to the download folder unless you ask for it**: the
+  running data (settings, records, logs, crash dumps) lives in `TRIM_PKGVAR`.
 * Icons: `ICON.PNG` (64×64) and `ICON_256.PNG` (256×256) at the package root plus
   `app/ui/images/icon_{64,256}.png` for the card, all rendered from
   `assets/typebittorrent.png`. They are committed, so `python3-pil` is only

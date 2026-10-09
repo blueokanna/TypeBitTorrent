@@ -24,12 +24,21 @@
 set -u
 
 APPNAME="typebittorrent"
-# Fall back to the staging layout of the package source (`<pkg>/app/bin/...`) so
-# the script can also be driven by hand while debugging.
-APPDEST="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)/app}"
+# Fall back to the *installed* layout (`<app dir>/target`, where `<app dir>` is
+# the parent of the `cmd/` directory holding these scripts) so a lifecycle call
+# that arrives without TRIM_APPDEST still finds the payload instead of inventing
+# a path that never exists. The package-source layout is only a last resort.
+APPDIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+if [ -n "${TRIM_APPDEST:-}" ]; then
+    APPDEST="$TRIM_APPDEST"
+elif [ -x "${APPDIR}/target/bin/TypeBitTorrent" ]; then
+    APPDEST="${APPDIR}/target"
+else
+    APPDEST="${APPDIR}/app"
+fi
 BIN="${APPDEST}/bin/TypeBitTorrent"
-VAR="${TRIM_PKGVAR:-${APPDEST}/var}"
-TMP="${TRIM_PKGTMP:-${APPDEST}/tmp}"
+VAR="${TRIM_PKGVAR:-${APPDIR}/var}"
+TMP="${TRIM_PKGTMP:-${APPDIR}/tmp}"
 PIDFILE="${VAR}/typebit.pid"
 LOGFILE="${VAR}/typebit.log"
 # First-run credentials: `cmd/install_callback` writes the install-wizard answer
@@ -60,18 +69,49 @@ user_error() {
     } >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
 }
 
+# True when the command line of $1 belongs to this application. The launcher is
+# referred to by three different strings depending on how it was started
+# (`$APPDEST/bin/TypeBitTorrent`, a symlinked install root, or a bare name), and
+# a wrong answer here is expensive: fnOS reads `status` as "the app is stopped",
+# offers to start a second instance, and that instance cannot bind the port — so
+# the app ends up permanently marked as stopped.
+is_our_process() {
+    local pid="$1" line
+    [ -r "/proc/$pid/cmdline" ] || return 0
+    line="$(tr '\0' '\n' <"/proc/$pid/cmdline" 2>/dev/null)"
+    [ -n "$line" ] || return 1
+    case "$line" in
+        *"$BIN"*) return 0 ;;
+        *TypeBitTorrent*) return 0 ;;
+    esac
+    return 1
+}
+
 is_running() {
     [ -f "$PIDFILE" ] || return 1
     local pid
     pid="$(cat "$PIDFILE" 2>/dev/null)"
     [ -n "$pid" ] || return 1
     kill -0 "$pid" 2>/dev/null || return 1
-    # A reboot can hand a stale pid to an unrelated process; the JVM command
-    # line carries the install path, so use it to tell the two apart.
-    if [ -r "/proc/$pid/cmdline" ]; then
-        tr '\0' '\n' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$APPDEST" || return 1
-    fi
+    # A reboot can hand a stale pid to an unrelated process.
+    is_our_process "$pid" || return 1
     return 0
+}
+
+# Pids of live instances that the pid file does not know about: the result of a
+# crash-then-restart, an upgrade, or a `stop` that lost a race. They hold the
+# WebUI port, which is why the next start must not simply wave them through.
+foreign_pids() {
+    local d pid exe
+    for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        [ "$pid" != "$$" ] || continue
+        [ -r "$d/cmdline" ] || continue
+        exe="$(tr '\0' '\n' <"$d/cmdline" 2>/dev/null | head -n 1)"
+        case "$exe" in
+            */bin/TypeBitTorrent) printf '%s\n' "$pid" ;;
+        esac
+    done
 }
 
 # Pure-bash TCP probe — no curl/wget dependency on the NAS.
@@ -85,10 +125,39 @@ start() {
     if is_running; then
         return 0
     fi
+    # Distinguish "never ran" from "died": the pid file surviving with a dead
+    # pid is exactly what an unexpected shutdown looks like, and it is the one
+    # line the user needs when reporting it.
+    if [ -f "$PIDFILE" ]; then
+        local stale
+        stale="$(cat "$PIDFILE" 2>/dev/null || true)"
+        log "previous instance${stale:+ (pid $stale)} is gone; check $LOGFILE for a crash before it stopped"
+        rm -f "$PIDFILE"
+    fi
     mkdir -p "$VAR" "$TMP" "$DOWNLOAD_DIR"
     if [ ! -x "$BIN" ]; then
         user_error "找不到可执行文件 $BIN：安装似乎不完整，请重新安装应用。"
         return 1
+    fi
+
+    # An orphan from an earlier run still holds the WebUI port; without this the
+    # new instance cannot bind and gets reported as "启动失败" forever.
+    local -a orphans=()
+    while read -r opid; do
+        [ -n "$opid" ] && orphans+=("$opid")
+    done < <(foreign_pids)
+    if [ "${#orphans[@]}" -gt 0 ]; then
+        log "cleaning up orphaned instance(s): ${orphans[*]}"
+        kill "${orphans[@]}" 2>/dev/null
+        local owait=0
+        while [ "$owait" -lt 5 ]; do
+            local alive=0
+            for opid in "${orphans[@]}"; do kill -0 "$opid" 2>/dev/null && alive=1; done
+            [ "$alive" -eq 0 ] && break
+            sleep 1
+            owait=$((owait + 1))
+        done
+        for opid in "${orphans[@]}"; do kill -9 "$opid" 2>/dev/null; done
     fi
 
     # `--frame-ancestors=*`: the App Center card is an iframe whose origin (the
@@ -122,6 +191,10 @@ start() {
     fi
 
     log "starting: $BIN --headless --port=$PORT --data=$VAR --downloads=$DOWNLOAD_DIR$pw_arg"
+    # The working directory is the data dir: an engine/JVM crash then writes
+    # `hs_err_pid*.log` (and ${TRIM_PKGVAR}/core dumps) somewhere the user can
+    # actually read, instead of inside a root-owned directory or "/".
+    cd "$VAR" 2>/dev/null || true
     nohup env ${pw_env[@]+"${pw_env[@]}"} "$BIN" "${args[@]}" >>"$LOGFILE" 2>&1 &
     echo $! >"$PIDFILE"
 
@@ -151,24 +224,37 @@ start() {
 }
 
 stop() {
-    if ! is_running; then
+    # Orphans are stopped too, otherwise the next start cannot bind the port and
+    # fnOS marks a healthy install as "启动失败".
+    local -a targets=()
+    local opid
+    if is_running; then
+        targets+=("$(cat "$PIDFILE")")
+    fi
+    while read -r opid; do
+        [ -n "$opid" ] && targets+=("$opid")
+    done < <(foreign_pids)
+    if [ "${#targets[@]}" -eq 0 ]; then
         rm -f "$PIDFILE"
         return 0
     fi
-    local pid waited=0
-    pid="$(cat "$PIDFILE")"
     # SIGTERM first: the client flushes resume data and joins the engine worker
     # before exiting, so a clean stop never loses progress.
-    kill "$pid" 2>/dev/null
+    kill "${targets[@]}" 2>/dev/null
+    local waited=0
     while [ "$waited" -lt "$STOP_TIMEOUT" ]; do
-        is_running || break
+        local alive=0
+        for opid in "${targets[@]}"; do kill -0 "$opid" 2>/dev/null && alive=1; done
+        [ "$alive" -eq 0 ] && break
         sleep 1
         waited=$((waited + 1))
     done
-    if is_running; then
-        log "graceful stop timed out, sending SIGKILL to $pid"
-        kill -9 "$pid" 2>/dev/null
-    fi
+    for opid in "${targets[@]}"; do
+        if kill -0 "$opid" 2>/dev/null; then
+            log "graceful stop timed out, sending SIGKILL to $opid"
+            kill -9 "$opid" 2>/dev/null
+        fi
+    done
     rm -f "$PIDFILE"
     return 0
 }
