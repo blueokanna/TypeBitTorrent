@@ -783,7 +783,7 @@ const SETTING_SECTIONS = [
       ['username', 'text', '用户名'],
       // The package passes `--port` from the manifest, so the port is owned by
       // the fnOS control panel: a value typed here is replaced at the next boot.
-      ['port', 'info', 'WebUI 端口：由飞牛应用中心管理（manifest 中的 8080），此处修改无效'],
+      ['port', 'info', 'WebUI 端口：由飞牛应用中心管理（manifest 中的 18881），此处修改无效'],
       ['remoteAccess', 'info', '局域网访问：NAS 版由启动参数 --bind=0.0.0.0 决定，始终允许'],
       ['sessionTimeoutMinutes', 'num', '会话超时（分钟）'],
       ['maxAuthFailCount', 'num', '允许的连续登录失败次数'],

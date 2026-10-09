@@ -253,7 +253,7 @@ The same binary runs headless, which is the point of the Rust/Kotlin split: a
 NAS has no display but it does have the engine.
 
 ```bash
-typebittorrent --headless --bind=0.0.0.0 --port=8080 \
+typebittorrent --headless --bind=0.0.0.0 --port=18881 \
                --data=/config --downloads=/downloads --password='change-me'
 ```
 
@@ -468,7 +468,7 @@ headless build always serves it.
 | setting | default | meaning |
 |---------|---------|---------|
 | 启用 WebUI | on | start/stop the HTTP server (desktop); headless ignores it |
-| 端口 | 8080 | listening port (rebound live) |
+| 端口 | 18881 | listening port (rebound live) |
 | 用户名 / 密码 | admin / empty | credentials; password stored as PBKDF2-HMAC-SHA256 |
 | 允许局域网访问 | off | off → `127.0.0.1` only, on → `0.0.0.0` |
 | 本机免登录 | on | loopback callers skip authentication |

@@ -4,9 +4,10 @@
 #   docker build -f packaging/docker/Dockerfile -t typebittorrent:latest .
 #
 # The image runs the client in HEADLESS mode (no display anywhere) and serves
-# the built-in WebUI on 8080; the BitTorrent port (6881 TCP+UDP) is published
-# so peers can connect directly. Both directories the engine touches are
-# volumes, so the container itself is disposable.
+# the built-in WebUI on 18881 (8080 is usually already taken on a NAS); the
+# BitTorrent port (6881 TCP+UDP) is published so peers can connect directly.
+# Both directories the engine touches are volumes, so the container itself is
+# disposable.
 
 # --------------------------------------------------------------------- build
 FROM eclipse-temurin:17-jdk-jammy AS build
@@ -47,12 +48,12 @@ RUN chmod 0755 /usr/local/bin/typebit-entrypoint
 ENV TYPEBIT_DATA=/config \
     TYPEBIT_DOWNLOADS=/downloads \
     TYPEBIT_BIND=0.0.0.0 \
-    TYPEBIT_PORT=8080 \
+    TYPEBIT_PORT=18881 \
     JAVA_TOOL_OPTIONS="-Djava.awt.headless=true -XX:MaxRAMPercentage=50"
 
 VOLUME ["/config", "/downloads"]
-# 8080 = WebUI, 6881 = BitTorrent peer port (TCP and UDP).
-EXPOSE 8080/tcp 6881/tcp 6881/udp
+# 18881 = WebUI, 6881 = BitTorrent peer port (TCP and UDP).
+EXPOSE 18881/tcp 6881/tcp 6881/udp
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${TYPEBIT_PORT}/api/session" >/dev/null || exit 1

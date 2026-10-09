@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # build-linux.sh — build the Linux distribution (native engine + app image).
 #
 # This is the artifact the NAS targets consume:
@@ -44,5 +44,5 @@ tar -C "$(dirname "$OUT")" -czf "$TARBALL" "$(basename "$OUT")"
 echo "==> tarball: $TARBALL"
 echo
 echo "Headless smoke test:"
-echo "  $OUT/bin/TypeBitTorrent --headless --bind=127.0.0.1 --port=8080 \\"
+echo "  $OUT/bin/TypeBitTorrent --headless --bind=127.0.0.1 --port=18881 \\"
 echo "      --data=/tmp/typebit --downloads=/tmp/typebit/downloads --password=changeme"

@@ -411,7 +411,7 @@ data class BitTorrentSettings(
 data class WebUiSettings(
     /** Serve the built-in WebUI (desktop/NAS builds; the phone app ignores it). */
     val enabled: Boolean = true,
-    val port: Int = 8080,
+    val port: Int = 18881,
     val username: String = "admin",
     /** PBKDF2-HMAC-SHA256 hash (`pbkdf2$…`) — never the plaintext. */
     val passwordHash: String = "",

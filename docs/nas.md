@@ -5,7 +5,7 @@ has neither a display nor a launcher — so the same client also runs **headless
 and serves its own WebUI:
 
 ```
-bin/TypeBitTorrent --headless --bind=0.0.0.0 --port=8080 \
+bin/TypeBitTorrent --headless --bind=0.0.0.0 --port=18881 \
                    --data=/config --downloads=/downloads \
                    --username=admin --password='…'
 ```
@@ -154,11 +154,13 @@ Notes and honest caveats:
   `<app data>/initial-password.txt` — on a default install that is
   `/vol1/@appdata/typebittorrent/initial-password.txt`. Change it later in the
   WebUI under *设置 → WebUI*.
-* `manifest.service_port=8080` + `"port": "8080"` in `app/ui/config` make the
+* `manifest.service_port=18881` + `"port": "18881"` in `app/ui/config` make the
   App Center card open the WebUI in an iframe. That is why `cmd/main` starts the
   server with `--frame-ancestors=*`: the WebUI's default `X-Frame-Options: DENY`
-  / `frame-ancestors 'none'` would otherwise leave the card blank. Change the
-  port in both files *and* in the iframe URL if 8080 is taken.
+  / `frame-ancestors 'none'` would otherwise leave the card blank. 18881 is the
+  default because 8080 is usually taken on a NAS; if 18881 is taken too, change
+  the port in both files *and* in the iframe URL, then reinstall — `cmd/main`
+  refuses to start while the port is occupied and says so in the App Center.
 * The download folder is the `typebittorrent/downloads` share (`TRIM_DATA_SHARE_PATHS`);
   settings, task records and resume data live in `TRIM_PKGVAR`
   (`/vol1/@appdata/typebittorrent`), so they survive upgrades. Uninstall asks
@@ -208,7 +210,7 @@ and start. The tree is the standard one:
 
 | Setting | Container | Typical host |
 | --- | --- | --- |
-| WebUI | 8080/tcp | any free port |
+| WebUI | 18881/tcp | any free port |
 | Peer port (TCP) | 6881/tcp | 6881 (must be reachable for inbound peers) |
 | Peer port (UDP) | 6881/udp | 6881 (DHT / uTP) |
 | Config | `/config` | `/mnt/user/appdata/typebittorrent` |
@@ -251,7 +253,7 @@ Wants=network-online.target
 [Service]
 User=typebit
 Environment=TYPEBIT_PASSWORD=change-me
-Environment=TYPEBIT_PORT=8080
+Environment=TYPEBIT_PORT=18881
 Environment=TYPEBIT_DATA=/var/lib/typebittorrent
 Environment=TYPEBIT_DOWNLOADS=/srv/downloads
 ExecStart=/opt/typebit/bin/TypeBitTorrent --headless
@@ -335,7 +337,7 @@ Two container-specific notes on that screen:
 
 ```
 nas.example.com {
-    reverse_proxy 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:18881
 }
 ```
 

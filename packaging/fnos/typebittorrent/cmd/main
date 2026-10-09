@@ -19,7 +19,7 @@
 #   TRIM_PKGVAR            run data; survives restarts and upgrades
 #   TRIM_PKGTMP            scratch space
 #   TRIM_TEMP_LOGFILE      file whose content fnOS shows to the user on failure
-#   TRIM_SERVICE_PORT      the port declared in `manifest` (8080)
+#   TRIM_SERVICE_PORT      the port declared in `manifest` (18881)
 #   TRIM_DATA_SHARE_PATHS  ':'-separated paths of the shares in `config/resource`
 set -u
 
@@ -46,7 +46,7 @@ LOGFILE="${VAR}/typebit.log"
 # password change made later in the WebUI is not overwritten at every boot.
 INITIAL_PW_FILE="${VAR}/initial-password.txt"
 PW_APPLIED="${VAR}/.pw-applied"
-PORT="${TRIM_SERVICE_PORT:-8080}"
+PORT="${TRIM_SERVICE_PORT:-18881}"
 START_TIMEOUT="${TYPEBIT_START_TIMEOUT:-60}"
 STOP_TIMEOUT="${TYPEBIT_STOP_TIMEOUT:-20}"
 
@@ -158,6 +158,14 @@ start() {
             owait=$((owait + 1))
         done
         for opid in "${orphans[@]}"; do kill -9 "$opid" 2>/dev/null; done
+    fi
+
+    # Pre-flight: 18881 is the packaged default because 8080 is frequently
+    # taken on a NAS. If something else already holds the port, say so now
+    # instead of letting the client exit a minute later with a generic error.
+    if port_open; then
+        user_error "WebUI 端口 $PORT 已被其他程序占用，无法启动。请释放该端口，或同时把 manifest 的 service_port 与 app/ui/config 的 port 改成同一个空闲端口后重新安装。"
+        return 1
     fi
 
     # `--frame-ancestors=*`: the App Center card is an iframe whose origin (the

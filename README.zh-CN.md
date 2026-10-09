@@ -232,7 +232,7 @@ WebUI 的 `POST /api/create` 走的是同一条制作路径，NAS 版本产出�
 显示器，但它有引擎。
 
 ```bash
-typebittorrent --headless --bind=0.0.0.0 --port=8080 \
+typebittorrent --headless --bind=0.0.0.0 --port=18881 \
                --data=/config --downloads=/downloads --password='change-me'
 ```
 

@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Usage (see `docs/nas.md`):
  * ```
- * typebittorrent --headless --bind=0.0.0.0 --port=8080 \
+ * typebittorrent --headless --bind=0.0.0.0 --port=18881 \
  *                --data=/config --downloads=/downloads \
  *                --username=admin --password=secret
  * ```
