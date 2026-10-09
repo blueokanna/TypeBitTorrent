@@ -181,6 +181,22 @@ pub enum Cmd {
         hash: String,
         tx: Sender<String>,
     },
+    /// The persisted state of one torrent — what a disk verification needs to
+    /// read (`info` dict + save path) and to re-apply afterwards (per-file
+    /// priorities, per-task rate limits, anti-leech reputation).
+    RecheckSource {
+        hash: String,
+        tx: Sender<Option<(Vec<u8>, typebit::state::TorrentState)>>,
+    },
+    /// Installs the outcome of a disk verification: the verified-piece
+    /// bitfield replaces the session's (empty) one, which is what turns files
+    /// that are already on disk into a seed.
+    ApplyVerified {
+        hash: String,
+        prior: Box<typebit::state::TorrentState>,
+        have: Vec<u8>,
+        tx: Sender<Result<u64, String>>,
+    },
     /// Global wire counters (down_total, up_total) from the host.
     Totals {
         tx: Sender<(u64, u64)>,
@@ -633,9 +649,45 @@ fn handle_cmd(
                 .unwrap_or_else(|_| "[]".to_string());
             let _ = tx.send(json);
         }
+        Cmd::RecheckSource { hash, tx } => {
+            let out = InfoHash::from_hex(&hash).ok().and_then(|h| {
+                let st = engine.save_state();
+                st.torrents
+                    .into_iter()
+                    .find(|t| t.info_hash == h.as_bytes())
+                    .map(|t| (t.info_raw.clone(), t))
+            });
+            let _ = tx.send(out);
+        }
+        Cmd::ApplyVerified {
+            hash,
+            prior,
+            have,
+            tx,
+        } => {
+            let res = match InfoHash::from_hex(&hash) {
+                Ok(h) => {
+                    let mut prior = *prior;
+                    prior.have = have;
+                    // Partial-block bitmaps are deliberately not restored (the
+                    // crate's own apply_saved_state ignores them for the same
+                    // reason: a half-filled block slot would hash-fail forever).
+                    prior.partial.clear();
+                    match engine.restore_torrent(&h, &prior) {
+                        Ok(()) => Ok(count_bits(&prior.have)),
+                        Err(e) => Err(e.tag().to_string()),
+                    }
+                }
+                Err(_) => Err("bad hash".to_string()),
+            };
+            let _ = tx.send(res);
+        }
         Cmd::Progress { hash, tx } => {
             let v = InfoHash::from_hex(&hash)
-                .map(|h| engine.progress(&h))
+                // A recheck can mark pieces of *skipped* files as present, and
+                // the crate divides by the selected pieces — so clamp: a
+                // progress bar must never read 3300%.
+                .map(|h| engine.progress(&h).clamp(0.0, 1.0))
                 .unwrap_or(0.0);
             let _ = tx.send(v);
         }
@@ -738,7 +790,10 @@ fn handle_cmd(
                 }
                 let hash = hex_of(&t.info_hash);
                 let ih = InfoHash::from_hex(&hash).ok();
-                let progress = ih.as_ref().map(|h| engine.progress(h)).unwrap_or(0.0);
+                let progress = ih
+                    .as_ref()
+                    .map(|h| engine.progress(h).clamp(0.0, 1.0))
+                    .unwrap_or(0.0);
                 let downloaded = ih.as_ref().map(|h| engine.downloaded(h)).unwrap_or(0);
                 let uploaded = ih.as_ref().map(|h| engine.uploaded(h)).unwrap_or(0);
                 let complete = ih.as_ref().map(|h| engine.is_complete(h)).unwrap_or(false);

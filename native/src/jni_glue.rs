@@ -398,6 +398,113 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeMakeTorrentC
     })
 }
 
+/// Process-wide progress of the (single) in-flight `nativeRecheckData`.
+static RECHECK_PROGRESS: crate::recheck::RecheckProgress =
+    crate::recheck::RecheckProgress::new();
+
+/// Verifies the data a torrent already has on disk ("重新校验").
+///
+/// Blocking (hashing reads the whole payload) and therefore meant to be called
+/// off the UI thread; progress is published through [`RECHECK_PROGRESS`] and
+/// can be cancelled with `nativeRecheckCancel`. Returns the number of pieces
+/// that hashed correctly — the engine then treats the torrent as having them,
+/// which is what lets an existing file become a seed — or a negative value on
+/// error (`-1` no such torrent, `-2` verification failed).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRecheckData(
+    unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    hash: JString,
+) -> jint {
+    with_env(unowned, |env| {
+        let Some(h) = handle_from(handle) else {
+            return Ok(-1);
+        };
+        let hash = jstr(env, &hash);
+        let (tx, rx) = channel();
+        let source = h.request(
+            Cmd::RecheckSource {
+                hash: hash.clone(),
+                tx,
+            },
+            rx,
+            REPLY_TIMEOUT,
+        );
+        let Some(Some((info_raw, prior))) = source else {
+            RECHECK_PROGRESS.finish();
+            return Ok(-1);
+        };
+        let outcome = match crate::recheck::verify_files(
+            &info_raw,
+            &prior.save_path,
+            &RECHECK_PROGRESS,
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                RECHECK_PROGRESS.finish();
+                crate::android_log::log(&format!("recheck {hash}: {e}"));
+                return Ok(-2);
+            }
+        };
+        let (tx, rx) = channel();
+        let applied = h.request(
+            Cmd::ApplyVerified {
+                hash,
+                prior: Box::new(prior),
+                have: outcome.have,
+                tx,
+            },
+            rx,
+            REPLY_TIMEOUT,
+        );
+        match applied {
+            Some(Ok(pieces)) => Ok(pieces as jint),
+            _ => Ok(-2),
+        }
+    })
+}
+
+/// Live progress of the in-flight `nativeRecheckData`:
+/// `{"done":n,"total":n,"running":bool,"cancelled":bool}`.
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRecheckProgress(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jstring {
+    with_env(unowned, |env| {
+        let (done, total, running, cancelled) = RECHECK_PROGRESS.snapshot();
+        let mut w = crate::json::JsonWriter::new();
+        w.begin_object();
+        w.kv_u64("done", done);
+        w.comma();
+        w.kv_u64("total", total);
+        w.comma();
+        w.kv_bool("running", running);
+        w.comma();
+        w.kv_bool("cancelled", cancelled);
+        w.end_object();
+        Ok(new_jstring(env, w.as_str()))
+    })
+}
+
+/// Cancels the in-flight verification (1 = signalled, 0 = idle).
+#[no_mangle]
+pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeRecheckCancel(
+    unowned: EnvUnowned,
+    _class: JClass,
+) -> jint {
+    with_env(unowned, |_env| {
+        let (_, _, running, _) = RECHECK_PROGRESS.snapshot();
+        if running {
+            RECHECK_PROGRESS.request_cancel();
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    })
+}
+
 /// Adds a `.torrent`; `priorities_json` is a JSON array of per-file priority
 /// bytes (`[0,1,2,…]`, 0=Skip 1=Normal 2=High) aligned with the file table.
 #[no_mangle]

@@ -98,6 +98,22 @@ is_running() {
     return 0
 }
 
+# The service really is up when *either* the pid file names a live instance or
+# a live instance of our launcher exists. The second form matters because fnOS
+# does not guarantee that every lifecycle call carries the same TRIM_PKGVAR /
+# TRIM_APPDEST as the `start` that wrote the pid file; when they differ, a
+# pid-file-only check answers "not running" while the client serves the WebUI —
+# the App Center then reports "无法启动 / 已停用" and offers to start a second
+# instance that cannot bind the port.
+service_up() {
+    is_running && return 0
+    [ -n "$(foreign_pids | head -n 1)" ] || return 1
+    # Adopt the live instance so stop/status agree with reality from here on.
+    foreign_pids | head -n 1 >"$PIDFILE" 2>/dev/null || true
+    log "adopted a running instance (pid $(cat "$PIDFILE" 2>/dev/null)) that the pid file did not name"
+    return 0
+}
+
 # Pids of live instances that the pid file does not know about: the result of a
 # crash-then-restart, an upgrade, or a `stop` that lost a race. They hold the
 # WebUI port, which is why the next start must not simply wave them through.
@@ -122,7 +138,7 @@ port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") >/dev/null 2>&1; }
 gen_password() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 20; }
 
 start() {
-    if is_running; then
+    if service_up; then
         return 0
     fi
     # Distinguish "never ran" from "died": the pid file surviving with a dead
@@ -211,7 +227,7 @@ start() {
     # (the client exits with code 2 when it cannot bind).
     local waited=0
     while [ "$waited" -lt "$START_TIMEOUT" ]; do
-        if ! is_running; then
+        if ! service_up; then
             rm -f "$PIDFILE"
             user_error "TypeBitTorrent 启动失败（端口 $PORT 可能被占用），日志：$LOGFILE"
             return 1
@@ -236,12 +252,18 @@ stop() {
     # fnOS marks a healthy install as "启动失败".
     local -a targets=()
     local opid
-    if is_running; then
+    # service_up() also adopts an instance the pid file does not name, which is
+    # exactly the case a `stop` after an env-mismatched `start` hits.
+    if service_up; then
         targets+=("$(cat "$PIDFILE")")
     fi
     while read -r opid; do
         [ -n "$opid" ] && targets+=("$opid")
     done < <(foreign_pids)
+    # Deduplicate: an adopted pid is also a foreign pid.
+    if [ "${#targets[@]}" -gt 0 ]; then
+        targets=($(printf '%s\n' "${targets[@]}" | sort -u))
+    fi
     if [ "${#targets[@]}" -eq 0 ]; then
         rm -f "$PIDFILE"
         return 0
@@ -271,7 +293,7 @@ case "${1:-}" in
     start) start ;;
     stop) stop ;;
     status)
-        if is_running; then exit 0; else exit 3; fi
+        if service_up; then exit 0; else exit 3; fi
         ;;
     *)
         user_error "未知命令：${1:-}（支持 start / stop / status）"

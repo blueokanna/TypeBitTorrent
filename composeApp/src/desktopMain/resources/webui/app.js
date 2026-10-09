@@ -16,6 +16,8 @@ const state = {
   settings: null,
   makeResult: null,
   view: 'transfers',
+  /** Last disk-verification message shown, so it is only surfaced once. */
+  recheckMessage: '',
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -163,13 +165,46 @@ async function refreshState() {
   state.torrents = data.torrents || [];
   $('engine-state').textContent = data.engineRunning ? '引擎运行中' : '引擎未运行';
   $('engine-state').style.color = data.engineRunning ? 'var(--ok)' : 'var(--err)';
+  const recheck = data.recheck || {};
+  // While a pass runs: its percentage. Afterwards: the result, because
+  // "校验完了，多少块可用" is the answer to "为什么没有上传".
+  const checking = recheck.running
+    ? ' · 校验中 ' + recheckPercent(recheck) + (recheck.hash ? '（' + shortName(recheck.hash) + '）' : '')
+    : (recheck.message ? ' · ' + truncate(recheck.message, 48) : '');
   $('rates').textContent =
     '↓ ' + fmtSpeed(data.downRate) + ' · ↑ ' + fmtSpeed(data.upRate) +
     ' · DHT ' + data.dhtNodes + ' · 端口 ' + (data.listenPort || '—') +
     (data.extIp ? ' · 外网 ' + data.extIp + ':' + data.extPort : '') +
-    ' · 累计 ↓' + fmtBytes(data.totalDownloaded) + ' ↑' + fmtBytes(data.totalUploaded);
+    ' · 累计 ↓' + fmtBytes(data.totalDownloaded) + ' ↑' + fmtBytes(data.totalUploaded) + checking;
+  // The verification result stays visible until the next action: it is the
+  // answer to "why is nothing uploading".
+  if (recheck.message && recheck.message !== state.recheckMessage) {
+    state.recheckMessage = recheck.message;
+    $('settings-msg').textContent = recheck.message;
+    if (!recheck.running) toast(recheck.message);
+  }
   renderTorrents();
   if (state.detailHash) await refreshDetail(state.detailHash);
+}
+
+/** Percentage of a disk-verification pass, as a display string. */
+function recheckPercent(recheck) {
+  const total = Number(recheck.totalBytes || 0);
+  const done = Number(recheck.doneBytes || 0);
+  if (total <= 0) return '…';
+  return Math.min(100, Math.round((done / total) * 100)) + '%';
+}
+
+/** Short label for a hash when the torrent name is not at hand. */
+function shortName(hash) {
+  const t = (state.torrents || []).find((x) => x.hash === hash);
+  return t ? t.name : hash.slice(0, 8);
+}
+
+/** Cuts a status line to a readable length for the toolbar. */
+function truncate(text, max) {
+  const s = String(text);
+  return s.length <= max ? s : s.slice(0, max - 1) + '…';
 }
 
 function renderTorrents() {
@@ -187,6 +222,14 @@ function renderTorrents() {
         class: 'ghost',
         text: t.status === 'PAUSED' ? '继续' : '暂停',
         onclick: (ev) => { ev.stopPropagation(); torrentAction(t.hash, t.status === 'PAUSED' ? 'resume' : 'pause'); },
+      }),
+      // The engine cannot know about files it did not download: this hashes
+      // them and turns an existing copy into a seed (做种).
+      el('button', {
+        class: 'ghost',
+        text: '校验',
+        title: '校验本地数据：已下载/已有的文件会被逐块核对，完成后即可做种上传',
+        onclick: (ev) => { ev.stopPropagation(); torrentAction(t.hash, 'recheck'); },
       }),
       el('button', {
         class: 'ghost',
@@ -525,6 +568,14 @@ $('mk-add').addEventListener('click', async () => {
   });
   toast((data && data.message) || '');
   await refreshState();
+  // "制作种子并做种": the payload is right there on disk, but the engine has
+  // no idea — without this pass it would re-download its own source files and
+  // never upload. Verifying takes one click in qBittorrent; here it is the
+  // obvious next step of the button the user just pressed.
+  if (data && data.ok && state.makeResult.hash) {
+    toast('正在校验刚制作的数据，完成后即可做种');
+    await api('/api/torrents/action', { body: { hash: state.makeResult.hash, action: 'recheck' } });
+  }
 });
 
 $('mk-save').addEventListener('click', () => {
@@ -924,6 +975,7 @@ async function refreshLogs() {
 /* ------------------------------------------------------------------ boot */
 
 let pollTimer = null;
+let pollTick = 0;
 function startPolling() {
   if (pollTimer) return;
   refreshState();
@@ -931,7 +983,14 @@ function startPolling() {
   loadSettings();
   refreshRss();
   pollTimer = setInterval(() => {
-    if (state.view === 'transfers') refreshState(); else refreshSession();
+    pollTick++;
+    // Live numbers belong to EVERY view: the timer used to fetch /api/state
+    // only while the transfers tab was open, so 统计 (rates, totals, DHT,
+    // trackers) froze on the values it had when the tab was clicked.
+    refreshState();
+    if (state.view === 'stats') refreshStats();
+    if (state.view === 'logs' && pollTick % 3 === 0) refreshLogs();
+    if (pollTick % 5 === 0) refreshSession();
   }, 1000);
 }
 

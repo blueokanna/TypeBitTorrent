@@ -21,6 +21,21 @@ actual external fun nativeMakeTorrentProgress(): String
 /** Requests cancellation of the in-flight build (1 = signalled, 0 = idle). */
 actual external fun nativeMakeTorrentCancel(): Int
 
+/**
+ * Verifies the data a torrent already has on disk against its piece hashes
+ * ("重新校验"). Blocking — reads the whole payload — so call it off the UI
+ * thread. Returns the number of pieces that hash correctly (the engine then
+ * treats them as verified, which is what makes existing files seedable);
+ * negative on error (`-1` unknown torrent, `-2` verification failed).
+ */
+actual external fun nativeRecheckData(handle: Long, hash: String): Int
+
+/** Live progress of the in-flight `nativeRecheckData` (`done`/`total`/`running`/`cancelled`). */
+actual external fun nativeRecheckProgress(): String
+
+/** Requests cancellation of the in-flight verification (1 = signalled, 0 = idle). */
+actual external fun nativeRecheckCancel(): Int
+
 actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
 actual external fun nativeStart(handle: Long, hash: String): Int

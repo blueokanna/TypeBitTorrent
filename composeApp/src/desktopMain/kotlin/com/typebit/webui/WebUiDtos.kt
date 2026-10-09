@@ -37,6 +37,22 @@ data class OkResponse(
     val message: String = "",
 )
 
+/**
+ * Disk-verification ("重新校验") state.
+ *
+ * The engine starts every session with an empty piece bitfield, so files that
+ * did not come from this client are invisible to it until a verification pass
+ * hashes them — this is what the UI shows while that happens.
+ */
+@Serializable
+data class RecheckDto(
+    val hash: String = "",
+    val running: Boolean = false,
+    val doneBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val message: String = "",
+)
+
 @Serializable
 data class TorrentDto(
     val hash: String = "",
@@ -72,6 +88,8 @@ data class StateDto(
     val dhtNodes: Int = 0,
     /** Trackers currently announcing successfully across all torrents. */
     val activeTrackers: Int = 0,
+    /** Disk verification ("重新校验") progress, so the UI can show it live. */
+    val recheck: RecheckDto = RecheckDto(),
     val listenPort: Int = 0,
     val extIp: String = "",
     val extPort: Int = 0,

@@ -171,6 +171,9 @@ class AppStore(
     /** The subscription loop; cancelled with [systemScope] on teardown. */
     private var trackerUpdateJob: Job? = null
 
+    /** The in-flight disk verification (`重新校验`), if any. */
+    private var recheckJob: Job? = null
+
     /** Serializes subscription passes (see [refreshTrackerSubscription]). */
     private val trackerUpdateLock = Mutex()
 
@@ -450,6 +453,97 @@ class AppStore(
                     .toSet()
 
     private fun onEngineJob(block: suspend () -> Unit): Job = engineScope.launch { block() }
+
+    // ------------------------------------------------------------------
+    // disk verification ("重新校验")
+    // ------------------------------------------------------------------
+
+    /**
+     * Verifies the data a torrent already holds on disk and hands the result
+     * to the engine.
+     *
+     * The engine starts every session with an **empty** bitfield, so a torrent
+     * whose files are already there — fetched by another client, restored from
+     * a backup, or the very files it was just built from — is otherwise
+     * re-downloaded from scratch and can never upload (it claims to have
+     * nothing). One pass over those files turns it into a seed.
+     *
+     * Runs on [systemScope]: hashing reads the whole payload, and this must
+     * never occupy the engine executor or the WebUI thread.
+     */
+    fun recheck(hash: String) {
+        if (recheckJob?.isActive == true) {
+            _state.update { it.copy(recheckMessage = "已有校验在进行中，请稍候") }
+            return
+        }
+        val name = _state.value.torrents.firstOrNull { it.hash == hash }?.name ?: hash
+        _state.update {
+            it.copy(
+                    recheckHash = hash,
+                    recheckRunning = true,
+                    recheckDone = 0L,
+                    recheckTotal = 0L,
+                    recheckMessage = "正在校验「$name」的本地数据…",
+            )
+        }
+        recheckJob =
+                systemScope.launch {
+                    // An add and a verification are queued separately, so the
+                    // engine may not know the torrent yet when the UI asks for
+                    // a recheck (the "制作并做种" button does exactly that).
+                    if (!awaitTorrentKnown(hash)) {
+                        _state.update {
+                            it.copy(
+                                    recheckRunning = false,
+                                    recheckHash = "",
+                                    recheckMessage = "无法校验「$name」：任务尚未进入引擎",
+                            )
+                        }
+                        return@launch
+                    }
+                    val verified = engine.recheckData(hash)
+                    val progress = engine.recheckProgress()
+                    val total = progress.totalBytes
+                    val message =
+                            when {
+                                verified < 0 -> "校验失败：「$name」的数据无法读取或元数据缺失"
+                                progress.cancelled -> "已取消校验「$name」"
+                                verified == 0 -> "「$name」在磁盘上没有找到可用数据（已下载 0 块）"
+                                else ->
+                                    "已校验「$name」：$verified 块可用" +
+                                        (if (total > 0) "（已核对 ${total / 1024 / 1024} MiB）" else "")
+                            }
+                    _state.update {
+                        it.copy(
+                                recheckRunning = false,
+                                recheckHash = "",
+                                recheckDone = total,
+                                recheckTotal = total,
+                                recheckMessage = message,
+                        )
+                    }
+                    // A completed verification changes progress/status and can
+                    // start seeding, so refresh immediately instead of waiting
+                    // for the poll tick.
+                    refreshStats()
+                }
+    }
+
+    /** Cancels the in-flight verification (no-op when idle). */
+    fun cancelRecheck(): Boolean = engine.cancelRecheck()
+
+    /**
+     * Waits (bounded) until the engine has the torrent — the add path is
+     * asynchronous, and hashing before the session exists verifies nothing.
+     */
+    private suspend fun awaitTorrentKnown(hash: String, timeoutMs: Long = 15_000): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (engine.torrentInfo(hash) != null) return true
+            delay(200)
+        }
+        return false
+    }
 
     /**
      * Stops the engine and flushes persistence **without blocking the caller**.
@@ -1424,12 +1518,17 @@ class AppStore(
                         val base = s.torrents.firstOrNull { it.hash == rec.hash }
                         buildTorrent(rec, base, byHash[rec.hash], now)
                     }
+            // Live verification progress: only polled while a pass is running,
+            // so the per-tick cost stays at one extra JNI call at most.
+            val recheck = if (recheckJob?.isActive == true) engine.recheckProgress() else null
             s.copy(
                     torrents = updated,
                     globalDownRate = downRate.coerceAtLeast(0),
                     globalUpRate = upRate.coerceAtLeast(0),
                     totalDownloaded = totals.first,
                     totalUploaded = totals.second,
+                    recheckDone = recheck?.doneBytes ?: s.recheckDone,
+                    recheckTotal = recheck?.totalBytes ?: s.recheckTotal,
                     dhtNodes = snap.dht,
                     trackerCount = snap.trackers,
                     extIp = snap.extIp,

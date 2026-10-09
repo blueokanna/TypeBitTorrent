@@ -53,6 +53,27 @@ expect fun nativeMakeTorrentProgress(): String
 expect fun nativeMakeTorrentCancel(): Int
 
 /**
+ * Verifies the data a torrent already has on disk against its piece hashes.
+ *
+ * The engine starts every session with an empty bitfield, so a torrent whose
+ * files are already present (fetched by another client, restored from a
+ * backup, or the very files a torrent was built from) would otherwise be
+ * re-downloaded and could never upload. This walks those files, hashes every
+ * piece and hands the verified set to the engine — after which the torrent is
+ * complete and seeds.
+ *
+ * Blocking: reads the whole payload. Returns the verified piece count, or a
+ * negative value on error.
+ */
+expect fun nativeRecheckData(handle: Long, hash: String): Int
+
+/** Progress of the in-flight [nativeRecheckData]: `{"done":n,"total":n,"running":b,"cancelled":b}`. */
+expect fun nativeRecheckProgress(): String
+
+/** Cancels the in-flight [nativeRecheckData]; 1 = signalled, 0 = idle. */
+expect fun nativeRecheckCancel(): Int
+
+/**
  * Adds a `.torrent`; returns the hex infohash or null on error.
  * `prioritiesJson` is a JSON array of per-file priority bytes
  * (`[0,1,2,…]`; 0=Skip 1=Normal 2=High) aligned with the file table.

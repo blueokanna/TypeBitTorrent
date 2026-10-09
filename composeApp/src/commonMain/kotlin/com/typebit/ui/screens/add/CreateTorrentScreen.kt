@@ -506,9 +506,15 @@ fun CreateTorrentScreen(
                         if (bytes != null) {
                             // Track what was just created right away — the
                             // usual next step after making a torrent is to
-                            // seed it.
+                            // seed it. The engine starts a session with an
+                            // empty bitfield, so the files it was just built
+                            // from are only visible to it after one
+                            // verification pass — without it the client would
+                            // re-download its own source data.
+                            val hash = store.parseTorrentFile(bytes)?.hash
                             store.addTorrentFile(bytes, fileName)
-                            status = "已添加到下载列表（可立即做种）"
+                            if (hash != null) store.recheck(hash)
+                            status = "已添加到下载列表（正在校验本地数据，完成后即可做种）"
                         }
                     }) {
                         Text("添加并做种")

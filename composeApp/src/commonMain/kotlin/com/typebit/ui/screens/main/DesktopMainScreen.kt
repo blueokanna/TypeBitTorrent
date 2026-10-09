@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
@@ -522,6 +523,15 @@ private fun AppTopBar(
                 state.torrents.forEach { store.pause(it.hash) }
             }) {
                 Icon(Icons.Default.Pause, contentDescription = "全部暂停")
+            }
+            // 校验本地数据 — the engine starts every session with an empty
+            // bitfield, so files it did not download itself (another client,
+            // a restored backup, or the source of a torrent just created)
+            // must be hashed once before they can seed and upload.
+            FilledTonalIconButton(onClick = {
+                state.selectedHash?.let { store.recheck(it) }
+            }) {
+                Icon(Icons.Default.FactCheck, contentDescription = "校验本地数据（做种）")
             }
             FilledTonalIconButton(onClick = {
                 state.selectedHash?.let { store.remove(it) }

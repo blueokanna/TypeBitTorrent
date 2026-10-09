@@ -208,6 +208,19 @@ is what the swarm will ask for.
 The same creation path backs `POST /api/create` in the WebUI, so a NAS build
 produces byte-identical torrents.
 
+**"加入并做种" verifies the data it just hashed.** The engine starts every
+session with an *empty* piece bitfield — it only knows what it downloaded
+itself — so the files a torrent was built from have to be checked once before
+the client counts them as "have". Without that pass it would re-download its own
+source data and never upload anything.
+
+The same verification is available for any data you already own: the per-torrent
+**校验** button in the WebUI, or **校验本地数据** in the desktop toolbar. It hashes
+the files under the save path against the metainfo piece hashes, hands the
+verified set to the engine and the torrent becomes a seed; pieces that do not
+match (corrupted, half-written) are left out, so only the damaged pieces are
+re-downloaded.
+
 ### stats dialog
 
 The **bar-chart button** opens a live stats dialog (1 s refresh):

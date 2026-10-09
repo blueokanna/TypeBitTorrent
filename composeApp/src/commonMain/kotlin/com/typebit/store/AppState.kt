@@ -49,6 +49,14 @@ data class AppState(
     /** Cumulative wire bytes, for the "session totals" status row. */
     val totalDownloaded: Long = 0,
     val totalUploaded: Long = 0,
+    /** Torrent currently being verified on disk (`重新校验`), empty when idle. */
+    val recheckHash: String = "",
+    /** True while a verification pass is running. */
+    val recheckRunning: Boolean = false,
+    val recheckDone: Long = 0,
+    val recheckTotal: Long = 0,
+    /** Human-readable result of the last verification ("" = nothing yet). */
+    val recheckMessage: String = "",
     val logs: List<LogEntryDto> = emptyList(),
     val categories: List<String> = listOf("未分类"),
     val tags: List<String> = emptyList(),

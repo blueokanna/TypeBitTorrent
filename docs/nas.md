@@ -32,6 +32,7 @@ statistics, settings, search, RSS and torrent creation.
 | Transfers | add magnet / upload `.torrent`, pause, resume, remove, live progress, speeds, ETA, ratio, seeds/peers |
 | Files | per-file priority (skip / normal / high), bulk priority for every file, per-file rename |
 | Trackers | add and remove announce URLs on a running torrent, plus a tracker subscription (see below) |
+| Seeding | 校验本地数据 (recheck): hash files that are already on disk (from another client, a backup, or just created) and start seeding them |
 | Peers | live swarm list (address, client fingerprint, country, phase, rates, in-flight blocks) |
 | Info | infohash, save path, piece size/count, verified pieces, private flag, comment, creation date |
 | Receipts | export a signed proof-of-download receipt for a torrent |
@@ -68,8 +69,31 @@ is non-destructive: the previously fetched list stays in place and the next poll
 retries. The result is stored in `bitTorrent.subscribedTrackers`, so
 `settings.json` always shows exactly what is being announced.
 
-### 哪些设置需要重启引擎
+### 做种已有文件 / 校验本地数据
 
+The engine creates every session with an **empty** piece bitfield: it knows
+only what *it* downloaded. Adding a `.torrent` whose data you already have
+(fetched by another client, restored from a backup, or the files a torrent was
+just built from) therefore does **not** make it a seed — it would re-download
+everything and upload nothing.
+
+One pass fixes that. *校验本地数据* hashes the files under the save path against
+the metainfo piece hashes and hands the verified set to the engine, after which
+the torrent is complete and seeds:
+
+* per-torrent **校验** button in the transfers list (progress and result appear
+  in the status row; cancel works for large payloads),
+* **automatic** after *制作种子 → 添加并做种* (desktop and WebUI), because that
+  button means "make this data seedable",
+* the desktop toolbar has the same action for the selected torrent
+  (校验本地数据).
+
+The verification reads the payload, so it takes as long as hashing those bytes
+(≈100–200 MB/s on a NAS CPU). A piece that does not match — a corrupted file, a
+half-written download — is simply left unverified, so the client keeps the good
+pieces and re-downloads the rest.
+
+### 哪些设置需要重启引擎
 The engine reads some settings once, when it is created: listen port / random
 port, DHT, LSD, UPnP / NAT-PMP, disk cache size, the resolver (`enableDoh`,
 upstream list), IPv6 policy, LAN web seeds and the SOCKS5 proxy. The WebUI

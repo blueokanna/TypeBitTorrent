@@ -45,6 +45,18 @@ data class MakeTorrentProgress(
         get() = if (totalBytes <= 0L) 0f else (doneBytes.toDouble() / totalBytes).toFloat().coerceIn(0f, 1f)
 }
 
+/** Snapshot of a running (or finished) disk verification ("重新校验"). */
+data class RecheckProgress(
+    val doneBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val running: Boolean = false,
+    val cancelled: Boolean = false,
+) {
+    /** 0f..1f; 0 while the total size is still unknown. */
+    val fraction: Float
+        get() = if (totalBytes <= 0L) 0f else (doneBytes.toDouble() / totalBytes).toFloat().coerceIn(0f, 1f)
+}
+
 /**
  * The engine facade — the single seam the rest of the app talks to.
  *
@@ -100,6 +112,25 @@ interface TorrentEngine {
 
     /** Requests cancellation of the in-flight [makeTorrent]. */
     fun cancelMakeTorrent(): Boolean = false
+
+    /**
+     * Verifies the data a torrent already has on disk against its piece
+     * hashes, then hands the verified set to the engine.
+     *
+     * This is what makes "做种" work for files that did not come from this
+     * client: the engine starts each session with an empty bitfield, so
+     * without a verification pass it re-downloads data that is already there
+     * and has nothing to upload. Blocking (reads the whole payload) — call it
+     * from a background scope. Returns the verified piece count, negative on
+     * error.
+     */
+    fun recheckData(hash: String): Int = -1
+
+    /** Live progress of the in-flight [recheckData]. */
+    fun recheckProgress(): RecheckProgress = RecheckProgress()
+
+    /** Requests cancellation of the in-flight [recheckData]. */
+    fun cancelRecheck(): Boolean = false
 
     /**
      * Adds a `.torrent` with per-file priorities (0=Skip, 1=Normal, 2=High)
@@ -378,6 +409,23 @@ class NativeTorrentEngine : TorrentEngine {
     }
 
     override fun cancelMakeTorrent(): Boolean = bridge(false) { nativeMakeTorrentCancel() == 1 }
+
+    override fun recheckData(hash: String): Int = bridge(-1) { nativeRecheckData(it, hash) }
+
+    override fun recheckProgress(): RecheckProgress {
+        val json = bridge("{}") { nativeRecheckProgress() }
+        return runCatching {
+            val o = BRIDGE_JSON.parseToJsonElement(json).jsonObject
+            RecheckProgress(
+                doneBytes = o["done"]?.jsonPrimitive?.longOrNull ?: 0L,
+                totalBytes = o["total"]?.jsonPrimitive?.longOrNull ?: 0L,
+                running = o["running"]?.jsonPrimitive?.booleanOrNull ?: false,
+                cancelled = o["cancelled"]?.jsonPrimitive?.booleanOrNull ?: false,
+            )
+        }.getOrDefault(RecheckProgress())
+    }
+
+    override fun cancelRecheck(): Boolean = bridge(false) { nativeRecheckCancel() == 1 }
 
     override fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int>): String? {
         val prioJson = filePriorities.joinToString(prefix = "[", postfix = "]")

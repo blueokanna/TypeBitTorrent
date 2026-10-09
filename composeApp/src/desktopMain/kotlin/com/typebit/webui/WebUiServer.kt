@@ -491,6 +491,10 @@ class WebUiServer(
                     "pause" -> store.pause(req.hash)
                     "resume" -> store.resume(req.hash)
                     "remove" -> store.remove(req.hash)
+                    // Disk verification: turns files that are already on disk
+                    // into a seed (the engine starts every session empty).
+                    "recheck" -> store.recheck(req.hash)
+                    "recheck-cancel" -> store.cancelRecheck()
                     else -> {
                         fail(exchange, 400, "未知操作")
                         return
@@ -646,6 +650,13 @@ class WebUiServer(
             peerId = s.peerId,
             dhtNodes = s.dhtNodes,
             activeTrackers = s.trackerCount,
+            recheck = RecheckDto(
+                hash = s.recheckHash,
+                running = s.recheckRunning,
+                doneBytes = s.recheckDone,
+                totalBytes = s.recheckTotal,
+                message = s.recheckMessage,
+            ),
             listenPort = s.listenPort,
             extIp = s.extIp,
             extPort = s.extPort,

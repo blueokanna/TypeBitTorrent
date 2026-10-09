@@ -27,6 +27,7 @@ pub mod make_torrent;
 pub mod meta;
 pub mod netinfo;
 pub mod netpolicy;
+pub mod recheck;
 pub mod tlsroots;
 
 use jni::sys::{jint, JNI_VERSION_1_6};
@@ -52,7 +53,10 @@ use jni::sys::{jint, JNI_VERSION_1_6};
 ///   `scheme://ip[/path][#tls-name]` upstreams), which is deliberately **not**
 ///   an ABI change: old hostname-style entries are still accepted and mapped to
 ///   their addresses, so both directions of mixed old/new remain working.
-pub const JNI_ABI: jint = 3;
+/// * 4 — disk verification: `nativeRecheckData`, `nativeRecheckProgress`,
+///   `nativeRecheckCancel`. Without them a client that already holds the data
+///   can neither seed nor upload, so the pair must ship together.
+pub const JNI_ABI: jint = 4;
 
 /// Reports the ABI revision above; called once per engine start.
 #[no_mangle]
