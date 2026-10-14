@@ -7,15 +7,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Persists the app-level torrent list (which torrents exist, where they were
- * added from, their category/tags) and the engine resume blob (verified-piece
- * bitfields + DHT routing table). Both survive app restarts.
- *
- * The torrent list is the user's download library — losing it would orphan
- * every `.part` file on disk. Like [SettingsRepository], writes are atomic
- * AND roll the previous list into `torrents.json.bak` before overwriting,
- * and `loadRecords()` falls back to the backup when the main file is missing
- * or fails to decode.
+ * `resume.bin` is the engine's resume blob: verified-piece bitfields plus the DHT routing table.
  */
 class TorrentRepository(
     private val json: Json = Json { prettyPrint = true; ignoreUnknownKeys = true },
@@ -36,8 +28,7 @@ class TorrentRepository(
     }
 
     fun saveRecords(records: List<TorrentRecord>) {
-        // Rolling backup of the previous library — written BEFORE the new
-        // one so a bad write can never destroy the last known-good list.
+        // Back up first: a bad write must never destroy the last known-good library.
         FileIO.readBytes(recordsFile)?.let { FileIO.writeBytesAtomic(recordsBackup, it) }
         val text = json.encodeToString(records)
         FileIO.writeTextAtomic(recordsFile, text)

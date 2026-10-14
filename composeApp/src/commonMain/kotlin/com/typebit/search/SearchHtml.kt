@@ -1,8 +1,6 @@
 package com.typebit.search
 
-/** HTML helpers shared by the search engines (regex-based, no DOM dep). */
 object SearchHtml {
-    /** Decode the common HTML entities (incl. numeric `&#39;`). */
     fun decode(s: String): String {
         val sb = StringBuilder(s.length)
         var i = 0
@@ -51,26 +49,22 @@ object SearchHtml {
         return sb.toString()
     }
 
-    /** Remove all tags from a fragment, collapsing whitespace. */
     fun stripTags(s: String): String =
             decode(s.replace(Regex("""<[^>]*>"""), " "))
                     .replace(Regex("""\s+"""), " ")
                     .trim()
 
-    /** Extract the text of a single tag (first match). */
     fun tagText(html: String, tag: String, attrs: String = ""): String {
         val re = Regex("""<$tag[^>]*$attrs[^>]*>(.*?)</$tag>""", RegexOption.DOT_MATCHES_ALL)
         return re.find(html)?.groupValues?.get(1)?.let { stripTags(it) } ?: ""
     }
 
-    /** First magnet URI in a fragment, or null. */
     fun magnetIn(html: String): String? =
             Regex("""magnet:\?xt=urn:btih:[0-9a-fA-F]{40}(?:[^"'\s<>]*)*""")
                     .find(html)
                     ?.value
                     ?.replace("&amp;", "&")
 
-    /** Absolute URL resolution for relative hrefs. */
     fun absolute(base: String, href: String): String =
             when {
                 href.startsWith("http://") || href.startsWith("https://") -> href
@@ -78,7 +72,6 @@ object SearchHtml {
                 else -> base.removeSuffix("/") + "/" + href
             }
 
-    /** URL-encode a search query (space → %20, keep letters/digits). */
     fun urlEncode(query: String): String {
         val sb = StringBuilder(query.length + 8)
         for (c in query) {

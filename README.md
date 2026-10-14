@@ -734,6 +734,12 @@ Prereqs: JDK 17, Android SDK + NDK for the `.so`s, Rust stable (1.95+) with
 `aarch64-linux-android` / `armv7-linux-androideabi` / `x86_64-linux-android`
 targets (x86 too, because emulators).
 
+Toolchain: Gradle 9.8, AGP 9.4, Kotlin 2.4, Compose Multiplatform 1.12
+(versions live in `gradle/libs.versions.toml`). AGP 9 no longer accepts
+`com.android.application` in a Kotlin Multiplatform module by default, so
+`gradle.properties` keeps `android.builtInKotlin=false` and
+`android.newDsl=false`; drop both once the KMP application plugin exists.
+
 ```powershell
 # 1. desktop DLL → composeApp/src/desktopMain/resources/native/typebit_native.dll
 .\scripts\build-desktop.ps1

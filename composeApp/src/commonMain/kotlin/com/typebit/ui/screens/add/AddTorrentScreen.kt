@@ -1,6 +1,5 @@
 @file:Suppress("OVERLOAD_RESOLUTION_AMBIGUITY")
-// OverloadResolutionAmbiguity is an IDE false positive from Kotlin Multiplatform
-// expect/actual resolution (rememberTorrentFilePicker); both targets compile cleanly.
+// OverloadResolutionAmbiguity is an IDE false positive from Kotlin Multiplatform expect/actual
 
 package com.typebit.ui.screens.add
 
@@ -63,20 +62,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * qBittorrent-style add-torrent dialog: pick a `.torrent` (or paste a magnet), inspect the file
- * tree BEFORE adding (collapsible folders, tri-state selection, per-file priority), choose the
- * files/priorities, pick the save path / category / tags and start-or-pause.
- */
+/** Add-torrent dialog: .torrent or magnet, with pre-add file-tree inspection and per-file priority. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddTorrentScreen(
         state: AppState,
         store: AppStore,
         onBack: () -> Unit,
-        /** When embedded in the mobile bottom-nav shell, hide the back
-         *  arrow — the NavigationBar switches sections. Desktop routes keep
-         *  it. */
         showBack: Boolean = true,
 ) {
     var magnet by remember { mutableStateOf("") }
@@ -85,8 +77,7 @@ fun AddTorrentScreen(
     var preview by remember { mutableStateOf<TorrentInfoDto?>(null) }
     var added by remember { mutableStateOf(false) }
 
-    // Two-phase magnet state: the resolved hash, whether a resolve is in
-    // flight, and the failure message when metadata never arrived.
+    // Two-phase magnet state: resolved hash, in-flight flag, failure message.
     var magnetHash by remember { mutableStateOf<String?>(null) }
     var resolving by remember { mutableStateOf(false) }
     var resolveError by remember { mutableStateOf<String?>(null) }
@@ -96,16 +87,12 @@ fun AddTorrentScreen(
     var tagsText by remember { mutableStateOf("") }
     var startNow by remember { mutableStateOf(true) }
 
-    // Selection/priority keyed by the FLAT file index (not displayPath), so a
-    // directory toggle can address every descendant leaf in one call.
+    // Keyed by FLAT file index (not displayPath), so a dir toggle can address every leaf.
     val fileSel = remember { mutableStateMapOf<Int, Boolean>() }
     val priorities = remember { mutableStateMapOf<Int, Int>() }
     val scope = rememberCoroutineScope()
 
-    // Whenever a new torrent is previewed (file picked OR magnet resolved),
-    // reset the selection map and initialize every file to SELECTED with
-    // normal priority. Clearing first is essential: a second torrent must
-    // not inherit stale indices/values from the previous preview.
+    // A new preview resets the maps: a second torrent must not inherit stale indices/values.
     LaunchedEffect(preview) {
         fileSel.clear()
         priorities.clear()
@@ -115,10 +102,8 @@ fun AddTorrentScreen(
         }
     }
 
-    // True when every preview file is selected (default = selected).
     val allSelected =
             preview?.files?.indices?.all { fileSel[it] ?: true } ?: true
-    // Selected count with the same implicit-default semantics.
     val selectedCount = preview?.files?.indices?.count { fileSel[it] ?: true } ?: 0
 
     val pickTorrent = rememberTorrentFilePicker { bytes, name ->
@@ -136,34 +121,24 @@ fun AddTorrentScreen(
 
     val canAdd = pendingBytes != null || magnetHash != null || magnet.isNotBlank()
 
-    // A magnet whose resolve started is ALREADY a real task (added + started
-    // in phase 1, persisted). Leaving the dialog must not silently delete it:
-    // the metadata may simply be slow (cold DHT / blocked trackers), and
-    // removing it made the user re-add the same magnet forever. Instead we
-    // release the data hold so it downloads (all files) once metadata
-    // arrives in the background — qBittorrent behaviour. Only an EXPLICIT
-    // cancel of a resolve that has not even returned a hash removes nothing
-    // (there is no task yet in that case).
+    // A started magnet resolve is ALREADY a persisted task: leaving the dialog must not delete
+    // it (metadata may just be slow on a cold DHT); only an explicit cancel clears it.
     fun leaveDialog() {
         magnetHash?.let { store.releaseMagnetPending(it) }
         onBack()
     }
 
-    // Per-file priorities aligned with the file tree (0=Skip, 1=Normal,
-    // 2=High); unchecked = Skip. Shared by the .torrent and magnet paths.
     fun buildPriorities(): List<Int> =
             preview?.files.orEmpty().mapIndexed { i, _ ->
                 val sel = fileSel[i] ?: true
                 val p = priorities[i] ?: 1
                 when {
-                    !sel -> 0        // unchecked = Skip
-                    p == 2 -> 2      // High
-                    else -> 1        // Normal
+                    !sel -> 0
+                    p == 2 -> 2
+                    else -> 1
                 }
             }
 
-    // After a successful add, leave the dialog and return to the main list.
-    // No "已添加" pause step — adding should feel one-shot on both platforms.
     LaunchedEffect(added) {
         if (added) onBack()
     }
@@ -231,8 +206,6 @@ fun AddTorrentScreen(
                 }
             }
 
-            // Resolution status (magnet phase 1): spinner while the engine
-            // fetches metadata via DHT / trackers / LAN LSD.
             if (resolving) {
                 Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -314,9 +287,7 @@ fun AddTorrentScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            // 全选 / 取消全选 iterates the REAL file list (not
-                            // the sparse map), so it works even before the user
-                            // touched any checkbox.
+                            // Select-all iterates the REAL file list, so it works before any checkbox touch.
                             OutlinedButton(
                                     onClick = {
                                         val newState = !allSelected
@@ -332,12 +303,9 @@ fun AddTorrentScreen(
                                     }
                             )
                         }
-                        // The file tree is a LazyColumn; it MUST sit in a
-                        // bounded-height container. This screen's outer
-                        // Column is `verticalScroll` — an unbounded (infinite)
-                        // max height would make the LazyColumn crash with
-                        // "measured with an infinity maximum height"
-                        // (nesting LazyColumn inside a scrollable Column).
+                        // The file tree is a LazyColumn and must sit in a bounded-height container:
+                        // inside this screen's verticalScroll Column an unbounded max height makes
+                        // it crash ("measured with an infinity maximum height").
                         Box(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
                             FileTreeView(
                                     roots = fileTree,
@@ -367,7 +335,6 @@ fun AddTorrentScreen(
                 }
             }
 
-            // -- destination / metadata ---------------------------------------
             Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors =
@@ -423,7 +390,6 @@ fun AddTorrentScreen(
                 Button(
                         onClick = {
                             if (pendingBytes != null) {
-                                // .torrent — single-phase add with the tree.
                                 val tags =
                                         tagsText.split(',').map { it.trim() }.filter { it.isNotEmpty() }
                                 val effSave = saveDir.ifBlank { Platform.defaultDownloadDir() }
@@ -438,7 +404,6 @@ fun AddTorrentScreen(
                                 )
                                 added = true
                             } else if (magnetHash != null) {
-                                // Magnet — phase 2: commit the file selection.
                                 store.commitMagnetSelection(
                                         magnetHash!!,
                                         buildPriorities(),
@@ -446,8 +411,6 @@ fun AddTorrentScreen(
                                 )
                                 added = true
                             } else {
-                                // Magnet — phase 1: resolve metadata first,
-                                // then the file tree appears for selection.
                                 scope.launch {
                                     resolving = true
                                     resolveError = null
@@ -458,23 +421,17 @@ fun AddTorrentScreen(
                                         return@launch
                                     }
                                     magnetHash = hash
-                                    // Generous window: DHT is cold at first
-                                    // launch (routing table empty) and many
-                                    // public trackers are unreachable, so
-                                    // metadata routinely takes 60-120 s.
+                                    // 180 s window: a cold-start DHT (empty routing table) and
+                                    // unreachable public trackers make metadata take 60-120 s.
                                     val info = store.waitMetadata(hash, 180_000)
                                     resolving = false
                                     if (info == null) {
-                                        // The task is already added and keeps
-                                        // resolving in the background — keep
-                                        // it instead of deleting it.
+                                        // The task is already added and still resolving — keep it.
                                         store.releaseMagnetPending(hash)
                                         resolveError =
                                                 "元数据获取超时，任务已保留并继续后台解析（首次启动 DHT 冷启动较慢）"
                                         return@launch
                                     }
-                                    // LaunchedEffect(preview) resets and seeds
-                                    // the selection map (all files selected).
                                     preview = info
                                 }
                             }

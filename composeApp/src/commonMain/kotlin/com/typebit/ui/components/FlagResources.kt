@@ -1,9 +1,7 @@
 package com.typebit.ui.components
 
-// Auto-generated from the bundled flag PNGs (flagcdn.com,
-// national flags, public domain). Maps ISO-3166 alpha-2 country
-// codes to their flag drawable; unknown/private ranges return null
-// and the caller falls back to a globe icon.
+// Auto-generated from the bundled flag PNGs (flagcdn.com, public domain): maps an
+// ISO-3166 alpha-2 code to its flag drawable; unknown codes return null.
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.painter.Painter
 import org.jetbrains.compose.resources.painterResource
@@ -120,10 +118,6 @@ import typebittorrent.composeapp.generated.resources.flag_vn
 import typebittorrent.composeapp.generated.resources.flag_za
 import typebittorrent.composeapp.generated.resources.flag_zw
 
-/**
- * The bundled flag painter for a country code, or null when the
- * country has no bundled asset (falls back to a globe icon).
- */
 @Composable
 fun flagPainter(cc: String): Painter? = when (cc.uppercase()) {
     "AE" -> painterResource(Res.drawable.flag_ae)

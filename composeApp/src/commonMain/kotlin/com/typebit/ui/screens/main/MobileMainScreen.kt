@@ -1,6 +1,5 @@
 @file:Suppress("OVERLOAD_RESOLUTION_AMBIGUITY")
-// OverloadResolutionAmbiguity is an IDE false positive from Kotlin Multiplatform
-// expect/actual resolution (PlatformBackHandler); both targets compile cleanly.
+// OverloadResolutionAmbiguity is an IDE false positive from Kotlin Multiplatform expect/actual
 
 package com.typebit.ui.screens.main
 
@@ -87,7 +86,6 @@ import com.typebit.ui.screens.settings.SettingsScreen
 import com.typebit.ui.theme.TypeBitThemeColors
 import com.typebit.ui.util.Format
 
-/** Mobile transfer-list sort options (qBittorrent-style column sorting). */
 private enum class MobileSort(val label: String) {
     NAME("按名称"),
     AVAILABILITY("按可用性"),
@@ -106,12 +104,8 @@ private enum class MobileSort(val label: String) {
     }
 }
 
-/**
- * Mobile bottom-navigation sections. ADD / SEARCH / RSS / SETTINGS are
- * IN-PLACE sections (the NavigationBar stays visible and switches content —
- * no pushed route, no back arrow). Only the torrent detail page and the
- * create-torrent screen are pushed full-screen routes.
- */
+/** ADD / SEARCH / RSS / SETTINGS are IN-PLACE sections (NavigationBar stays, no back arrow);
+ * only the detail page and the create-torrent screen are pushed routes. */
 enum class MobileSection(val label: String) {
     TORRENTS("种子"),
     ADD("添加"),
@@ -120,7 +114,6 @@ enum class MobileSection(val label: String) {
     SETTINGS("设置"),
 }
 
-/** Android layout: top bar + torrent card list + bottom navigation. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MobileMainScreen(
@@ -131,10 +124,8 @@ fun MobileMainScreen(
     var detailHash by remember { mutableStateOf<String?>(null) }
     var section by remember { mutableStateOf(MobileSection.TORRENTS) }
 
-    // Android back gesture: while a detail page is open, back closes it
-    // (one level up) instead of leaving the app. This inner handler wins
-    // over the route-level one. On a non-torrent section, back returns to
-    // the torrents section (the NavigationBar is the section switch).
+    // Back closes an open detail page (one level up) instead of leaving the app; this
+    // handler wins over the route-level one. On a section, back returns to Torrents.
     PlatformBackHandler(enabled = detailHash != null) { detailHash = null }
     PlatformBackHandler(enabled = detailHash == null && section != MobileSection.TORRENTS) {
         section = MobileSection.TORRENTS
@@ -153,12 +144,9 @@ fun MobileMainScreen(
     var showStats by remember { mutableStateOf(false) }
     var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
 
-    // Transfer-list sort (name / availability / down / up / ratio), shared
-    // by the list and grid views.
     var sortKey by remember { mutableStateOf(MobileSort.NAME) }
     var sortDesc by remember { mutableStateOf(false) }
 
-    // Long-press / dialog state.
     var actionsFor by remember { mutableStateOf<Torrent?>(null) }
     var renameFor by remember { mutableStateOf<Torrent?>(null) }
     var deleteFor by remember { mutableStateOf<Torrent?>(null) }
@@ -168,7 +156,6 @@ fun MobileMainScreen(
         if (sortDesc) list.reversed() else list
     }
 
-    // Poll engine statistics while the dialog is open (once per second).
     LaunchedEffect(showStats) {
         if (showStats) {
             while (true) {
@@ -180,15 +167,10 @@ fun MobileMainScreen(
 
     Scaffold(
         topBar = {
-            // Only the torrents section owns the global toolbar; every other
-            // section renders its own top bar (embedded screen) with no back
-            // arrow — the NavigationBar below is the section switch.
+            // Only Torrents owns the global toolbar; other sections render their own top bar.
             if (section == MobileSection.TORRENTS) {
                 TopAppBar(
                 title = {
-                    // maxLines=1 + ellipsis keeps "TypeBitTorrent" on ONE line
-                    // even when the 5 action icons squeeze the title area on a
-                    // narrow phone (the last 't' used to wrap to line 2).
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             "TypeBitTorrent",
@@ -212,7 +194,6 @@ fun MobileMainScreen(
                             contentDescription = if (gridMode) "列表视图" else "网格视图",
                         )
                     }
-                    // Sort menu (name / availability / down / up / ratio).
                     var sortMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { sortMenu = true }) {
@@ -350,7 +331,6 @@ fun MobileMainScreen(
         }
     }
 
-    // Long-press action sheet: rename / share / pause-resume / delete.
     actionsFor?.let { t ->
         TorrentActionsSheet(
             torrent = t,
@@ -417,7 +397,6 @@ fun MobileMainScreen(
     }
 }
 
-/** List-mode row: a compact horizontal card. Long-press opens the actions. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TorrentCard(
@@ -465,11 +444,6 @@ private fun TorrentCard(
     }
 }
 
-/**
- * Grid-mode card: a real vertical tile, visually distinct from the list bar —
- * centred icon, name, status, progress, then stacked stats. Long-press opens
- * the actions sheet.
- */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GridTorrentCard(
@@ -549,7 +523,6 @@ private fun GridTorrentCard(
     }
 }
 
-/** Full-screen detail page for Android. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TorrentDetailPage(

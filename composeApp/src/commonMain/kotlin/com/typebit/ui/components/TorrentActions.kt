@@ -36,12 +36,8 @@ import com.typebit.ui.i18n.LocalStrings
 import com.typebit.ui.i18n.TextKey
 import com.typebit.ui.util.Format
 
-/**
- * Per-torrent actions shared by mobile (long-press sheet) and desktop
- * (right-click menu): rename / share (magnet) / pause-resume / delete.
- */
+/** Per-torrent actions shared by the mobile long-press sheet and desktop right-click menu. */
 
-/** The action verbs every caller wires to the store. */
 data class TorrentActions(
     val onRename: () -> Unit,
     val onShare: () -> Unit,
@@ -49,7 +45,6 @@ data class TorrentActions(
     val onDelete: () -> Unit,
 )
 
-/** Common action list body (used by the sheet and the dropdown menu). */
 @Composable
 fun TorrentActionsList(
     torrent: Torrent,
@@ -93,7 +88,6 @@ fun TorrentActionsList(
     )
 }
 
-/** Mobile-style bottom sheet for long-press actions. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TorrentActionsSheet(
@@ -127,7 +121,6 @@ fun TorrentActionsSheet(
     }
 }
 
-/** Rename-torrent dialog (display name only). */
 @Composable
 fun RenameTorrentDialog(
     initial: String,
@@ -160,7 +153,6 @@ fun RenameTorrentDialog(
     )
 }
 
-/** Delete-confirmation dialog. */
 @Composable
 fun DeleteTorrentDialog(
     torrent: Torrent,

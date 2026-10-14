@@ -1,6 +1,5 @@
 package com.typebit.ui.util
 
-/** Pure formatting helpers — no platform dependencies, unit-testable. */
 object Format {
 
     private val UNITS = arrayOf("B", "KiB", "MiB", "GiB", "TiB", "PiB")
@@ -20,21 +19,16 @@ object Format {
     fun speed(bytesPerSec: Long): String =
         if (bytesPerSec <= 0) "0 B/s" else "${bytes(bytesPerSec)}/s"
 
-    /**
-     * The download target size: when the user skipped files, show only the
-     * selected bytes so a partial selection never reads like a full-torrent
-     * download ("4.83 GiB" instead of "9.21 GiB"); otherwise the total.
-     */
+/** The download target size: with files skipped, show only the selected bytes
+ * (a partial selection must not read as a full-torrent download). */
     fun targetSize(selected: Long, total: Long): String =
         if (selected in 1 until total) bytes(selected) else bytes(total)
 
-    /** "4.83 GiB / 9.21 GiB" when some files are skipped, else "9.21 GiB". */
     fun targetSizeFull(selected: Long, total: Long): String =
         if (selected in 1 until total) "${bytes(selected)} / ${bytes(total)}" else bytes(total)
 
     fun percent(p: Double): String = "${(p * 100).coerceIn(0.0, 100.0).let { String.format("%.1f", it) }}%"
 
-    /** "5 分钟", "∞", "—" */
     fun eta(seconds: Long?): String {
         if (seconds == null) return "∞"
         if (seconds <= 0) return "0 秒"
@@ -51,7 +45,6 @@ object Format {
 
     fun count(v: Int): String = v.toString()
 
-    /** "1.2 MiB (1,258,291 字节)" */
     fun bytesDetailed(value: Long): String {
         val human = bytes(value)
         return if (value >= 1024) "$human (${

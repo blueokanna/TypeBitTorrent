@@ -5,10 +5,7 @@ package com.typebit.platform
 import java.awt.Desktop
 import java.io.File
 
-/**
- * Desktop: hand the file (or its `.part` staged twin while downloading) to
- * the OS default media player.
- */
+/** Handles the file, or its staged `.part` twin while downloading, with the OS default player. */
 actual fun playMediaFile(path: String): Boolean {
     val file = File(path)
     if (!file.exists() || file.length() == 0L) return false

@@ -46,35 +46,21 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Community tracker list fetched at startup (before any torrent starts) so
- * every torrent announces to the most reliable public trackers from the very
- * first moment.
- */
 private const val COMMUNITY_TRACKERS_URL = "https://cf.trackerslist.com/best.txt"
 
-/** How often the subscription loop looks whether a refresh is due. */
 private const val TRACKER_UPDATE_POLL_MS = 5 * 60 * 1000L
 
-/** Per-URL timeout for a subscription fetch. */
 private const val TRACKER_UPDATE_TIMEOUT_MS = 15_000L
 
-/** Subscription URLs honoured per pass (the rest stay stored). */
 private const val MAX_SUBSCRIPTION_URLS = 5
 
 /**
- * The single source of truth for the UI.
+ * Single source of truth for the UI (UI → action → engine/persistence → [state]); the engine runs
+ * on its own Rust thread while the poll loop here drains events and persists resume data.
  *
- * Unidirectional data flow: UI → action → (engine + persistence) → [state]. The engine runs on its
- * own Rust thread; the store owns a poll loop that drains events, refreshes stats and periodically
- * persists resume data.
- *
- * Performance contract: every engine call is a blocking JNI round-trip, so ALL of it runs on a
- * private single-threaded background executor ([engineScope]) — never on the UI thread. Doing it on
- * the main thread was the source of the settings jank and the unresponsive pause/resume buttons (a
- * blocked JNI reply froze the click handler; the state only caught up after navigating away and
- * back). `limitedParallelism(1)` also serializes actions against the poll loop, so the state
- * bookkeeping is race-free.
+ * Every engine call is a blocking JNI round-trip, so all of them run on the private single-threaded
+ * [engineScope], never the UI thread; `limitedParallelism(1)` also serializes actions against the
+ * poll loop, keeping the bookkeeping race-free.
  */
 class AppStore(
         private val engine: TorrentEngine,
@@ -84,18 +70,10 @@ class AppStore(
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
-    /**
-     * Last-resort net for the store's own coroutines.
-     *
-     * A `CoroutineScope` without a handler reports an uncaught exception to
-     * the thread's default handler — on Android that is an immediate process
-     * kill (`Thread.UncaughtExceptionHandler` → FATAL EXCEPTION). The poll
-     * loop and every download action run in these scopes, so a single bad
-     * snapshot/JNI reply would otherwise take the whole app down while the
-     * user is browsing the detail tabs. Engine/bridge failures are already
-     * mapped to defaults in [com.typebit.engine.NativeTorrentEngine]; this
-     * handler covers the remaining store-side computations.
-     */
+/**
+ * Last-resort net for store-side failures: an uncaught exception here reaches the thread's default
+ * handler, which on Android kills the process.
+ */
     private val storeFailureHandler = CoroutineExceptionHandler { _, t ->
         println("typebit store coroutine failure — ${t::class.simpleName}: ${t.message}")
         _state.update {
@@ -111,13 +89,8 @@ class AppStore(
 
     private var engineScope: CoroutineScope = newEngineScope()
 
-    // Dedicated single-thread executor for the (non-critical) Peers view. It
-    // is deliberately SEPARATE from [engineScope]: a slow `nativePeers`
-    // round-trip must never stall the poll loop or any download action.
-    // Serializing Peers traffic on its own `limitedParallelism(1)`
-    // dispatcher prevents blocking-thread pile-up while guaranteeing the
-    // Peers tab can never freeze the rest of the app — even if the engine
-    // is momentarily busy, only the Peers view lags, never the download.
+    // Deliberately separate from [engineScope]: a slow `nativePeers` round-trip must never stall
+    // the poll loop, and `limitedParallelism(1)` keeps blocking threads from piling up.
     private var peersScope: CoroutineScope = newPeersScope()
 
     private fun newPeersScope(): CoroutineScope =
@@ -126,33 +99,20 @@ class AppStore(
                             storeFailureHandler
             )
 
-    // Dedicated executor for one-shot Windows system actions (firewall /
-    // ICS). These call out to `netsh` / `powershell` and can take seconds;
-    // they must never occupy the serialized engine executor. `IO` is fine
-    // here — these are user-initiated, not a polling loop, so blocking
-    // JNI threads cannot pile up.
+    // Windows system actions call out to `netsh` / `powershell` and can take seconds; they must
+    // never occupy the serialized engine executor, and `IO` cannot pile up for occasional actions.
     private var systemScope: CoroutineScope =
             CoroutineScope(
                     SupervisorJob() + Dispatchers.IO.limitedParallelism(2) + storeFailureHandler
             )
 
-    /**
-     * Teardown executor. Teardown is JNI (`nativeDestroyEngine` joins the
-     * engine worker), file I/O and a bounded `runBlocking` — it must run on
-     * a thread of its own when the caller is the UI (Android `onDispose`
-     * from an Activity destroy used to do all of this on the main thread,
-     * which is an ANR waiting to happen).
-     */
+    /** Engine teardown is JNI + disk work, so it must never run on the caller's thread. */
     private var shutdownScope: CoroutineScope =
             CoroutineScope(
                     SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + storeFailureHandler
             )
 
-    /**
-     * Drives an in-place engine restart (settings that are only read at engine
-     * creation). Separate from every other scope on purpose: it stops the
-     * engine — which cancels [engineScope] — and then boots a fresh one.
-     */
+    /** Stops the engine (cancelling [engineScope]) and then boots a fresh one, so it owns this scope. */
     private fun newRestartScope(): CoroutineScope =
             CoroutineScope(
                     SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + storeFailureHandler
@@ -160,31 +120,22 @@ class AppStore(
 
     private var restartScope: CoroutineScope = newRestartScope()
 
-    /**
-     * Set as soon as the application starts going down, cleared by [start].
-     *
-     * A pending restart reads it before and after tearing the engine down, so
-     * a window close can never be overtaken by a settings-driven reboot.
-     */
+    /** Set while shutting down, cleared by [start]; a pending restart reads it so a window close wins. */
     @Volatile private var shutdownBegan = false
 
-    /** The subscription loop; cancelled with [systemScope] on teardown. */
     private var trackerUpdateJob: Job? = null
 
-    /** The in-flight disk verification (`重新校验`), if any. */
     private var recheckJob: Job? = null
 
-    /** Serializes subscription passes (see [refreshTrackerSubscription]). */
     private val trackerUpdateLock = Mutex()
 
-    // Persisted app-level records (engine cannot carry category/tags/source).
-    // Only touched from [engineScope] — never from the UI thread.
+    // App-level records (category/tags/source); touched only from [engineScope].
     private var records: List<TorrentRecord> = emptyList()
 
     /** Proof-of-download receipts persisted in `<appData>/receipts/`. */
     private val receiptRepo = ReceiptRepository()
 
-    /** Full metainfo mirror cache; refetched only when metadata arrives. */
+    /** Metainfo mirror cache; refetched only when metadata arrives. */
     private val infoCache = HashMap<String, TorrentInfoDto>()
 
     // Speed bookkeeping: (poll time, downloaded/uploaded bytes) per hash.
@@ -195,10 +146,7 @@ class AppStore(
 
     private var pollJob: Job? = null
 
-    // The boot coroutine itself. Guards `start()` against racing itself:
-    // `engineRunning` only flips true at the END of boot, so two rapid
-    // `start()` calls (e.g. an Activity recreate during a slow restore)
-    // would otherwise boot TWICE — double re-adds and two poll loops.
+    // Guards `start()` against racing itself: `engineRunning` only flips true at the END of boot.
     private var bootJob: Job? = null
 
     /** Guards [teardown] against concurrent `stop()` / `stopBlocking()`. */
@@ -210,8 +158,7 @@ class AppStore(
 
     private var lastSaveAt = 0L
 
-    // Native-applied settings, diffed so a settings edit only crosses the
-    // JNI boundary when the value that matters actually changed.
+    // Native-applied settings, diffed so an edit only crosses JNI when a relevant value changed.
     private var lastAppliedLimits: Pair<Long, Long>? = null
     private var lastAppliedSessionConfig: String? = null
     private var lastAppliedExtraTrackers: Set<String> = emptySet()
@@ -222,11 +169,6 @@ class AppStore(
         engineScope.launch { block() }
     }
 
-    // ------------------------------------------------------------------
-    // lifecycle
-    // ------------------------------------------------------------------
-
-    /** Boots the engine, restores state and starts the poll loop. */
     fun start() {
         shutdownBegan = false
         if (_state.value.engineRunning) return
@@ -294,7 +236,6 @@ class AppStore(
                 }
                 if (!rec.paused) engine.start(rec.hash)
             }
-            // Apply speed limits.
             applyLimits(effectiveSettings)
         } catch (t: Throwable) {
             _state.update { it.copy(lastError = "恢复部分数据时出错：${t.message ?: t::class.simpleName}") }
@@ -323,24 +264,11 @@ class AppStore(
         if (engineScope.isActive) {
             pollJob = onEngineJob { pollLoop() }
         }
-        // Off the engine thread on purpose: the old startup fetch ran inside
-        // boot() and held the (single-thread) engine executor for as long as
-        // the HTTP request took, delaying every restore action behind it.
+        // Off the engine thread on purpose: a slow fetch here would delay every restore behind it.
         startTrackerUpdates()
     }
 
-    // ------------------------------------------------------------------
-    // tracker subscription
-    // ------------------------------------------------------------------
-
-    /**
-     * Periodic tracker-list refresh, on [systemScope] so a slow or dead URL
-     * can never stall the engine.
-     *
-     * A public trackerslist is the only way a client behind NAT/DHT trouble
-     * finds peers, and the list itself rots within weeks: without this a NAS
-     * that has been up for months announces to trackers that no longer exist.
-     */
+    /** Periodic refresh on [systemScope]: a dead URL must never stall the engine. */
     private fun startTrackerUpdates() {
         trackerUpdateJob?.cancel()
         trackerUpdateJob =
@@ -353,16 +281,8 @@ class AppStore(
     }
 
     /**
-     * Runs one subscription pass and returns how many new URLs were merged in.
-     *
-     * `force` ignores the interval (the "立即更新" button and a settings edit);
-     * otherwise a pass only happens when the interval is due. Failures are
-     * deliberately non-destructive: if every URL fails, the previous list and
-     * its timestamp stay, and the next poll retries.
-     *
-     * Passes are serialized by [trackerUpdateLock]: the startup pass can be
-     * several seconds into a slow fetch when the user sets a subscription URL
-     * and asks for an update, and the slower of the two must not win.
+     * One pass; `force` ignores the interval. Failures keep the previous list so the next poll
+     * retries, and [trackerUpdateLock] serializes concurrent fetches.
      */
     suspend fun refreshTrackerSubscription(force: Boolean): Int =
             trackerUpdateLock.withLock {
@@ -391,15 +311,12 @@ class AppStore(
 
                 val previous = parseTrackerLines(bt.subscribedTrackers)
                 val stored = fetched.joinToString("\n")
-                // Re-read the *latest* settings when storing: the fetch takes
-                // seconds, and a settings save that landed meanwhile (a switch
-                // the user just flipped) must not be reverted by this pass
-                // writing a stale snapshot.
+                // Re-read the latest settings: a save that landed during the fetch must not be
+                // reverted by this pass writing a stale snapshot.
                 var effective: AppSettings? = null
                 _state.update { state ->
                     if (subscriptionUrls(state.settings.bitTorrent) != urls) {
-                        // The subscription changed while we were fetching: this
-                        // answer belongs to a list nobody asked for any more.
+
                         state
                     } else {
                         val merged =
@@ -415,26 +332,17 @@ class AppStore(
                     }
                 }
                 val applied = effective ?: return@withLock 0
-                // applySettings diffs the announce list against what is already
-                // applied and pushes only the new URLs to every torrent (plus
-                // new ones), then persists — the same path a manual edit in 设置
-                // takes.
+                // applySettings diffs against what is applied, pushes only the new URLs, persists.
                 onEngine { applySettings(applied) }
                 (fetched - previous).size
             }
 
-    /** Subscription URLs; the built-in community list is the default. */
     private fun subscriptionUrls(bt: com.typebit.data.BitTorrentSettings): List<String> {
         val configured = parseTrackerLines(bt.trackerUpdateUrl).toList()
         return configured.ifEmpty { listOf(COMMUNITY_TRACKERS_URL) }
     }
 
-    /**
-     * Starts a subscription refresh without waiting for it.
-     *
-     * The WebUI has to answer immediately (the user is looking at a spinner)
-     * while a dead URL can take 15 seconds per host to time out.
-     */
+    /** Fire-and-forget: a dead URL can take 15 s per host to time out. */
     fun requestTrackerSubscriptionRefresh() {
         if (!systemScope.isActive) return
         systemScope.launch { runCatching { refreshTrackerSubscription(force = true) } }
@@ -443,7 +351,6 @@ class AppStore(
     private fun parseTrackerLines(raw: String): Set<String> =
             raw.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
-    /** Parsed announce list (manual + subscribed) as a set of trimmed URLs. */
     private fun trackersSet(settings: AppSettings): Set<String> =
             settings.bitTorrent
                     .allTrackers
@@ -454,22 +361,9 @@ class AppStore(
 
     private fun onEngineJob(block: suspend () -> Unit): Job = engineScope.launch { block() }
 
-    // ------------------------------------------------------------------
-    // disk verification ("重新校验")
-    // ------------------------------------------------------------------
-
     /**
-     * Verifies the data a torrent already holds on disk and hands the result
-     * to the engine.
-     *
-     * The engine starts every session with an **empty** bitfield, so a torrent
-     * whose files are already there — fetched by another client, restored from
-     * a backup, or the very files it was just built from — is otherwise
-     * re-downloaded from scratch and can never upload (it claims to have
-     * nothing). One pass over those files turns it into a seed.
-     *
-     * Runs on [systemScope]: hashing reads the whole payload, and this must
-     * never occupy the engine executor or the WebUI thread.
+     * Hashes on-disk data into the engine, which otherwise starts every session with an empty
+     * bitfield (an already-complete torrent would be re-downloaded and never seed). Blocking.
      */
     fun recheck(hash: String) {
         if (recheckJob?.isActive == true) {
@@ -488,9 +382,7 @@ class AppStore(
         }
         recheckJob =
                 systemScope.launch {
-                    // An add and a verification are queued separately, so the
-                    // engine may not know the torrent yet when the UI asks for
-                    // a recheck (the "制作并做种" button does exactly that).
+                    // Adds and rechecks are queued separately, so the engine may not know it yet.
                     if (!awaitTorrentKnown(hash)) {
                         _state.update {
                             it.copy(
@@ -522,20 +414,13 @@ class AppStore(
                                 recheckMessage = message,
                         )
                     }
-                    // A completed verification changes progress/status and can
-                    // start seeding, so refresh immediately instead of waiting
-                    // for the poll tick.
                     refreshStats()
                 }
     }
 
-    /** Cancels the in-flight verification (no-op when idle). */
     fun cancelRecheck(): Boolean = engine.cancelRecheck()
 
-    /**
-     * Waits (bounded) until the engine has the torrent — the add path is
-     * asynchronous, and hashing before the session exists verifies nothing.
-     */
+    /** Bounded wait: the add path is asynchronous, and hashing before the session exists is useless. */
     private suspend fun awaitTorrentKnown(hash: String, timeoutMs: Long = 15_000): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -545,25 +430,13 @@ class AppStore(
         return false
     }
 
-    /**
-     * Stops the engine and flushes persistence **without blocking the caller**.
-     *
-     * This is the path a UI lifecycle takes (Android `DisposableEffect`
-     * onDispose when the Activity is destroyed). Persistence plus
-     * `nativeDestroyEngine`/engine-thread join are JNI + disk work: running
-     * them on the main thread froze the UI for seconds and could be killed as
-     * an ANR, so they always run on [shutdownScope].
-     */
+    /** Non-blocking teardown: the JNI join and disk flushes run on [shutdownScope], never the caller's thread. */
     fun stop() {
         shutdownBegan = true
         teardown(blocking = false)
     }
 
-    /**
-     * Blocking variant for process-exit paths (desktop window close), where
-     * the process may be gone a moment later and the engine must be joined
-     * deterministically. Idempotent with [stop].
-     */
+    /** Blocking variant for process-exit paths, where the engine must be joined deterministically. */
     fun stopBlocking() {
         shutdownBegan = true
         teardown(blocking = true)
@@ -581,11 +454,8 @@ class AppStore(
         peersScope.cancel()
         systemScope.cancel()
 
-        // Persistence is best-effort and is NEVER allowed to skip the engine
-        // teardown: `engine.stop()` (native destroy) is outside the timeout.
-        // If it were skipped, the engine worker thread would leak and the next
-        // store start would spawn a SECOND engine — two engines racing on the
-        // same port and the same `.part` files silently corrupts downloads.
+        // Persistence is best-effort and must never skip the engine teardown: a leaked worker would
+        // let the next start spawn a second engine racing on the same port and `.part` files.
         val work: suspend () -> Unit = {
             withTimeoutOrNull(5_000) {
                 settingsSaveJob?.cancel()
@@ -606,30 +476,17 @@ class AppStore(
         }
     }
 
-    // ------------------------------------------------------------------
-    // actions
-    // ------------------------------------------------------------------
-
-    /**
-     * Parses `.torrent` bytes without adding — add-dialog preview. Blocking JNI parse; callers
-     * should run it off the UI thread.
-     */
+    /** Blocking JNI parse; call off the UI thread. */
     fun parseTorrentFile(bytes: ByteArray): com.typebit.engine.TorrentInfoDto? =
             engine.parseTorrent(bytes)
 
-    /**
-     * Creates a v1 `.torrent` from local files (blocking — call off the UI thread). `files` is
-     * `(absolutePath, fileName)` pairs; `pieceLength` must be a supported power of two (16 KiB ..
-     * 256 MiB).
-     */
+    /** Blocking; `pieceLength` must be a power of two in 16 KiB..256 MiB. */
     fun makeTorrent(options: com.typebit.engine.MakeTorrentOptions): ByteArray? =
             engine.makeTorrent(options)
 
-    /** Live progress of the in-flight [makeTorrent] (safe to poll from the UI). */
     fun makeTorrentProgress(): com.typebit.engine.MakeTorrentProgress =
             engine.makeTorrentProgress()
 
-    /** Cancels the in-flight [makeTorrent]; true when a build was signalled. */
     fun cancelMakeTorrent(): Boolean = engine.cancelMakeTorrent()
 
     fun addTorrentFile(bytes: ByteArray, fileName: String) {
@@ -645,7 +502,6 @@ class AppStore(
         )
     }
 
-    /** Adds a `.torrent` with the add-dialog options applied. */
     fun addTorrentFileEx(
             bytes: ByteArray,
             fileName: String,
@@ -694,7 +550,6 @@ class AppStore(
         )
     }
 
-    /** Adds a magnet with the add-dialog options applied. */
     fun addMagnetEx(
             uri: String,
             saveDir: String,
@@ -732,14 +587,9 @@ class AppStore(
         refreshStats()
     }
 
-    /** Starts or resumes a torrent. */
     fun start(hash: String) = resume(hash)
 
-    /**
-     * Pauses a torrent. The status flips to PAUSED immediately (optimistic UI), then the engine +
-     * records are updated on the background executor; the poll tick confirms the authoritative
-     * state. Never blocks the UI.
-     */
+    /** Optimistic UI: the status flips immediately; the engine, then the poll tick, catch up. */
     fun pause(hash: String) {
         _state.update { s ->
             s.copy(
@@ -758,7 +608,6 @@ class AppStore(
         }
     }
 
-    /** Resumes a paused torrent. Optimistic status, then authoritative. */
     fun resume(hash: String) {
         _state.update { s ->
             s.copy(
@@ -781,7 +630,6 @@ class AppStore(
         }
     }
 
-    /** Removes a torrent. Optimistic UI, then authoritative cleanup. */
     fun remove(hash: String) {
         _state.update {
             it.copy(
@@ -809,11 +657,7 @@ class AppStore(
         _state.update { it.copy(selectedHash = hash) }
     }
 
-    /**
-     * Renames the torrent itself (display name). The engine keeps writing
-     * files under their original paths; the new name is what the UI shows
-     * and what share dialogs carry (`dn=`). Persisted across restarts.
-     */
+    /** Display name only: files keep their original paths, while share dialogs carry `dn=`. */
     fun renameTorrent(hash: String, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
@@ -829,23 +673,12 @@ class AppStore(
         }
     }
 
-    /**
-     * Magnet magnet-link helper: `magnet:?xt=urn:btih:<hash>&dn=<name>`.
-     */
     fun magnetLink(hash: String, name: String): String {
         val dn = name.ifBlank { hash }
         return "magnet:?xt=urn:btih:$hash&dn=$dn"
     }
 
-    // -- proof-of-download receipts ------------------------------------------
-
-    /**
-     * Exports a signed proof-of-download receipt for `hash` over
-     * `[0, downloadedBytes]`, attested to the wall-clock window
-     * `[addedAtMs, now]` (unix seconds). On success the receipt JSON is
-     * persisted to `<appData>/receipts/<hash>.receipt.json` and the path is
-     * returned. Runs on the engine executor (blocking JNI round-trip).
-     */
+    /** Signs `[0, downloadedBytes]` over the unix window `[addedAtMs, now]`; the JSON is persisted. */
     suspend fun exportReceipt(
         hash: String,
         downloadedBytes: Long,
@@ -871,35 +704,21 @@ class AppStore(
         ReceiptExportResult(receipt = receipt, path = path)
     }
 
-    /**
-     * Verifies a receipt JSON (Ed25519 signature + structural integrity)
-     * through the engine. Runs on the engine executor. Returns a truthful
-     * result — `ok=false` for forged, tampered or malformed receipts.
-     */
+    /** Ed25519 + structural check; `ok=false` for forged, tampered or malformed receipts. */
     suspend fun verifyReceiptJson(json: String): ReceiptVerifyResultDto =
         withContext(engineScope.coroutineContext) {
             engine.verifyReceipt(json)
         }
 
-    /** All saved receipts, newest first. */
     fun listReceipts(): List<ReceiptFile> = receiptRepo.list()
 
-    /** Saved receipts whose content root (infohash) matches `hash`. */
     fun listReceiptsFor(hash: String): List<ReceiptFile> = receiptRepo.listFor(hash)
 
-    /** Deletes a saved receipt file. Returns false when it did not exist. */
     fun deleteReceipt(path: String): Boolean = receiptRepo.delete(path)
 
-    /** Raw JSON of a saved receipt, or null when the file is gone. */
     fun readReceipt(path: String): String? = receiptRepo.read(path)
 
-    /**
-     * Two-phase magnet add, phase 1: adds the magnet (already STARTED so the
-     * engine fetches metadata) and returns its hash, or null on parse
-     * failure. The dialog then calls [waitMetadata] to show the file tree
-     * and [commitMagnetSelection] / [cancelMagnetPending] to finish. Runs on
-     * the engine executor; the record is persisted before returning.
-     */
+    /** Phase 1: adds the magnet already started, so the engine fetches metadata, and persists the record. */
     suspend fun addMagnetResolve(uri: String, saveDir: String): String? =
             withContext(engineScope.coroutineContext) {
                 val trimmed = uri.trim()
@@ -929,12 +748,7 @@ class AppStore(
                 hash
             }
 
-    /**
-     * Two-phase magnet add, phase 2a: waits (off the engine executor) until
-     * the magnet's metadata mirror is ready or [timeoutMs] elapses. Returns
-     * the full metainfo (file table) so the dialog can render the selection
-     * tree, or null on timeout.
-     */
+    /** Phase 2a: waits off the engine executor for the metadata mirror; null on timeout. */
     suspend fun waitMetadata(hash: String, timeoutMs: Long): com.typebit.engine.TorrentInfoDto? =
             withContext(peersScope.coroutineContext) {
                 val deadline = System.currentTimeMillis() + timeoutMs
@@ -950,12 +764,8 @@ class AppStore(
             }
 
     /**
-     * Two-phase magnet add, phase 2b: applies the user's per-file priorities
-     * (0=Skip, 1=Normal, 2=High) to the now-resolved magnet and persists the
-     * raw `info` dict so a restart never re-fetches metadata. The torrent is
-     * already running (phase 1 started it to fetch metadata), so this only
-     * reshapes which files are requested — unless `paused` was chosen, in
-     * which case it is paused after the priorities land.
+     * Phase 2b: applies per-file priorities to the resolved magnet and persists the raw `info` dict
+     * so a restart never re-fetches metadata; pauses afterwards when `paused` was chosen.
      */
     fun commitMagnetSelection(hash: String, filePriorities: List<Int>, paused: Boolean = false) =
             onEngine {
@@ -988,7 +798,6 @@ class AppStore(
                 refreshStats()
             }
 
-    /** Removes a magnet the user cancelled in the add dialog (phase 2 cancel). */
     fun cancelMagnetPending(hash: String) = onEngine {
         engine.remove(hash)
         infoCache.remove(hash)
@@ -1005,14 +814,8 @@ class AppStore(
     }
 
     /**
-     * Keeps a magnet whose metadata did not arrive inside the add dialog's
-     * wait window. The magnet is already a real task (it was added and
-     * started in phase 1); releasing the data hold lets it download with the
-     * default all-files selection as soon as the engine finishes fetching
-     * metadata in the background — exactly how qBittorrent treats a magnet
-     * that resolves slowly. Without this, a slow DHT/tracker bootstrap made
-     * the dialog remove the magnet on timeout, so the user had to re-add it
-     * repeatedly and it never appeared to load.
+     * Releases the data hold so a magnet whose metadata is slow keeps downloading with the default
+     * selection instead of being removed when the dialog times out.
      */
     fun releaseMagnetPending(hash: String) = onEngine {
         engine.setHoldData(hash, hold = false)
@@ -1021,10 +824,6 @@ class AppStore(
         refreshStats()
     }
 
-    /**
-     * Sets one file's download priority at runtime (0=Skip, 1=Normal, 2=High) and persists it.
-     * Skipped files stop being requested.
-     */
     fun setFilePriority(hash: String, file: Int, priority: Int) = onEngine {
         if (engine.setFilePriority(hash, file, priority)) {
             records =
@@ -1040,13 +839,7 @@ class AppStore(
         }
     }
 
-    /**
-     * Bulk priority change (a directory toggle in the file tree).
-     *
-     * Uses the engine's ATOMIC `setFilePriorities` with the full index-aligned
-     * array instead of N `setFilePriority` calls: one JNI round-trip, one
-     * scheduler re-plan, and — for a two-phase magnet — a single hold release.
-     */
+    /** Atomic `setFilePriorities` instead of N per-file calls: one JNI round-trip, one hold release. */
     fun setFilePriorities(hash: String, updates: Map<Int, Int>) = onEngine {
         if (updates.isEmpty()) return@onEngine
         val rec = records.firstOrNull { it.hash == hash }
@@ -1062,7 +855,6 @@ class AppStore(
         }
     }
 
-    /** Adds a tracker URL to a running torrent and persists it. */
     fun addTracker(hash: String, url: String) = onEngine {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return@onEngine
@@ -1082,7 +874,6 @@ class AppStore(
         }
     }
 
-    /** Removes a tracker URL from a running torrent and persists it. */
     fun removeTracker(hash: String, url: String) = onEngine {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return@onEngine
@@ -1110,24 +901,13 @@ class AppStore(
         _state.update { it.copy(searchQuery = query) }
     }
 
-    /**
-     * Applies a settings edit. The UI state updates immediately; disk I/O and engine calls happen
-     * on the background executor, diffed so they only cross the JNI boundary when the relevant
-     * value changed, and the JSON write is coalesced (rapid edits collapse into one save).
-     */
+    /** UI state updates immediately; disk I/O and engine calls are diffed and coalesced on the executor. */
     fun updateSettings(settings: AppSettings) {
         _state.update { it.copy(settings = settings) }
         onEngine { applySettings(settings) }
     }
 
-    /**
-     * True when the edit can only take effect by rebuilding the engine.
-     *
-     * These fields are read once, at engine creation ([EngineConfigJson.engineConfig]):
-     * the listen port, DHT/LSD switches, UPnP/NAT-PMP, the resolver and IPv6
-     * policy, the SOCKS5 proxy and the disk cache. Everything else — limits,
-     * concurrency, per-session defaults, extra trackers — is applied live.
-     */
+    /** Creation-time fields ([EngineConfigJson.engineConfig]) need an engine rebuild; the rest applies live. */
     fun settingsNeedEngineRestart(before: AppSettings, after: AppSettings): Boolean {
         val bc = before.connection
         val ac = after.connection
@@ -1154,22 +934,16 @@ class AppStore(
     }
 
     /**
-     * Rebuilds the engine in place so creation-time settings apply.
-     *
-     * The teardown flushes resume data, settings and records before the engine
-     * goes down, and [start] re-adds every record, so a restart is the same
-     * event as an app restart — without dropping the WebUI or the process.
-     * Runs on its own one-thread scope: the engine executor must stay free for
-     * the teardown that is about to cancel it.
+     * Rebuilds the engine in place: the teardown flushes resume data, settings and records, and
+     * [start] re-adds every record — the same event as an app restart.
      */
     fun restartEngine() {
         if (!restartScope.isActive) restartScope = newRestartScope()
         restartScope.launch {
             if (shutdownBegan) return@launch
             teardown(blocking = true)
-            // An application exit that started while we were tearing down wins:
-            // booting an engine after `engine.stop()` would leak the native
-            // worker and race the next start on the same port and `.part` files.
+            // An exit that began during teardown wins: booting now would leak the native worker and
+            // race the next start on the same port and `.part` files.
             if (shutdownBegan) return@launch
             start()
         }
@@ -1200,7 +974,6 @@ class AppStore(
                 for (rec in records) {
                     for (url in added) engine.addTracker(rec.hash, url)
                 }
-                // Refresh the mirrors so the Tracker tab shows the new URLs.
                 for (rec in records) {
                     engine.torrentInfo(rec.hash)?.let { infoCache[rec.hash] = it }
                 }
@@ -1254,18 +1027,13 @@ class AppStore(
         _state.update { it.copy(lastError = null) }
     }
 
-    // ------------------------------------------------------------------
-    // Windows system integration (firewall / ICS) — desktop only
-    // ------------------------------------------------------------------
-
-    /** The actual bound listen port, falling back to the configured one. */
+    /** Bound port, or the configured value when not listening. */
     private fun listenPort(): Int =
         _state.value.listenPort.takeIf { it > 0 }
             ?: if (_state.value.settings.connection.useRandomPort) 0
             else _state.value.settings.connection.listenPort
 
-    /** Runs a firewall/ICS action off the engine thread and surfaces the
-     *  result in `state.systemOk` / `state.systemMessage`. */
+    /** Runs off the engine thread; the result lands in `state.systemOk` / `systemMessage`. */
     private fun runSystemAction(block: suspend () -> com.typebit.engine.SystemResultDto) {
         systemScope.launch {
             val r = block()
@@ -1273,7 +1041,6 @@ class AppStore(
         }
     }
 
-    /** Adds (or refreshes) the Windows firewall rules for the listen port. */
     fun configureFirewall() {
         val port = listenPort()
         if (port <= 0) {
@@ -1285,7 +1052,6 @@ class AppStore(
         runSystemAction { engine.firewallAdd(port) }
     }
 
-    /** Elevated retry (one UAC prompt) for [configureFirewall]. */
     fun configureFirewallElevated() {
         val port = listenPort()
         if (port <= 0) {
@@ -1297,32 +1063,23 @@ class AppStore(
         runSystemAction { engine.firewallAddElevated(port) }
     }
 
-    /** Removes the inbound firewall rules for the listen port. */
     fun removeFirewallRules() {
         val port = listenPort()
         if (port <= 0) return
         runSystemAction { engine.firewallRemove(port) }
     }
 
-    /** Refreshes the firewall status line in the settings card. */
     fun refreshFirewallStatus() {
         val port = listenPort()
         if (port <= 0) return
         runSystemAction { engine.firewallStatus(port) }
     }
 
-    /** Enables Internet Connection Sharing (explicit, admin-gated). */
     fun configureIcs() = runSystemAction { engine.icsEnable() }
 
-    /** Disables Internet Connection Sharing on all shared connections. */
     fun disableIcs() = runSystemAction { engine.icsDisable() }
 
-    /** Refreshes the ICS status line. */
     fun refreshIcsStatus() = runSystemAction { engine.icsStatus() }
-
-    // ------------------------------------------------------------------
-    // poll loop
-    // ------------------------------------------------------------------
 
     private suspend fun pollLoop() {
         while (engineScope.isActive && pollJob?.isActive == true) {
@@ -1341,11 +1098,7 @@ class AppStore(
         }
     }
 
-    /**
-     * Applies engine events without rebuilding the whole list per event: deltas are aggregated per
-     * torrent first, then applied in one pass. Returns true when a torrent completed or metadata
-     * arrived — states that must be persisted immediately.
-     */
+    /** Aggregates per-torrent deltas before applying them; true = the state must be persisted now. */
     private fun drainEvents(events: List<EngineEventDto>): Boolean {
         if (events.isEmpty()) return false
         val complete = HashSet<String>()
@@ -1410,7 +1163,6 @@ class AppStore(
                         engineNotice = msg
                     }
                     12 -> {
-                        // UPnP/NAT-PMP port-mapping lifecycle (0.1.7).
                         if (ev.phase != null) pmPhase = ev.phase
                         if (ev.port != null && ev.port!! > 0) pmPort = ev.port!!
                     }
@@ -1474,12 +1226,7 @@ class AppStore(
         return complete.isNotEmpty() || metadata.isNotEmpty()
     }
 
-    /**
-     * Per-tick refresh driven by ONE batched native snapshot (DHT count, global totals and every
-     * torrent's runtime stats). Full metainfo is only refetched when the snapshot reports
-     * freshly-arrived metadata, so the per-tick JNI traffic is constant regardless of torrent
-     * count.
-     */
+    /** One batched snapshot per tick; metainfo (and full state) is refetched only for new metadata. */
     private fun refreshStats() {
         val now = System.currentTimeMillis()
         val snap = engine.snapshot()
@@ -1518,8 +1265,7 @@ class AppStore(
                         val base = s.torrents.firstOrNull { it.hash == rec.hash }
                         buildTorrent(rec, base, byHash[rec.hash], now)
                     }
-            // Live verification progress: only polled while a pass is running,
-            // so the per-tick cost stays at one extra JNI call at most.
+            // Only polled while a pass runs, so the tick costs at most one extra JNI call.
             val recheck = if (recheckJob?.isActive == true) engine.recheckProgress() else null
             s.copy(
                     torrents = updated,
@@ -1551,12 +1297,7 @@ class AppStore(
         com.typebit.platform.Platform.ensureBackgroundMode(anyActive && backgroundAllowed)
     }
 
-    /**
-     * Rebuilds one display model from the snapshot row + the cached full metainfo. The status is
-     * deterministic — paused wins, then complete (seeding), then metadata availability — instead of
-     * the old heuristic that guessed from stale progress deltas and made pause/resume appear
-     * broken.
-     */
+    /** Status is deterministic — paused wins, then complete, then metadata availability. */
     private fun buildTorrent(
             rec: TorrentRecord,
             base: Torrent?,
@@ -1580,7 +1321,6 @@ class AppStore(
                 }
 
         val uploaded = row?.u ?: base?.uploadedBytes ?: 0L
-        // Per-torrent download/upload rates from byte deltas.
         val prev = lastSeen[rec.hash]
         val dt = (now - (prev?.first ?: now)).coerceAtLeast(1L)
         val downRate =
@@ -1615,12 +1355,8 @@ class AppStore(
                 comment = info?.comment,
                 kind = info?.kind ?: rec.kind,
                 trackers = buildTrackers(rec.hash, info, rec, base),
-                // Prefer the FRESH metainfo mirror (infoCache) — it is
-                // updated when metadata arrives. Falling back to the previous
-                // frame's list made `files` permanently empty when the first
-                // frame was built before the mirror existed (e.g. a magnet
-                // resolved in the add dialog): `base?.files` was `[]` and the
-                // `?:` short-circuit never let the real list through.
+                // Prefer the fresh metainfo mirror: an earlier frame's list can be empty when that
+                // frame was built before the mirror existed (magnet resolved in the add dialog).
                 files = info?.files.orEmpty()
                                 .map { com.typebit.model.FileEntry(it.path, it.length, it.renamed) }
                                 .ifEmpty { base?.files.orEmpty() },
@@ -1637,11 +1373,8 @@ class AppStore(
     }
 
     /**
-     * The tracker list shown in the detail tab. The engine session owns the
-     * announce list — it starts from the metainfo and is then mutated by
-     * [addTracker]/[removeTracker] — so it is the source of truth; the metainfo
-     * plus the record only stand in while the engine cannot answer. [base]
-     * supplies the last known per-URL state (status, seeds, …).
+     * The engine session owns the announce list (seeded from the metainfo, then mutated by tracker
+     * edits), so it is the source of truth; [base] supplies the last known per-URL state.
      */
     private fun buildTrackers(
             hash: String,
@@ -1660,14 +1393,10 @@ class AppStore(
         return urls.map { url -> known[url] ?: TrackerInfo(url = url) }
     }
 
-    // ---- persistence helpers ----
-
     private fun reAddRecord(rec: TorrentRecord) {
         val hash =
                 when {
-                    // A magnet whose metadata was already fetched is re-added
-                    // WITH its info dict (wrapped into a full torrent file) —
-                    // it never re-fetches metadata.
+                    // A magnet whose metadata is known is re-added wrapped, so it never re-fetches.
                     rec.kind == "MAGNET" && rec.infoBase64.isNotBlank() -> {
                         val bytes = B64.decode(rec.infoBase64)
                         if (bytes == null) null
@@ -1684,32 +1413,24 @@ class AppStore(
             _state.update { it.copy(lastError = "恢复失败：${rec.name}") }
             return
         }
-        // Re-apply runtime-added trackers (they are not part of the engine's
-        // saved state, so the app-level record is the source of truth).
+        // Runtime-added trackers are not in the engine's saved state: re-apply them from the record.
         for (t in rec.trackers) {
             engine.addTracker(hash, t)
         }
         for (t in rec.removedTrackers) {
             engine.removeTracker(hash, t)
         }
-        // Magnet priorities are applied once refreshStats sees metadata.
         if (rec.kind != "MAGNET" && rec.filePriorities.isNotEmpty()) {
             applyPriorities(hash, rec.filePriorities)
         }
-        // File renames are app-level data: re-apply them so the staged path
-        // bookkeeping and the final promotion keep working after a restart.
+        // File renames are app-level data: re-apply so staged-path bookkeeping survives a restart.
         if (rec.renames.isNotEmpty()) {
             applyRenames(hash, rec.renames)
         }
-        // Refresh the mirror so renamed names show immediately.
         engine.torrentInfo(hash)?.let { infoCache[hash] = it }
     }
 
-    /**
-     * Wraps a raw bencoded `info` dict into a full single-file torrent
-     * (`d4:info<info>e`) so it can be re-added via [TorrentEngine.addTorrent].
-     * This is exactly how `typebit::metainfo::Torrent::from_info` builds it.
-     */
+    /** Wraps a raw bencoded `info` dict as `d4:info<info>e`, exactly as `typebit::metainfo::Torrent::from_info`. */
     private fun wrapInfoDict(info: ByteArray): ByteArray {
         val prefix = "d4:info".toByteArray(Charsets.ISO_8859_1)
         val out = ByteArray(prefix.size + info.size + 1)
@@ -1719,48 +1440,32 @@ class AppStore(
         return out
     }
 
-    /** Re-applies persisted per-file renames to an engine torrent. */
     private fun applyRenames(hash: String, renames: Map<Int, String>) {
         for ((index, name) in renames) {
             engine.renameFile(hash, index, name)
         }
     }
 
-    /** Applies per-file priorities to an engine torrent (index-aligned). */
     private fun applyPriorities(hash: String, priorities: List<Int>) {
         for ((index, p) in priorities.withIndex()) {
             if (p != 1) engine.setFilePriority(hash, index, p)
         }
     }
 
+    /** The engine keeps writing to the original staged path and promotes the new name on completion. */
     /**
-     * Renames one file of a torrent. The engine keeps writing to the original staged path and
-     * promotes the renamed name on completion; the new name is persisted on the record so it
-     * survives restarts.
-     */
-    /**
-     * Live peer list for the Peers tab (best-effort, from the engine).
-     *
-     * Runs on a dedicated single-thread executor ([peersScope]) so a slow reply can NEVER block the
-     * poll loop or a download action on [engineScope]. The native worker serializes commands
-     * internally, so concurrent queries from both scopes are safe (the JNI handle is a shared,
-     * `Send + Sync` reference).
+     * Best-effort live peer list on [peersScope], so a slow reply never blocks the poll loop;
+     * concurrent engine queries are safe (the JNI handle is a shared `Send + Sync` reference).
      */
     suspend fun peers(hash: String): List<com.typebit.engine.PeerDto> =
             withContext(peersScope.coroutineContext) {
-                // Never throws: this runs inside the Peers tab's polling
-                // LaunchedEffect, and an exception escaping it cancels the
-                // composition scope — i.e. an app crash on Android.
+                // Never throws: an escaping exception would cancel the Peers tab's polling scope.
                 runCatching {
                             if (engine.isRunning) engine.peers(hash) else emptyList()
                         }
                         .getOrDefault(emptyList())
             }
 
-    /**
-     * Engine-wide statistics for the stats dialog. Like [peers], runs off the
-     * dedicated executor so a slow reply never blocks the poll loop.
-     */
     suspend fun fetchStats(): com.typebit.engine.EngineStatsDto =
             withContext(peersScope.coroutineContext) {
                 runCatching {
@@ -1796,8 +1501,7 @@ class AppStore(
     }
 
     private fun persistResume() {
-        // Guard: `stop()` can run before the async boot finished creating
-        // the engine (quick app exit) — the native handle would be 0.
+        // Guard: `stop()` can run before boot finished creating the engine, so the handle is still 0.
         if (!engine.isRunning) return
         engine.saveState()?.let { torrentRepo.saveResumeState(it) }
     }
@@ -1808,7 +1512,7 @@ class AppStore(
         lastAppliedLimits = down to up
     }
 
-    /** Effective (down, up) byte-per-second limits, honoring the schedule. */
+    /** Effective (down, up) byte-per-second limits, after the schedule. */
     private fun effectiveLimits(speed: com.typebit.data.SpeedSettings): Pair<Long, Long> {
         val active =
                 if (speed.alternativeLimitsEnabled && speed.scheduleEnabled && scheduleOpen(speed)
@@ -1820,10 +1524,9 @@ class AppStore(
         return active.first * 1024 to active.second * 1024
     }
 
-    /** Whether the alternative-limit schedule window is currently open. */
     private fun scheduleOpen(speed: com.typebit.data.SpeedSettings): Boolean {
         val now =
-                kotlinx.datetime.Clock.System.now()
+                kotlin.time.Clock.System.now()
                         .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
         val dayOk =
                 when (speed.scheduleDays) {

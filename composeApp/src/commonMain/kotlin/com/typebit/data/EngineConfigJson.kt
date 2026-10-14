@@ -7,14 +7,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/**
- * Maps [AppSettings] onto the JSON contract understood by the Rust bridge
- * (`native/src/engine.rs::parse_config`). Kept in one place so the two sides
- * of the seam are trivially auditable.
- */
+/** Serializes [AppSettings] into the JSON contract read by `native/src/engine.rs::parse_config`. */
 object EngineConfigJson {
 
-    /** Full engine config (used at engine creation). */
     fun engineConfig(settings: AppSettings): String {
         val bt = settings.bitTorrent
         val conn = settings.connection
@@ -26,22 +21,18 @@ object EngineConfigJson {
             put("cache_bytes", bt.cacheBytes)
             put("dht_enabled", bt.enableDht)
             put("lsd_enabled", bt.enableLsd)
-            // LSD (BEP-14) announce interval: one infohash per interval,
-            // round-robin over active torrents (mechanism 4). The engine
-            // clamps it to a 30 s hard floor.
+            // LSD (BEP-14) announce period; the engine clamps it to a 30 s hard floor.
             put("lsd_interval_ms", 60_000)
-            // typebit 0.1.1 built-in token-bucket global limits (bytes/sec).
+            // Token-bucket global limits, bytes/sec.
             put("global_download_limit_bps", speed.globalDownloadLimitKib * 1024)
             put("global_upload_limit_bps", speed.globalUploadLimitKib * 1024)
             put("global_max_connections", conn.maxConnections)
             put("max_connections_per_ip", 8)
             put("verify_workers", 0) // auto: one per core minus one, capped 8
             put("connect_timeout_ms", 30_000)
-            // UPnP/NAT-PMP is now real in the engine (was stored-only).
             put("port_mapping", bt.enableUpnp || bt.enableNatPmp)
-            // SOCKS5 proxy (outbound-only mode). The engine implements SOCKS5
-            // ONLY; SOCKS4/HTTP are legacy persisted values that must never
-            // enable a proxy (an unsupported type would just break dialing).
+            // The engine speaks SOCKS5 only (outbound); legacy SOCKS4/HTTP persisted values must
+            // never enable a proxy — dialing through them would just fail.
             put(
                 "proxy",
                 buildJsonObject {
@@ -73,20 +64,17 @@ object EngineConfigJson {
             put("delta", bt.schedulerDelta)
             put("edge_bytes", bt.schedulerEdgeBytes)
             put("trackers", parseTrackers(bt.allTrackers))
-            // ---- network policy (see native/src/netpolicy.rs) ----
             put("doh_enabled", conn.enableDoh && conn.dohProviders.isNotBlank())
             put("doh_providers", parseLines(conn.dohProviders))
             put("ipv6_enabled", conn.enableIpv6)
             put("allow_lan_webseeds", conn.allowLanWebseeds)
-            // HTTP/2 for HTTPS trackers and web seeds (cleartext stays HTTP/1.1
-            // — see native/src/host.rs), and the redirect budget: a redirect is
-            // the second half of an SSRF attempt, so the count stays small.
+            // HTTP/2 only over TLS (see native/src/host.rs); the redirect budget stays small
+            // because a redirect is the second half of an SSRF attempt.
             put("http2_enabled", true)
             put("http_max_redirects", 2)
         }.toString()
     }
 
-    /** Session defaults only — applied to torrents added from now on. */
     fun sessionConfig(settings: AppSettings): String {
         val bt = settings.bitTorrent
         return buildJsonObject {
@@ -114,7 +102,6 @@ object EngineConfigJson {
         }.toString()
     }
 
-    /** Splits a newline-separated tracker list into a JSON array. */
     private fun parseTrackers(raw: String): JsonArray = buildJsonArray {
         raw.lineSequence()
             .map { it.trim() }
@@ -122,7 +109,6 @@ object EngineConfigJson {
             .forEach { add(JsonPrimitive(it)) }
     }
 
-    /** Splits a newline-separated list (DoH endpoints) into a JSON array. */
     private fun parseLines(raw: String): JsonArray = buildJsonArray {
         raw.lineSequence()
             .map { it.trim() }

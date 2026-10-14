@@ -8,12 +8,7 @@ import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 
-/**
- * HD loading cap: keep the wallpaper sharp (no quality loss on 4K source)
- * while staying inside a ~25 MiB decoded-memory budget (2500×2500×4 B).
- * Larger sources are scaled down with bilinear filtering; anything ≤ the
- * budget is returned at full resolution.
- */
+/** Decoded-memory cap of ~25 MiB (2500×2500×4 B): larger sources are scaled with bilinear filtering. */
 private const val MAX_EDGE = 2500
 
 actual fun loadWallpaperBitmap(path: String?): ImageBitmap? {
@@ -23,7 +18,6 @@ actual fun loadWallpaperBitmap(path: String?): ImageBitmap? {
         val w = src.width
         val h = src.height
         if (maxOf(w, h) <= MAX_EDGE) {
-            // Full quality: no resampling at all.
             return@runCatching src.toComposeImageBitmap()
         }
         val scale = MAX_EDGE.toFloat() / maxOf(w, h)

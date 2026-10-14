@@ -29,11 +29,7 @@ import com.typebit.model.Torrent
 import com.typebit.ui.components.EmptyState
 import com.typebit.ui.theme.TypeBitThemeColors
 
-/**
- * 分块 tab — a heat-grid of every piece. Colors come from the REAL verified
- * bitfield (`Torrent.haveBitsHex`, reported by the engine); nothing is
- * inferred. Blue = verified, green = current progress fills from events.
- */
+/** Piece heat-grid: colors come from the engine's verified bitfield, never inferred. */
 @Composable
 fun PiecesTab(torrent: Torrent, modifier: Modifier = Modifier) {
     val pieceCount = torrent.pieceCount
@@ -49,8 +45,7 @@ fun PiecesTab(torrent: Torrent, modifier: Modifier = Modifier) {
     val have = List(pieceCount) { i -> isHave(bits, i) }
     val haveCount = have.count { it }
     val s = TypeBitThemeColors.status
-    // Live progress estimate merges event-delivered piece count with the
-    // verified bitfield — the max is never above pieceCount.
+// Live progress merges event-delivered counts with the verified bitfield.
     val effectiveHave = (haveCount.coerceAtLeast(torrent.havePieces)).coerceAtMost(pieceCount)
 
     Column(modifier.fillMaxSize().padding(12.dp)) {
@@ -104,7 +99,7 @@ private fun LegendDot(color: Color) {
     )
 }
 
-/** MSB-first hex bitfield → per-piece booleans. */
+/** MSB-first (BEP 3) hex bitfield -> per-piece booleans. */
 private fun decodeHex(hex: String): ByteArray {
     if (hex.isEmpty()) return ByteArray(0)
     val out = ArrayList<Byte>(hex.length / 2)

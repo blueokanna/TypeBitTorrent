@@ -31,10 +31,6 @@ import com.typebit.model.TorrentStatus
 import com.typebit.ui.theme.TypeBitThemeColors
 import com.typebit.ui.util.Format
 
-/**
- * Material 3 torrent grid (list/grid toggle target on desktop + Android).
- * Adaptive columns keep cards readable across phone, tablet and desktop.
- */
 @Composable
 fun TorrentGrid(
     torrents: List<Torrent>,
@@ -54,7 +50,6 @@ fun TorrentGrid(
     }
 }
 
-/** A single MD3 grid card: name, status, progress, sizes and wire rates. */
 @Composable
 private fun GridTorrentCard(torrent: Torrent, onClick: () -> Unit) {
     Card(

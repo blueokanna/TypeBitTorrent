@@ -1,4 +1,4 @@
-﻿package com.typebit.webui
+package com.typebit.webui
 
 import com.typebit.app.createAppStore
 import com.typebit.data.SettingsRepository
@@ -10,36 +10,11 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Headless mode — the full client with no window.
- *
- * This is the entry point the fnOS `.fpk` and the Unraid/Docker images run:
- * the same `AppStore` + Rust engine, driven from the browser through
- * [WebUiServer]. It exists because a NAS has no display but absolutely can
- * run everything else (the engine is the same `no_std`-style worker, the disk
- * and socket code is the same `NativeHost`).
- *
- * Usage (see `docs/nas.md`):
- * ```
- * typebittorrent --headless --bind=0.0.0.0 --port=18881 \
- *                --data=/config --downloads=/downloads \
- *                --username=admin --password=secret
- * ```
- *
- * Password resolution order (first non-empty wins):
- * 1. `--password=…` on the command line,
- * 2. `TYPEBIT_PASSWORD` in the environment (the container-friendly path),
- * 3. the PBKDF2 hash already stored in settings,
- * 4. otherwise a random one is generated and printed once at startup —
- *    an unauthenticated WebUI is never started.
- *
- * Download folder: `--downloads` only fills an empty default save path (a
- * container mount must not override what the user picked in the WebUI), while
- * `--downloads-force` applies the path unconditionally. The fnOS package passes
- * the force flag exactly when the folder changed in the App Center settings.
+ * Headless entry point (fnOS `.fpk`, Unraid/Docker): the full client, no window, driven from the browser.
+ * Password order: `--password`, `TYPEBIT_PASSWORD`, the stored PBKDF2 hash, else a random one printed once.
  */
 object Headless {
 
-    /** True when [args] ask for headless mode (or the env var is set). */
     fun requested(args: Array<String>): Boolean =
         args.any { it == "--headless" || it == "-H" } ||
             System.getenv("TYPEBIT_HEADLESS")?.let { it == "1" || it.equals("true", true) } == true
@@ -100,8 +75,6 @@ object Headless {
             }
         }
         Runtime.getRuntime().addShutdownHook(Thread(shutdown, "typebit-shutdown"))
-        // Park forever; the shutdown hook does the teardown (SIGTERM from
-        // Docker / `appcenter-cli stop` lands there too).
         try {
             while (!stopped.get()) Thread.sleep(1_000)
         } catch (_: InterruptedException) {
@@ -110,7 +83,6 @@ object Headless {
         return 0
     }
 
-    /** Starts the engine and waits until it reports running (bounded). */
     private fun bootEngine(store: AppStore, settingsRepo: SettingsRepository, opts: Options) {
         runBlocking { runCatching { settingsRepo.load() } }
         store.start()
@@ -122,8 +94,7 @@ object Headless {
         if (!store.state.value.engineRunning) {
             System.err.println("引擎未能在 20 秒内启动（原生库缺失或端口被占用）：${store.state.value.lastError}")
         }
-        // Container convention: the mounted downloads volume becomes the
-        // default save path when the user has not chosen one.
+        // `--downloads` only fills an unset save path; the user's WebUI choice must win.
         opts.downloadsDir?.let { dir ->
             val path = File(dir).absoluteFile.path
             val current = store.state.value.settings
@@ -134,9 +105,8 @@ object Headless {
                 )
             }
         }
-        // The NAS package decides this path and re-passes the flag whenever it
-        // changed there, so applying it now (and not only when blank) is what
-        // makes an App Center change visible without touching the WebUI.
+        // `--downloads-force` applies even over a user-set path: that is how an App Center folder change
+        // reaches the app.
         opts.forcedDownloadsDir?.let { dir ->
             val path = File(dir).absoluteFile.path
             File(path).mkdirs()
@@ -149,7 +119,6 @@ object Headless {
         }
     }
 
-    /** Applies CLI/env overrides on top of the persisted WebUI settings. */
     private fun resolveWebUiSettings(current: WebUiSettings, opts: Options): WebUiSettings {
         val envPassword = System.getenv("TYPEBIT_PASSWORD")?.takeIf { it.isNotBlank() }
         val password = opts.password ?: envPassword
@@ -169,18 +138,13 @@ object Headless {
         return base.copy(passwordHash = WebUiServer.hashPassword(generated))
     }
 
-    /** 20-char URL-safe password (CSPRNG). */
     private fun generatePassword(): String {
         val bytes = ByteArray(15)
         java.security.SecureRandom().nextBytes(bytes)
         return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 
-    // ------------------------------------------------------------------
-    // CLI
-    // ------------------------------------------------------------------
-
-    private class Options {
+private class Options {
         var bind: String = "0.0.0.0"
         var port: Int? = null
         var username: String? = null
@@ -213,7 +177,6 @@ object Headless {
                 "--frame-ancestors" -> normalizeFrameAncestors(value)?.let { o.frameAncestors = it }
             }
         }
-        // Environment fallbacks keep the container command short.
         System.getenv("TYPEBIT_BIND")?.takeIf { it.isNotBlank() }?.let { if (o.bind == "0.0.0.0") o.bind = it }
         System.getenv("TYPEBIT_PORT")?.toIntOrNull()?.let { if (o.port == null) o.port = it }
         System.getenv("TYPEBIT_USERNAME")?.takeIf { it.isNotBlank() }?.let { if (o.username == null) o.username = it }
@@ -233,20 +196,14 @@ object Headless {
         return o
     }
 
-    /** Set to relocate the app data dir (containers mount `/config`). */
     const val DATA_DIR_PROPERTY = "typebit.data.dir"
 
-    /** One `frame-ancestors` source: `*`, a keyword, or an http(s) origin. */
     private const val FRAME_SOURCE = """\*|'self'|'none'|https?://[A-Za-z0-9.\-]+(?::\d{1,5})?"""
 
     private val FRAME_SOURCES = Regex("^($FRAME_SOURCE)( ($FRAME_SOURCE))*$")
 
-    /**
-     * Normalizes `--frame-ancestors` (e.g. `*`, `'self'`, `http://nas:5666`)
-     * into a CSP source list. The value ends up verbatim in a response header,
-     * so anything that is not a plain source list is dropped — that rules out
-     * header injection, not just typos.
-     */
+    /** `--frame-ancestors` values land verbatim in a response header, so anything that is not a plain CSP
+     *  source list is dropped (header-injection guard, not just a typo check). */
     private fun normalizeFrameAncestors(raw: String): String? {
         val value =
             raw.trim().split(',', ' ', '\t').filter { it.isNotEmpty() }.joinToString(" ")

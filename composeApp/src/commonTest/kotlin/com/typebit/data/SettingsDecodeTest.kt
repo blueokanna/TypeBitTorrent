@@ -6,14 +6,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlinx.serialization.json.Json
 
-/**
- * Settings decoding, which is the one place a hand-edited file meets the app.
- *
- * The DNS upstream list is what a NAS owner edits by hand, and the file they
- * edit it in is whatever Windows or their editor gives them — usually with a
- * byte-order mark. Rejecting that file would silently reset every other
- * setting, so the tolerance is a contract, not a nicety.
- */
+// Hand-edited files meet the app here: the DNS upstream list is edited in a user editor (usually with a
+// byte-order mark) and rejecting that file would silently reset every other setting — tolerance is a contract.
 class SettingsDecodeTest {
 
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }

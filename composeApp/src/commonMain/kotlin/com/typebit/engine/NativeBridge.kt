@@ -1,173 +1,103 @@
 package com.typebit.engine
 
-// NOTE: this file intentionally contains ONLY `expect` declarations.
-// Any top-level executable code here would emit a `NativeBridgeKt` JVM class
-// and collide with the `actual external` declarations in jvmShared (same
-// file name → same class name). The loader lives in NativeRuntime.kt.
+// Must contain ONLY `expect` declarations: top-level code would emit a `NativeBridgeKt` class that
+// collides with the `actual external` declarations in jvmShared. The loader lives in NativeRuntime.kt.
 
-// ---------------------------------------------------------------------------
-// Engine lifecycle
-// ---------------------------------------------------------------------------
-
-/**
- * ABI revision exported by the loaded native library. Checked against
- * [EXPECTED_BRIDGE_ABI] before the first real call: a stale `.so`/`.dll` whose
- * signatures drifted from this file would otherwise be called with the wrong
- * argument layout and crash the process instead of returning an error.
- */
+/** ABI exported by the loaded library, checked against [EXPECTED_BRIDGE_ABI] before the first real call. */
 expect fun nativeBridgeAbi(): Int
 
 /** Creates the engine worker; returns an opaque handle (0 on failure). */
 expect fun nativeCreateEngine(configJson: String, saveDir: String): Long
 
-/** Tears down the engine worker and frees the handle. */
 expect fun nativeDestroyEngine(handle: Long)
 
-// ---------------------------------------------------------------------------
-// Torrents
-// ---------------------------------------------------------------------------
-
-/** Parses `.torrent` bytes → metainfo JSON (no engine add); null on error. */
+/** Parses `.torrent` bytes to metainfo JSON only, without adding; null on error. */
 expect fun nativeParseTorrent(data: ByteArray): String?
 
 /**
- * Creates a v1 `.torrent` from local files (blocking — call off the main
- * thread). `optionsJson` carries everything the builder needs:
- *
- * ```json
- * {"files":[{"abs":"C:/x/a.bin","rel":["dir","a.bin"]},…],
- *  "piece_length":4194304,"name":"x","announce":["udp://…"],
- *  "announce_list":[["udp://…","https://…"]],"comment":"…",
- *  "source":"…","private":true,"created_by":"…"}
- * ```
- *
- * `piece_length` must be a supported power of two (16 KiB .. 256 MiB).
- * Returns the raw `.torrent` bytes, or throws (JNI) on invalid input.
+ * Blocking v1 build. `optionsJson`: `files` (`{"abs","rel"}`), `piece_length` (power of two,
+ * 16 KiB..256 MiB), `name`, `announce`, `announce_list`, `comment`, `source`, `private`.
  */
 expect fun nativeMakeTorrent(optionsJson: String): ByteArray?
 
 /** Progress of the in-flight [nativeMakeTorrent]: `{"done":n,"total":n,"running":b,"cancelled":b}`. */
 expect fun nativeMakeTorrentProgress(): String
 
-/** Requests cancellation of the in-flight [nativeMakeTorrent]; 1 = signalled, 0 = idle. */
 expect fun nativeMakeTorrentCancel(): Int
 
 /**
- * Verifies the data a torrent already has on disk against its piece hashes.
- *
- * The engine starts every session with an empty bitfield, so a torrent whose
- * files are already present (fetched by another client, restored from a
- * backup, or the very files a torrent was built from) would otherwise be
- * re-downloaded and could never upload. This walks those files, hashes every
- * piece and hands the verified set to the engine — after which the torrent is
- * complete and seeds.
- *
- * Blocking: reads the whole payload. Returns the verified piece count, or a
- * negative value on error.
+ * Hashes on-disk files into the engine, which otherwise starts every session with an empty bitfield
+ * (an already-complete torrent would re-download and never seed). Blocking; negative = error.
  */
 expect fun nativeRecheckData(handle: Long, hash: String): Int
 
 /** Progress of the in-flight [nativeRecheckData]: `{"done":n,"total":n,"running":b,"cancelled":b}`. */
 expect fun nativeRecheckProgress(): String
 
-/** Cancels the in-flight [nativeRecheckData]; 1 = signalled, 0 = idle. */
 expect fun nativeRecheckCancel(): Int
 
-/**
- * Adds a `.torrent`; returns the hex infohash or null on error.
- * `prioritiesJson` is a JSON array of per-file priority bytes
- * (`[0,1,2,…]`; 0=Skip 1=Normal 2=High) aligned with the file table.
- * Empty/`[]` keeps every file at Normal.
- */
+/** `prioritiesJson`: one byte per file in table order (0=Skip 1=Normal 2=High); empty or `[]` = all Normal. */
 expect fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 
-/** Adds a magnet URI; returns the hex infohash or null on error. */
+/** Adds a magnet URI; returns the hex infohash, or null on error. */
 expect fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
 
-/** Starts (announces + connects) a torrent. 0 = ok, negative = error. */
+/** Announces and connects; 0 = ok, negative = error. */
 expect fun nativeStart(handle: Long, hash: String): Int
 
-/**
- * Atomically replaces ALL per-file priorities and releases any two-phase
- * magnet hold. `prioritiesJson` is `[0,1,2,…]` (0=Skip 1=Normal 2=High)
- * aligned with the file table. 0 = ok, negative = error.
- */
+/** Atomically replaces ALL priorities and releases any two-phase magnet hold; `prioritiesJson` as in [nativeAddTorrent]. */
 expect fun nativeSetFilePriorities(handle: Long, hash: String, prioritiesJson: String): Int
 
-/**
- * Two-phase magnet support: `hold != 0` makes the torrent fetch metadata /
- * run discovery but request NO data pieces until priorities are committed
- * via [nativeSetFilePriorities]. 0 = ok, negative = error.
- */
+/** Two-phase magnet: `hold != 0` fetches metadata but requests NO pieces until [nativeSetFilePriorities]. */
 expect fun nativeSetHoldData(handle: Long, hash: String, hold: Int): Int
 
-/** Pauses a torrent. */
 expect fun nativePause(handle: Long, hash: String): Int
 
-/** Resumes a paused torrent. */
 expect fun nativeResume(handle: Long, hash: String): Int
 
-/** Removes a torrent. 0 = ok, negative = error. */
 expect fun nativeRemove(handle: Long, hash: String): Int
 
-/**
- * Renames one file of a torrent (index into its file table). The engine
- * keeps writing to the original staged path; the rename affects the final
- * promotion and the UI display. 0 = ok, negative = invalid name/error.
- */
+/** `file` indexes the file table; only the final promotion and the display name use the new name. */
 expect fun nativeRenameFile(handle: Long, hash: String, file: Int, name: String): Int
 
-/**
- * Renames the torrent itself (display name only). 0 = ok, negative = error.
- */
+/** Display name only; never renames files on disk. */
 expect fun nativeRenameTorrent(handle: Long, hash: String, name: String): Int
-
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
 
 /** Progress in 0.0..1.0. */
 expect fun nativeProgress(handle: Long, hash: String): Double
 
-/** Bytes downloaded (payload) for a torrent. */
+/** Payload bytes only, no protocol overhead. */
 expect fun nativeDownloaded(handle: Long, hash: String): Long
 
-/** True once all pieces are verified. */
 expect fun nativeIsComplete(handle: Long, hash: String): Boolean
 
-/** Mirrored metainfo JSON for a torrent, or null when unknown (magnet). */
+/** Mirrored metainfo JSON, null while a magnet has no metadata yet. */
 expect fun nativeTorrentInfo(handle: Long, hash: String): String?
 
 expect fun nativeTorrentInfoRaw(handle: Long, hash: String): String?
 
-/** All torrents' persisted state as a JSON array. */
 expect fun nativeTorrentStates(handle: Long): String
 
-/** Live peer snapshot of a torrent as a JSON array. */
 expect fun nativePeers(handle: Long, hash: String): String
 
 /**
- * One batched UI snapshot: `{"dht":n,"torrents":[{"h","p","d","c","paused",
- * "have","hx","name","size","pieces","meta"},…]}`. Replaces the per-torrent
- * query fan-out (progress/downloaded/isComplete/torrentInfo) with one call.
+ * One batched UI snapshot: `{"dht":n,"torrents":[{"h","p","d","c","paused","have","hx","name","size","pieces","meta"},…]}`.
  */
 expect fun nativeSnapshot(handle: Long): String
 
-/** Number of torrents in the engine. */
 expect fun nativeTorrentCount(handle: Long): Int
 
-/** Current DHT routing-table size. */
 expect fun nativeDhtNodeCount(handle: Long): Int
 
-/** Our 20-byte peer id, hex-encoded. */
+/** Our peer id: 20 bytes, hex-encoded. */
 expect fun nativePeerId(handle: Long): String
 
-/** Global wire counters JSON: `{"d":down,"u":up}`. */
+/** Global wire counters: `{"d":down,"u":up}`. */
 expect fun nativeTotals(handle: Long): String
 
 expect fun nativeStats(handle: Long): String
 
-/** Export a signed proof-of-download receipt (JSON) or `{"error":"…"}`. */
+/** Signed proof-of-download receipt JSON, or `{"error":"…"}`. */
 expect fun nativeExportReceipt(
     handle: Long,
     hash: String,
@@ -177,84 +107,53 @@ expect fun nativeExportReceipt(
     epochEnd: Long,
 ): String?
 
-/** Verify a receipt JSON; returns a `ReceiptVerifyResultDto` JSON. */
+/** Returns a `ReceiptVerifyResultDto` JSON. */
 expect fun nativeVerifyReceipt(handle: Long, json: String): String?
 
-// ---------------------------------------------------------------------------
-// Windows system integration (firewall / ICS) — no engine handle needed
-// ---------------------------------------------------------------------------
-
 /**
- * Add inbound Windows firewall rules for `port` (TCP+UDP). Returns
- * `{"ok":bool,"message":".."}`. May fail when not elevated — use
- * [nativeFirewallAddElevated] for the one-time UAC retry. Android always
- * reports `"仅 Windows 支持"`.
+ * Adds TCP+UDP inbound rules for `port`, returning `{"ok":bool,"message":".."}`. Retry through
+ * [nativeFirewallAddElevated] when not elevated; Android answers with a Windows-only error.
  */
 expect fun nativeFirewallAdd(port: Int): String
 
-/** Retry [nativeFirewallAdd] through a single UAC elevation prompt. */
+/** Retries through a single UAC elevation prompt. */
 expect fun nativeFirewallAddElevated(port: Int): String
 
-/** Remove the inbound firewall rules for `port`. */
 expect fun nativeFirewallRemove(port: Int): String
 
-/** Whether the firewall rules for `port` exist. */
 expect fun nativeFirewallStatus(port: Int): String
 
-/** Query whether Internet Connection Sharing is enabled. */
 expect fun nativeIcsStatus(): String
 
-/** Enable Internet Connection Sharing (explicit, admin-gated). */
+/** Explicit, admin-gated action. */
 expect fun nativeIcsEnable(): String
 
-/** Disable Internet Connection Sharing on all shared connections. */
 expect fun nativeIcsDisable(): String
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-/** Sets global download/upload limits in bytes per second (0 = unlimited). */
+/** Limits in bytes per second; 0 = unlimited. */
 expect fun nativeSetGlobalLimits(handle: Long, downBytesPerSec: Long, upBytesPerSec: Long): Int
 
-/** Applies session defaults for torrents added from now on. */
+/** Applies session defaults to torrents added from now on. */
 expect fun nativeSetSessionConfig(handle: Long, configJson: String): Int
 
-// ---------------------------------------------------------------------------
-// Selective download + runtime trackers (typebit 0.1.1)
-// ---------------------------------------------------------------------------
-
-/** Sets one file's priority: 0=Skip, 1=Normal, 2=High. 0 = ok, negative = err. */
+/** Priority: 0=Skip, 1=Normal, 2=High. 0 = ok, negative = error. */
 expect fun nativeSetFilePriority(handle: Long, hash: String, file: Int, priority: Int): Int
 
-/** Current per-file priorities of a torrent as a JSON array (or null). */
 expect fun nativeFilePriorities(handle: Long, hash: String): String?
 
-/** Adds a tracker URL to a running torrent. 0 = ok, negative = err. */
 expect fun nativeAddTracker(handle: Long, hash: String, url: String): Int
 
-/** Removes a tracker URL from a running torrent. 0 = ok, negative = err. */
 expect fun nativeRemoveTracker(handle: Long, hash: String, url: String): Int
 
-/** Current tracker URLs of a torrent as a JSON array (or null). */
 expect fun nativeTrackers(handle: Long, hash: String): String?
 
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
-/** Serialized resume state (torrents + DHT nodes), or null. */
+/** Serialized resume state: torrents + DHT nodes. */
 expect fun nativeSaveState(handle: Long): ByteArray?
 
-/** Restores resume state into the engine. */
 expect fun nativeLoadState(handle: Long, data: ByteArray): Int
 
-// ---------------------------------------------------------------------------
-// Polling
-// ---------------------------------------------------------------------------
-
-/** Drains pending engine events as one JSON array. */
+/** Drains (consumes) the pending queue into one JSON array. */
 expect fun nativeTakeEvents(handle: Long): String
 
-/** Drains pending engine log lines as one JSON array. */
+/** Drains (consumes) the pending queue into one JSON array. */
 expect fun nativeTakeLogs(handle: Long): String

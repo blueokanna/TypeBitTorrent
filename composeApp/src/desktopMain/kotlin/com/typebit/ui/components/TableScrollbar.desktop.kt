@@ -11,12 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/**
- * A real, visible, draggable horizontal scrollbar for the desktop table.
- * The default skiko style is a transparent track with a dark-gray thumb
- * that only shows on hover — effectively invisible on a light surface.
- * Theming it against Material surfaces keeps it findable and draggable.
- */
+// A draggable scrollbar themed against Material: the default skiko thumb is effectively invisible
+// on a light surface.
 @Composable
 actual fun HorizontalTableScrollbar(
     hState: ScrollState,

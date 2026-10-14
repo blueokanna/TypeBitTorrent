@@ -1,14 +1,7 @@
 package com.typebit.search
 
-/**
- * 1337x search engine — general movies / TV / software / games torrents.
- *
- * The list page has no magnet URIs (only detail links), so the engine
- * scrapes the search table and then visits each top result's detail page to
- * extract the magnet — human-paced with per-request delays. Multiple mirrors
- * are tried in order because 1337x rotates domains; a Cloudflare challenge
- * on one mirror falls through to the next.
- */
+// 1337x engine: the list page has no magnet URIs, so each top result's detail page is visited (bounded and
+// paced) for one. Mirrors are tried in order; a Cloudflare challenge falls through to the next.
 class X1337xEngine(private val http: SearchHttpClient) : TorrentSearchEngine {
     override val name = "1337x"
 
@@ -28,7 +21,6 @@ class X1337xEngine(private val http: SearchHttpClient) : TorrentSearchEngine {
             if (http.isChallenge(html)) continue
             val rows = parseRows(html, base)
             if (rows.isEmpty()) continue
-            // Fetch magnets from detail pages (bounded + paced).
             val out = mutableListOf<TorrentSearchResult>()
             for (r in rows.take(10)) {
                 val magnet = fetchMagnet(r.detailUrl, base)
@@ -46,7 +38,6 @@ class X1337xEngine(private val http: SearchHttpClient) : TorrentSearchEngine {
         for (tr in trRe.findAll(html)) {
             val row = tr.value
             if (!row.contains("coll-2")) continue
-            // Detail link: <td class="coll-2"><a href="/torrent/...">Title</a></td>
             val link =
                     Regex("""<td[^>]*class="[^"]*coll-2[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
                             .find(row)

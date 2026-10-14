@@ -1,39 +1,27 @@
 package com.typebit.platform
 
-/**
- * 边下边播 (stream-while-downloading) seam.
- *
- * Hands a media file to the platform's player. The path may point at a
- * still-downloading `<name>.part` staged file — the engine's streaming
- * scheduler verifies pieces head-first then strictly in file order, so once
- * the file's head is downloaded the player can start and keep streaming the
- * body as it lands. Returns `false` when the file is missing or empty.
- */
+// 边下边播 seam. The path may be a still-downloading `<name>.part`; the streaming scheduler verifies pieces
+// head-first and then in file order, so playback can start as soon as the file's head has landed.
 expect fun playMediaFile(path: String): Boolean
 
-/** True when a filename is a playable video (ts/avi/rmvb/wmv/mp4/…). */
 fun isVideoFile(name: String): Boolean = extensionOf(name) in VIDEO_EXTENSIONS
 
-/** True when a filename is any media the platform player can open (video or audio). */
 fun isMediaFile(name: String): Boolean {
     val ext = extensionOf(name)
     return ext in VIDEO_EXTENSIONS || ext in AUDIO_EXTENSIONS
 }
 
-/** Lowercase extension of a path, `""` when there is none. */
 private fun extensionOf(name: String): String {
     val base = name.substringAfterLast('/').substringAfterLast('\\')
     if (base.isEmpty() || base.startsWith(".") && base.count { it == '.' } == 1) return ""
     return base.substringAfterLast('.', "").lowercase()
 }
 
-/** Video container extensions the streaming scheduler treats as playback-first. */
 private val VIDEO_EXTENSIONS = setOf(
     "mp4", "mkv", "avi", "webm", "mov", "m4v",
     "ts", "flv", "wmv", "mpg", "mpeg", "rmvb", "rm", "3gp", "ogv",
 )
 
-/** Audio containers the platform player can stream the same way. */
 private val AUDIO_EXTENSIONS = setOf(
     "mp3", "flac", "m4a", "aac", "wav", "ogg", "opus", "wma", "ape",
 )

@@ -85,10 +85,7 @@ class Strings private constructor(private val values: Map<TextKey, String>) {
 
 val LocalStrings = staticCompositionLocalOf { simplifiedChinese }
 
-/**
- * Applies the persisted app language immediately. `system` resolves once for
- * the current process; explicit selections are deterministic across platforms.
- */
+/** Applies the persisted app language; `system` is resolved once per process. */
 @Composable
 fun LocalizedContent(language: String, content: @Composable () -> Unit) {
     val resolved = if (language == SYSTEM_LANGUAGE) languageFromSystem() else language

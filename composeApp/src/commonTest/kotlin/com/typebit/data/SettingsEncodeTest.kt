@@ -5,12 +5,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 
-/**
- * The WebUI reads settings and posts them straight back, so the JSON it gets
- * must be the *whole* model: a field omitted from the response is a field the
- * browser cannot send back, and the server then decodes it as its default —
- * which is how a saved switch quietly resets itself.
- */
+// The WebUI reads settings and posts them straight back, so the JSON must be the *whole* model: a field
+// omitted here cannot be sent back by the browser, and it then resets itself on save.
 class SettingsEncodeTest {
 
     private val json = Json {

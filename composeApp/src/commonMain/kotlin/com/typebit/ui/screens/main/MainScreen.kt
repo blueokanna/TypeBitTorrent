@@ -6,7 +6,6 @@ import com.typebit.platform.Platform
 import com.typebit.store.AppState
 import com.typebit.store.AppStore
 
-/** Adaptive entry: desktop gets the sidebar+table layout, mobile gets bottom nav. */
 @Composable
 fun MainScreen(
     state: AppState,

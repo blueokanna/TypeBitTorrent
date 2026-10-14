@@ -2,10 +2,7 @@ package com.typebit.ui.monet
 
 import kotlin.math.roundToInt
 
-/**
- * A tonal palette: 100 HCT colors of one hue/chroma across all tones.
- * Material You builds every surface/container color from these.
- */
+/** A tonal palette: 100 HCT colors of one hue/chroma across all tones. */
 class TonalPalette internal constructor(
     private val hue: Double,
     private val chroma: Double,
@@ -21,7 +18,6 @@ class TonalPalette internal constructor(
     companion object {
         fun of(hue: Double, chroma: Double): TonalPalette = TonalPalette(hue, chroma)
 
-        /** Palette for a seed color. */
         fun of(argb: Int): TonalPalette {
             val h = hctOf(argb)
             return TonalPalette(h.hue, h.chroma)

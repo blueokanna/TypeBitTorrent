@@ -14,11 +14,8 @@ import com.typebit.data.FontChoice
 import com.typebit.ui.monet.DynamicScheme
 import com.typebit.ui.wallpaper.WallpaperLayer
 
-/**
- * Semantic status colors used by progress bars, badges and speed chips.
- * Deliberately NOT derived from the dynamic palette — status must stay
- * recognizable in both light and dark, on any wallpaper.
- */
+/** Semantic status colors: deliberately independent of the dynamic palette so they
+ * stay recognizable in both light and dark, on any wallpaper. */
 @Immutable
 object StatusColors {
     val Download = Color(0xFF1E88E5)
@@ -29,10 +26,6 @@ object StatusColors {
     val Metadata = Color(0xFF8E24AA)
 }
 
-/**
- * App-wide semantic colors. Components read [LocalStatusColors] so they can
- * be themed once; nothing hard-codes ARGB in the UI layer anymore.
- */
 @Immutable
 data class StatusColorSet(
     val download: Color = StatusColors.Download,
@@ -45,39 +38,27 @@ data class StatusColorSet(
 
 val LocalStatusColors = staticCompositionLocalOf { StatusColorSet() }
 
-/** Re-exported accessor for ergonomics. */
 object TypeBitThemeColors {
     val status: StatusColorSet @Composable get() = LocalStatusColors.current
     val colorScheme: ColorScheme @Composable get() = MaterialTheme.colorScheme
 }
 
-/**
- * The single theme entry point.
- *
- * Builds the Material-You (Monet) [ColorScheme] from a seed ARGB via the
- * pure-Kotlin HCT/CAM16 engine, then lays the whole app over the optional
- * wallpaper (gaussian blur + DIM + readability scrim) so text stays legible
- * on any image. AMOLED mode pins dark surfaces to pure black.
- *
- * Light mode uses a white scrim and dark on-surface roles (black text);
- * dark/AMOLED use a black scrim and light on-surface roles (white text).
- * The scrim strength and blur radius come from settings, so the preview in
- * the settings screen shows exactly what the app will look like.
- */
+/** Theme entry point: Monet [ColorScheme] from a seed ARGB via the HCT/CAM16 engine, the
+ * optional wallpaper over a scrim (white in light mode, black in dark/AMOLED) and
+ * pure-black dark surfaces when AMOLED. */
 @Composable
 fun TypeBitTheme(
     seedArgb: Int,
     darkTheme: Boolean,
     amoled: Boolean = false,
-    /** Bundled Google Font stack (see [com.typebit.data.FontChoice]). */
     fontChoice: FontChoice = FontChoice.DEFAULT,
-    /** Pre-blurred wallpaper bitmap (see [com.typebit.ui.wallpaper.blurWallpaper]). */
+    /** Pre-blurred wallpaper bitmap. */
     wallpaper: ImageBitmap? = null,
     wallpaperEnabled: Boolean = false,
     wallpaperDim: Float = 0.45f,
     wallpaperFit: Boolean = false,
     wallpaperOffsetY: Float = 0f,
-    /** Average wallpaper luminance 0..1 (drives auto-contrast scrim). */
+    /** Average wallpaper luminance 0..1 (drives the auto-contrast scrim). */
     wallpaperBrightness: Float = 0.5f,
     content: @Composable () -> Unit,
 ) {
@@ -137,14 +118,8 @@ fun TypeBitTheme(
     }
 }
 
-/**
- * Wallpaper handling:
- * - `background` stays SEMI-transparent so the wallpaper is clearly visible
- *   in the empty background (this is the whole point of a wallpaper).
- * - Every component surface (cards, fields, bars) is essentially OPAQUE
- *   (0.98) so text stays crisp and wallpaper watermarks never bleed through
- *   controls — that was the "elements look overlapped" bug.
- */
+// Semi-transparent background (the wallpaper must stay visible) but effectively opaque
+// component surfaces (0.98): translucent surfaces let wallpaper bleed through controls.
 private fun ColorScheme.withTranslucentSurfaces(): ColorScheme = copy(
     background = background.copy(alpha = 0.90f),
     surface = surface.copy(alpha = 0.98f),

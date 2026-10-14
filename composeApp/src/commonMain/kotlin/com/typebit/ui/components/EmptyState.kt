@@ -27,11 +27,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.typebit.ui.theme.TypeBitThemeColors
 
-/**
- * MD3-Expressive empty state: the brand glyph sits in a large tinted
- * container (primaryContainer) with a soft scale-in — friendlier than a
- * flat gray icon and instantly readable on any wallpaper.
- */
 @Composable
 fun EmptyState(
     title: String,
@@ -65,7 +60,6 @@ fun EmptyState(
                 modifier = Modifier.size(44.dp),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
             )
-            // Small decorative dot to echo the "activity" motif.
             Box(
                 Modifier
                     .align(Alignment.BottomEnd)

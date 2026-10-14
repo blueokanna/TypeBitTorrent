@@ -116,7 +116,7 @@ every one of these on the command line; see [nas.md](./nas.md).
 `diskCacheBytes` and `saveResumeDataIntervalSec` are **live at engine
 start** / for the poll loop respectively. The remaining options (uTP mode,
 socket backlog, tracker retry policy, peer resolution, …) are **stored**
-for qBittorrent familiarity; the 0.1.1 engine does not expose setters for
+for qBittorrent familiarity; typebit 0.1.9 does not expose setters for
 them.
 
 ## RSS
@@ -128,5 +128,5 @@ XML parser. `smartEpisodeFilter` and the auto-download reporter are stored.
 
 "live for new torrents" means the value is pushed to the engine's
 `SessionConfig` and applies to torrents added afterwards. Tracker URLs and
-per-file priorities ARE runtime-settable in typebit 0.1.1 (add/remove
+per-file priorities ARE runtime-settable in typebit 0.1.9 (add/remove
 without restart, selective download), so the detail tabs apply them live.

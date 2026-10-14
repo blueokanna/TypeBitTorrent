@@ -7,12 +7,8 @@ import java.awt.Frame
 import java.io.File
 import javax.swing.JFileChooser
 
-/**
- * Desktop picker: a multi-file selection builds a flat torrent, a folder
- * selection builds a multi-file torrent whose root is the folder itself
- * (qBittorrent behaviour). `JFileChooser` is used instead of `FileDialog`
- * because it selects directories reliably on Windows and Linux too.
- */
+// Desktop picker: a folder selection becomes the torrent's root directory (qBittorrent behaviour);
+// `JFileChooser` is used because `FileDialog` cannot select directories reliably.
 @Composable
 actual fun rememberCreateTorrentPicker(
     onPicked: (List<CreateTorrentInput>) -> Unit,
@@ -42,9 +38,6 @@ actual fun rememberCreateTorrentPicker(
             if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
                 val root = chooser.selectedFile
                 if (root != null && root.isDirectory) {
-                    // The folder name becomes the torrent root directory, so
-                    // the rel paths start with it (mirrors how a folder
-                    // torrent is laid out).
                     val picked =
                             walkDirectory(root).map { rel ->
                                 CreateTorrentInput(
@@ -60,7 +53,6 @@ actual fun rememberCreateTorrentPicker(
     }
 }
 
-/** Recursively lists a directory's files, each as path components relative to [root]. */
 private fun walkDirectory(root: File): List<List<String>> {
     val out = ArrayList<List<String>>()
     fun walk(dir: File, prefix: List<String>) {

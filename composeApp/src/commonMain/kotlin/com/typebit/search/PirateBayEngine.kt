@@ -1,12 +1,7 @@
 package com.typebit.search
 
-/**
- * The Pirate Bay search engine.
- *
- * The search result page carries the magnet URIs directly (no detail-page
- * round trip). Mirrors are tried in order because TPB rotates them; a
- * Cloudflare / geo-block on one falls through to the next.
- */
+// The Pirate Bay engine: the result page carries magnet URIs directly. Mirrors are tried in order because
+// TPB rotates domains; a Cloudflare or geo-block on one falls through to the next.
 class PirateBayEngine(private val http: SearchHttpClient) : TorrentSearchEngine {
     override val name = "The Pirate Bay"
 
@@ -35,11 +30,9 @@ class PirateBayEngine(private val http: SearchHttpClient) : TorrentSearchEngine 
         for (tr in trRe.findAll(html)) {
             val row = tr.value
             val magnet = SearchHtml.magnetIn(row) ?: continue
-            // Title: <div class="detName"><a href="/torrent/...">Title</a></div>
             val title = SearchHtml.tagText(row, "a", """href="/torrent/""")
             if (title.isBlank()) continue
             if (title.length > 500) continue
-            // Size: <font class="detDesc">Uploaded ..., Size 1.2GiB, ...</font>
             var size = ""
             val desc =
                     Regex("""<font[^>]*class="[^"]*detDesc[^"]*"[^>]*>(.*?)</font>""", RegexOption.DOT_MATCHES_ALL)
@@ -57,8 +50,6 @@ class PirateBayEngine(private val http: SearchHttpClient) : TorrentSearchEngine 
                             ?.get(1)
                             ?.trim()
                             .orEmpty()
-            // Seeders / leechers: <td class="vertTh"><center>N</center></td>
-            // — the first two such cells after the title are seeds/leeches.
             val verts =
                     Regex("""<td[^>]*class="[^"]*vertTh[^"]*"[^>]*>\s*<center>\s*(\d+)\s*</center>""")
                             .findAll(row)

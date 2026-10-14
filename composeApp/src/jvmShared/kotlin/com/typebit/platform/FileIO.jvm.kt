@@ -2,10 +2,6 @@ package com.typebit.platform
 
 import java.io.File
 
-/**
- * JVM-shared actual: Android and desktop both run on a JVM, so `java.io.File`
- * semantics are identical.
- */
 actual object FileIO {
     actual fun child(parent: String, name: String): String = File(parent, name).absolutePath
 

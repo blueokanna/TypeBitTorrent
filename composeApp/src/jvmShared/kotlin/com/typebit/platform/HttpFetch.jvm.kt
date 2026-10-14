@@ -5,13 +5,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.GZIPInputStream
 
-/**
- * JVM-shared actual (Android + desktop): `HttpURLConnection` GET with
- * caller-supplied headers, gzip decoding and header/status passthrough.
- * Redirects are followed automatically (the search sites use HTTP 3xx for
- * canonical/mirror URLs); cookie state lives in the caller so each engine
- * keeps its own session.
- */
+// JVM actual (Android + desktop): `HttpURLConnection` GET with caller-supplied headers and gzip decoding.
+// Redirects are followed (search sites 3xx to mirrors); cookie state lives in the caller.
 actual fun fetchHttp(
     url: String,
     headers: Map<String, String>,

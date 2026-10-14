@@ -18,11 +18,12 @@ kotlin {
     jvm("desktop")
 
     sourceSets {
-        val jvmShared by creating {
-            dependsOn(commonMain.get())
-        }
-
-        val desktopMain by getting
+        // `by getting` / `by creating` are deprecated since Gradle 9.6.
+        val commonMain = getByName("commonMain")
+        val androidMain = getByName("androidMain")
+        val desktopMain = getByName("desktopMain")
+        val jvmShared = create("jvmShared") { dependsOn(commonMain) }
+        val commonTest = getByName("commonTest")
 
         commonMain.dependencies {
             implementation(compose.runtime)
@@ -37,10 +38,8 @@ kotlin {
             implementation(libs.kotlinx.datetime)
         }
 
-        val commonTest by getting {
-            dependencies {
-                implementation(kotlin("test"))
-            }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
         }
 
         androidMain.dependencies {
@@ -48,7 +47,7 @@ kotlin {
             implementation(libs.androidx.core.ktx)
             implementation(compose.preview)
         }
-        androidMain.get().dependsOn(jvmShared)
+        androidMain.dependsOn(jvmShared)
 
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)

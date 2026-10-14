@@ -56,7 +56,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Supported piece sizes; 128 MiB / 256 MiB are first-class options. */
 private val PIECE_SIZES: List<Long> =
     listOf(
         16L * 1024,
@@ -83,7 +82,6 @@ private fun pieceLabel(b: Long): String =
         else -> "${b / 1024} KiB"
     }
 
-/** One `label: value` line in the creation-result card. */
 @Composable
 private fun ResultRow(label: String, value: String) {
     Row(
@@ -108,12 +106,8 @@ private fun ResultRow(label: String, value: String) {
 private const val PIECE_AUTO_MIN = 16L * 1024
 private const val PIECE_AUTO_MAX = 16L * 1024 * 1024
 
-/**
- * Piece length that keeps a torrent's piece count around ~2 000 — the
- * qBittorrent-class default. Clamped to 16 KiB..16 MiB so we never emit a
- * million-piece torrent (unusable) or a 256 MiB-piece torrent for a 40 MiB
- * file (equally unusable).
- */
+// Piece length keeping the count near ~2000 (qBittorrent-class), clamped to
+// 16 KiB..16 MiB so we never emit a million-piece or a 256 MiB-piece torrent.
 private fun recommendPieceLength(totalBytes: Long): Long {
     if (totalBytes <= 0L) return 256L * 1024
     var size = PIECE_AUTO_MIN
@@ -121,11 +115,9 @@ private fun recommendPieceLength(totalBytes: Long): Long {
     return size
 }
 
-/** Nearest selectable piece size for an arbitrary byte count. */
 private fun nearestPieceSize(bytes: Long): Long =
     PIECE_SIZES.minByOrNull { kotlin.math.abs(it - bytes) } ?: (4L * 1024 * 1024)
 
-/** 制作种子（BEP-3 v1 .torrent）：文件/文件夹、分块、Tracker 分层、私有标记、进度与取消。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateTorrentScreen(
@@ -149,13 +141,11 @@ fun CreateTorrentScreen(
     var resultInfo by remember { mutableStateOf<com.typebit.engine.TorrentInfoDto?>(null) }
     val scope = rememberCoroutineScope()
 
-    // Total payload size drives the auto piece size and the estimate row.
     val totalBytes = remember(inputs) { inputs.sumOf { FileIO.size(it.absPath).coerceAtLeast(0L) } }
 
     val picker = rememberCreateTorrentPicker { picked ->
         inputs = picked
         if (name.isBlank() && picked.isNotEmpty()) {
-            // A folder pick yields `["<folder>", …]`; a file pick `["<name>.ext"]`.
             name = picked[0].relPath.first().substringBeforeLast('.')
         }
         if (autoPiece) pieceLength = nearestPieceSize(recommendPieceLength(totalBytes))
@@ -164,11 +154,9 @@ fun CreateTorrentScreen(
         status = null
     }
 
-    // Staged copies (Android) are only needed while this screen lives.
     DisposableEffect(Unit) { onDispose { picker.cleanup() } }
 
-    // Progress polling: the native maker publishes done/total atomically and
-    // the UI samples it while a build is in flight.
+    // Progress polling: the native maker publishes done/total atomically.
     LaunchedEffect(busy) {
         if (busy) {
             while (true) {
@@ -225,8 +213,7 @@ fun CreateTorrentScreen(
             } else {
                 doneBytes = bytes
                 doneName = "$effectiveName.torrent"
-                // Show the REAL identity of what was produced (infohash from
-                // the engine's own parser, not a re-implementation).
+                // Real identity of what was produced: infohash from the engine's own parser.
                 resultInfo =
                     withContext(Dispatchers.Default) {
                         runCatching { store.parseTorrentFile(bytes) }.getOrNull()
@@ -287,9 +274,6 @@ fun CreateTorrentScreen(
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    // The list can be long for a folder pick: cap the rows
-                    // rendered and keep the container non-scrolling (the page
-                    // itself scrolls).
                     if (inputs.isNotEmpty()) {
                         Text(
                             "已选 ${inputs.size} 个文件 · ${Format.bytes(totalBytes)}",
@@ -504,13 +488,9 @@ fun CreateTorrentScreen(
                         val bytes = doneBytes
                         val fileName = doneName.ifBlank { "new.torrent" }
                         if (bytes != null) {
-                            // Track what was just created right away — the
-                            // usual next step after making a torrent is to
-                            // seed it. The engine starts a session with an
-                            // empty bitfield, so the files it was just built
-                            // from are only visible to it after one
-                            // verification pass — without it the client would
-                            // re-download its own source data.
+                            // Track what was just created: the usual next step is to seed it. The
+                            // engine starts with an empty bitfield, so without one verification pass
+                            // it would re-download its own source data.
                             val hash = store.parseTorrentFile(bytes)?.hash
                             store.addTorrentFile(bytes, fileName)
                             if (hash != null) store.recheck(hash)

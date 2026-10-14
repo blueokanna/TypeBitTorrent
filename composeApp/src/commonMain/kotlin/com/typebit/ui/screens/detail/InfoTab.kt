@@ -22,7 +22,6 @@ import com.typebit.platform.formatDateTime
 import com.typebit.ui.components.LabelValueRow
 import com.typebit.ui.util.Format
 
-/** 信息 tab — transfer + general sections (qBittorrent/BitComet style). */
 @Composable
 fun InfoTab(torrent: Torrent, modifier: Modifier = Modifier) {
     Column(
@@ -50,7 +49,6 @@ fun InfoTab(torrent: Torrent, modifier: Modifier = Modifier) {
         LabelValueRow("名称", torrent.name)
         LabelValueRow("保存路径", torrent.saveDir)
         if (torrent.status != TorrentStatus.SEEDING) {
-            // 下载未完成：引擎写入 <name>.part，全部校验通过后才重命名为最终名。
             LabelValueRow("暂存方式", "未完成，文件暂存为 .part，校验通过后自动重命名")
         }
         LabelValueRow("总大小", Format.bytesDetailed(torrent.sizeBytes))

@@ -6,49 +6,29 @@ import java.security.SecureRandom
 import java.util.Base64
 
 /**
- * Password hashing, sessions and brute-force throttling for the built-in WebUI.
- *
- * Design notes:
- * * Password hashing lives in [com.typebit.platform.hashWebUiPassword] so the
- *   desktop UI, the phone UI and the server all write the exact same
- *   `pbkdf2$…` value — plaintext is never stored or logged, and verification is
- *   constant-time.
- * * Sessions are 256-bit random tokens kept in memory only — a restart logs
- *   everyone out (acceptable, and it means no session secret has to live on
- *   disk). The cookie is `HttpOnly; SameSite=Strict`, so a browser never
- *   exposes it to scripts or cross-site requests.
- * * Failed logins are counted per client address; too many in a row bans that
- *   address for the configured duration (qBittorrent-style), so a NAS exposed
- *   on a LAN cannot be brute-forced at speed.
+ * WebUI password hashing, 256-bit in-memory session tokens (never derived from the password, behind an
+ * `HttpOnly; SameSite=Strict` cookie) and per-address login throttling. Plaintext is never stored or logged.
  */
 internal object WebUiCrypto {
     private val random = SecureRandom()
     private val encoder: Base64.Encoder = Base64.getUrlEncoder().withoutPadding()
 
-    /** Hashes a password into the storable `pbkdf2$…` form. */
     fun hash(password: String): String = hashWebUiPassword(password)
 
-    /** True when [password] matches a stored `pbkdf2$…` value (constant time). */
+    /** Constant-time comparison against a stored `pbkdf2$…` value. */
     fun verify(password: String, stored: String): Boolean =
         verifyWebUiPassword(password, stored)
 
-    /** A fresh 256-bit session token (URL-safe, no padding). */
     fun newToken(): String {
         val raw = ByteArray(32).also { random.nextBytes(it) }
         return encoder.encodeToString(raw)
     }
 }
 
-/** One authenticated browser session. */
 internal class Session(val token: String, val username: String, val expiresAt: Long)
 
-/**
- * In-memory session table + per-address login throttling.
- *
- * Bounded on purpose: an unauthenticated caller cannot grow the maps without
- * bound (a session only appears after a successful login, and the failure map
- * is pruned on every attempt).
- */
+// Sessions and failure counts are bounded on purpose: entries only appear after a real login or attempt,
+// and the failure map is pruned on every attempt.
 internal class WebUiSessions(
     private val timeoutMinutes: Long,
     private val maxFailures: Int,
@@ -63,7 +43,6 @@ internal class WebUiSessions(
 
     fun isBanned(client: String, now: Long): Boolean = (bannedUntil[client] ?: 0L) > now
 
-    /** Records a failed attempt; returns the ban duration when it just triggered. */
     fun recordFailure(client: String, now: Long): Long {
         val count = (failures[client] ?: 0) + 1
         failures[client] = count

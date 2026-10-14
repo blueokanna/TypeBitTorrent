@@ -5,11 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Validates the HCT engine against the official Material You test vectors
- * (from material-color-utilities Cam16/Hct tests) plus exact round-trips.
- * If these fail, the dynamic-color pipeline is wrong.
- */
+/** Validates the HCT engine against the official Material You (material-color-utilities) test vectors. */
 class HctTest {
 
     private fun assertClose(expected: Double, actual: Double, tolerance: Double, what: String) {

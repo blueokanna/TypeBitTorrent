@@ -33,16 +33,8 @@ import com.typebit.ui.screens.settings.CompactDropdown
 import com.typebit.ui.util.Format
 
 /**
- * qBittorrent-style torrent file tree.
- *
- * A torrent's file list is flat, but users think in directories. [buildFileTree]
- * reconstructs the nested structure from each file's path segments, so the add
- * dialog and the detail Files tab can show collapsible folders with aggregate
- * sizes, tri-state selection and "mixed" priorities — exactly like qBittorrent.
- *
- * The view is stateless about *which* files are selected/prioritised; the
- * caller owns `isSelected`/`priority` keyed by the flat file index. Directory
- * rows derive their state from all descendant leaves.
+ * qBittorrent-style file tree: nested folders are rebuilt from flat file paths
+ * (see [buildFileTree]); selection/priority state stays with the caller.
  */
 
 /** One leaf file, keyed by its position in the torrent's flat file list. */
@@ -52,7 +44,6 @@ data class TreeLeaf(
     val length: Long,
 )
 
-/** A node in the reconstructed file tree (directory or file). */
 class FileTreeNode(
     /** Path key: `d:<path>` for directories, `f:<index>` for files. */
     val key: String,
@@ -67,12 +58,6 @@ class FileTreeNode(
     val leafIndices: List<Int>,
 )
 
-/**
- * Rebuild the nested file tree from a flat list of files.
- *
- * Directories always sort before files, and both sort alphabetically (the
- * qBittorrent layout). Single-file torrents yield one leaf at depth 0.
- */
 fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
     // Path -> child nodes built so far (directories only). "" is the virtual root.
     val childrenOf = mutableMapOf<String, MutableList<Pair<String, String>>>()
@@ -84,7 +69,6 @@ fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
         childrenOf.getOrPut(parentKey) { mutableListOf() }.add(dirKey to name)
     }
 
-    // Pass 1: register every directory and file into its parent's bucket.
     for (f in files) {
         val segs = f.path.filter { it.isNotEmpty() }
         if (segs.isEmpty()) {
@@ -93,10 +77,7 @@ fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
             continue
         }
         var parentKey = ""
-        // The PARENT'S NODE key ("d:<path>", "" for root). Nested directories
-        // must be registered under this bucket — using the bare path ("d")
-        // instead orphaned every deeper level (a directory's children bucket
-        // is keyed by its NODE key, not its bare path).
+        // Children buckets are keyed by the NODE key ("d:<path>"), not the bare path.
         var parentDirKey = ""
         for (i in 0 until segs.lastIndex) {
             val seg = segs[i]
@@ -106,18 +87,12 @@ fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
             parentDirKey = "d:$key"
         }
         val leafKey = "f:${f.index}"
-        // A single-segment path (path = ["name"], i.e. a root-level file)
-        // leaves parentKey == "". It must land in the ROOT bucket (""), not
-        // a phantom "d:" directory — the old code bucketed it as "d:", the
-        // root stayed empty, and the whole tree rendered ZERO rows for any
-        // torrent whose files live at the top level. This is the root cause
-        // of "文件树空白 / 无法选择文件".
+        // Root-level files must land in the "" bucket; bucketing them as "d:" emptied the whole tree.
         val bucket = if (parentKey.isEmpty()) "" else "d:$parentKey"
         childrenOf.getOrPut(bucket) { mutableListOf() }
             .add(leafKey to segs.last())
     }
 
-    // Pass 2: materialise nodes bottom-up (children before parents).
     val fileByIndex = files.associateBy { it.index }
 
     fun build(key: String, name: String, isDir: Boolean, depth: Int): FileTreeNode {
@@ -152,7 +127,6 @@ fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
         )
     }
 
-    // Root bucket entries: files first sorted alphabetically, dirs too.
     val rootEntries = (childrenOf[""] ?: emptyList())
         .sortedWith(compareBy({ !it.second.startsWith("d:") }, { it.first.lowercase() }))
     return rootEntries.map { (childKey, childName) ->
@@ -160,37 +134,16 @@ fun buildFileTree(files: List<TreeLeaf>): List<FileTreeNode> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Priority labels (engine values: 0=Skip, 1=Normal, 2=High)
-// ---------------------------------------------------------------------------
+// Engine priority values: 0 = skip, 1 = normal, 2 = high.
 
-/** Labels shown in the priority dropdown / directory rows. */
 val TREE_PRIORITY_LABELS = listOf("不下载", "正常", "高优先级")
 
-/** Dropdown options (engine priorities). */
 val TREE_PRIORITY_OPTIONS = listOf(0, 1, 2)
 
-/** Label for a directory whose children have differing priorities. */
 const val MIXED_PRIORITY_LABEL = "混合"
 
-/** Tri-state checkbox. */
 private enum class Tri { UNCHECKED, CHECKED, MIXED }
 
-/**
- * qBittorrent-style collapsible file tree.
- *
- * @param roots          root nodes from [buildFileTree].
- * @param isSelected     leaf selection by flat index.
- * @param priority       leaf priority (0/1/2) by flat index.
- * @param onToggleLeaf   (index, newSelected).
- * @param onToggleDir    (dirKey, newSelected) — apply to all descendants.
- * @param onPriorityLeaf (index, priority).
- * @param onPriorityDir  (dirKey, priority) — apply to all descendants.
- * @param onRename       optional rename callback (index) — Files tab only.
- * @param filter         optional substring filter on node names.
- * @param showSelection  false hides the checkboxes (detail Files tab, where
- *                       only priority + rename apply).
- */
 @Composable
 fun FileTreeView(
     roots: List<FileTreeNode>,
@@ -203,35 +156,24 @@ fun FileTreeView(
     onRename: ((Int) -> Unit)? = null,
     filter: String = "",
     showSelection: Boolean = true,
-    /** 边下边播: play callback (leaf index) — shown for [isVideo] leaves. */
     onPreview: ((Int) -> Unit)? = null,
-    /** Whether a leaf index is a playable media file (drives the preview button). */
     isVideo: ((Int) -> Boolean)? = null,
-    /** Applied to the list itself (the caller owns the height contract). */
     modifier: Modifier = Modifier,
 ) {
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val q = filter.trim()
-    // Snapshot the expansion map and key the flatten on it. A read inside the
-    // `remember` calculation is NOT a valid dependency for the calculation
-    // itself: Compose would recompose the caller but `remember` would keep
-    // returning the stale list, so collapsing/expanding a directory did
-    // nothing. Copying the map is O(toggled dirs) and keying on its content
-    // (`Map.equals`, not identity) recomputes exactly when a toggle changes.
+    // `remember` cannot observe reads made inside its own calculation: keying it on a
+    // content snapshot (Map.equals, not identity) is what makes toggles recompute the flatten.
     val expandedSnapshot = expanded.toMap()
     val visible = remember(roots, q, expandedSnapshot) {
         collectVisible(roots, q, expandedSnapshot)
     }
-    // LazyColumn crashes the composition on a duplicate key. The keys built
-    // from the torrent's file table are unique by construction, but a
-    // malformed file list (duplicate paths from a hand-crafted torrent) must
-    // degrade to a slightly merged view instead of killing the app.
+    // Duplicate keys crash LazyColumn; a malformed file list must degrade to a
+    // merged view rather than killing the app.
     val rows = remember(visible) { visible.distinctBy { it.key } }
 
     LazyColumn(modifier.fillMaxWidth()) {
         items(rows, key = { it.key }) { node ->
-            // Directories default to EXPANDED so the user immediately sees
-            // every file inside — the #1 complaint ("不知道种子里有什么").
             val open = expanded[node.key] ?: true
             val state = if (node.isDir) {
                 val sel = node.leafIndices.map(isSelected)
@@ -266,17 +208,12 @@ fun FileTreeView(
                 } else {
                     Spacer(Modifier.width(28.dp))
                 }
-                // Tap the name (not the checkbox) toggles the file too — the
-                // whole row is the hit target, matching qBittorrent.
                 Row(
                     Modifier.weight(1f).clickable {
                         val idx = node.leafIndex ?: -1
                         when {
                             node.isDir -> expanded[node.key] = !open
                             showSelection -> onToggleLeaf(idx, !isSelected(idx))
-                            // Detail tab (no checkboxes): tapping a playable
-                            // file opens it, so a full-width row is not a
-                            // dead hit target.
                             onPreview != null && isVideo?.invoke(idx) == true -> onPreview(idx)
                         }
                     },
@@ -360,12 +297,6 @@ fun FileTreeView(
     }
 }
 
-/**
- * Depth-first flatten. Directories expand by default; a COLLAPSED directory
- * hides its children (the arrow actually works now). A filter that matches
- * a descendant forces that subtree to be shown so the user always sees the
- * matching files ("筛选后不知道种子里有什么" is fixed by showing matches).
- */
 private fun collectVisible(
     nodes: List<FileTreeNode>,
     q: String,
@@ -379,7 +310,6 @@ private fun collectVisible(
                 out.add(n)
                 if (n.isDir && (expanded[n.key] ?: true)) walk(n.children)
             } else if (n.isDir && subtreeMatches(n, q)) {
-                // A non-matching parent still reveals matching descendants.
                 walk(n.children)
             }
         }
@@ -388,14 +318,9 @@ private fun collectVisible(
     return out
 }
 
-/** True when any descendant (recursively) matches the filter. */
 private fun subtreeMatches(node: FileTreeNode, q: String): Boolean =
     node.children.any { it.name.contains(q, ignoreCase = true) || subtreeMatches(it, q) }
 
-/**
- * Depth-first lookup of a node by its stable key. Used by directory
- * toggle/priority callbacks to address every descendant leaf.
- */
 fun findNodeByKey(roots: List<FileTreeNode>, key: String): FileTreeNode? {
     for (r in roots) {
         if (r.key == key) return r

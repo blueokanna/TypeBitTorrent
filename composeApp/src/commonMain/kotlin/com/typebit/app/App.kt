@@ -2,11 +2,8 @@
 
 package com.typebit.app
 
-// OverloadResolutionAmbiguity is a false positive from the Kotlin Multiplatform
-// IDE language server: the common source set references expect declarations
-// (loadWallpaperBitmap / PlatformBackHandler) whose per-platform actuals the
-// analyzer sees together. Both targets compile cleanly (verified by
-// :composeApp:compileKotlinDesktop and :composeApp:compileDebugKotlinAndroid).
+// OverloadResolutionAmbiguity: a KMP IDE false positive on the expect/actual pair; both targets compile
+// cleanly (`:composeApp:compileKotlinDesktop`, `:composeApp:compileDebugKotlinAndroid`).
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -136,13 +133,8 @@ internal fun createAppStore(): AppStore =
         )
 
 /**
- * Process-wide singleton store. The native engine is a strict per-process
- * singleton (exactly one worker — two would bind the same ports and write the
- * same `.part` files), so the Kotlin side MUST never build a second one.
- * `remember { createAppStore() }` used to create a fresh store whenever the
- * Activity was recreated (rotation, crash recovery, reinstall-while-running),
- * and the orphaned first engine made the second `nativeCreateEngine` throw —
- * the app crash this singleton exists to prevent.
+ * Process-wide singleton: the native engine is a strict per-process singleton, so a `remember { createAppStore() }
+ * that re-ran on Activity recreation would re-create a store and make the second `nativeCreateEngine` throw.
  */
 internal val appStore: AppStore by lazy { createAppStore() }
 

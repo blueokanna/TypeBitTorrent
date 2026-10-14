@@ -2,31 +2,18 @@ package com.typebit.engine
 
 import java.io.File
 
-/**
- * Desktop/JVM loader — platform aware, because the same app image now also
- * ships for Linux (fnOS, Unraid and plain NAS/desktop installs).
- *
- * Resolution order:
- *
- * 1. `java.library.path` — for users who install the library system-wide.
- * 2. The classpath resource `/native/<libname>` — packaged distributions
- *    (`scripts/build-desktop.ps1` for Windows, `scripts/build-linux.sh` for
- *    Linux/macOS put the freshly built library in `desktopMain/resources/native`).
- * 3. A few dev-tree locations, so `./gradlew :composeApp:run` works right
- *    after a native build without re-packaging.
- */
+// Resolution order: `java.library.path`, the packaged classpath resource `/native/<libname>`, then
+// dev-tree locations so `:composeApp:run` works right after a native build.
 actual fun loadNativeLibrary(): Boolean {
     val fileName = nativeFileName()
     try {
         System.loadLibrary("typebit_native")
         return true
     } catch (_: UnsatisfiedLinkError) {
-        // fall through to the other strategies
     } catch (_: Throwable) {
         return false
     }
 
-    // 2) bundled resource (packaged MSI/EXE/DEB/app image)
     try {
         val stream = NativeLibraryLoader::class.java.getResourceAsStream("/native/$fileName")
         if (stream != null) {
@@ -38,10 +25,8 @@ actual fun loadNativeLibrary(): Boolean {
             return true
         }
     } catch (_: Throwable) {
-        // continue
     }
 
-    // 3) dev-tree candidates
     val candidates =
         listOf(
             File("native/target/release/$fileName"),
@@ -54,13 +39,11 @@ actual fun loadNativeLibrary(): Boolean {
                 return true
             }
         } catch (_: Throwable) {
-            // continue
         }
     }
     return false
 }
 
-/** `libtypebit_native.so` on Linux/Android, `.dylib` on macOS, `.dll` on Windows. */
 internal fun nativeFileName(): String =
     when {
         System.getProperty("os.name").contains("win", ignoreCase = true) -> "typebit_native.dll"

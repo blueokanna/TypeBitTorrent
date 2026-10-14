@@ -10,9 +10,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Verifies the auto-contrast luminance estimator that drives the DIM scrim.
- */
+/** Verifies the auto-contrast luminance estimator that drives the DIM scrim. */
 class BrightnessTest {
 
     private fun solidBitmap(color: Color): ImageBitmap {

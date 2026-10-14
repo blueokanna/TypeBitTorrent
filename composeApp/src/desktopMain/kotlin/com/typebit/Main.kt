@@ -13,16 +13,10 @@ import com.typebit.webui.Headless
 import com.typebit.webui.WebUiHost
 import java.awt.Dimension
 
-/** Smallest window the layout stays correct at (sidebar + single-row bar). */
 private const val MIN_W = 900
 private const val MIN_H = 600
 
-/**
- * Two front ends from one binary:
- * * default → the Compose desktop window,
- * * `--headless` (or `TYPEBIT_HEADLESS=1`) → the WebUI server for a NAS
- *   (飞牛 fnOS / Unraid / any Linux box without a display). See [Headless].
- */
+/** Two front ends: the Compose window by default, the WebUI server (`--headless`) for a NAS. */
 fun main(args: Array<String>) {
     if (Headless.requested(args)) {
         kotlin.system.exitProcess(Headless.run(args))
@@ -31,12 +25,10 @@ fun main(args: Array<String>) {
 }
 
 private fun desktopGui() = application {
-    // The embedded WebUI follows 设置 → WebUI live (enable/disable, port, LAN).
     val webUi = remember { WebUiHost(appStore) }
     Window(
-        // Flush resume data and join the engine worker BEFORE the JVM exits:
-        // a fire-and-forget teardown could be cut off mid-write here, while
-        // the Android path deliberately keeps it off the main thread.
+        // Flush resume data and join the engine worker before the JVM exits: a
+        // fire-and-forget teardown can be cut off mid-write.
         onCloseRequest = {
             webUi.dispose()
             appStore.stopBlocking()
@@ -45,9 +37,6 @@ private fun desktopGui() = application {
         title = "TypeBit — BitTorrent Client",
         state = rememberWindowState(size = DpSize(1180.dp, 760.dp)),
     ) {
-        // Enforce a minimum window size: below it the single-row toolbar and
-        // the sidebar collapse. The user can still resize freely above this.
-        // `window` is the FrameWindowScope's ComposeWindow (AWT JFrame).
         DisposableEffect(Unit) {
             window.minimumSize = Dimension(MIN_W, MIN_H)
             webUi.start()

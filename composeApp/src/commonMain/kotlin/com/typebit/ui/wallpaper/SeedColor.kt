@@ -7,27 +7,15 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-/**
- * Extracts a Material-You style seed color from a wallpaper bitmap.
- *
- * Strategy: read a bounded central region (<=1024x1024, ARGB Ints) via
- * [ImageBitmap.readPixels], down-sample it to a coarse grid, convert every
- * sample to HCT, then take the circular mean hue (weighted by chroma so
- * vivid regions dominate) and the mean chroma; the seed is that hue/chroma
- * at tone 40. Deterministic and cheap, it feeds the exact same
- * [com.typebit.ui.monet.DynamicScheme] pipeline Android uses for
- * wallpaper-based dynamic color.
- *
- * Note: `PixelMap.get` changed to a packed ULong color in Compose 1.8, so we
- * read the classic ARGB Int buffer directly instead — stable across
- * desktop/Android.
+/** Material-You seed: chroma-weighted circular mean hue/chroma of a down-sampled central
+ * region, taken at tone 40. The raw ARGB buffer is read because PixelMap became a
+ * packed ULong in Compose 1.8.
  */
 fun extractSeedColor(bitmap: ImageBitmap): Int {
     val w = bitmap.width
     val h = bitmap.height
     if (w <= 0 || h <= 0) return 0xFF005AC1.toInt()
 
-    // Bound memory: sample a central region no larger than 1024x1024.
     val sampleW = minOf(w, 1024)
     val sampleH = minOf(h, 1024)
     val startX = (w - sampleW) / 2
@@ -35,7 +23,6 @@ fun extractSeedColor(bitmap: ImageBitmap): Int {
     val buffer = IntArray(sampleW * sampleH)
     bitmap.readPixels(buffer, startX, startY, sampleW, sampleH, 0, sampleW)
 
-    // Sample a coarse grid (~32x32) to keep extraction fast even for huge images.
     val stepX = (sampleW / 32).coerceAtLeast(1)
     val stepY = (sampleH / 32).coerceAtLeast(1)
 
@@ -73,14 +60,8 @@ fun extractSeedColor(bitmap: ImageBitmap): Int {
     return hctToArgb(hue, chroma, 40.0)
 }
 
-/**
- * Average WCAG relative luminance of the wallpaper, 0 (black) .. 1 (white).
- *
- * Samples a coarse grid over the whole image and averages the sRGB
- * luminance of opaque pixels. Used by the theme to auto-boost the DIM
- * scrim so text keeps ≥4.5:1 contrast on bright wallpapers (dark theme)
- * or dark wallpapers (light theme). Cheap — one bounded pixel read.
- */
+/** Average WCAG relative luminance (0 = black, 1 = white); the theme boosts the DIM scrim
+ * with it until text keeps 4.5:1 contrast. */
 fun averageBrightness(bitmap: ImageBitmap): Float {
     val w = bitmap.width
     val h = bitmap.height
@@ -105,7 +86,6 @@ fun averageBrightness(bitmap: ImageBitmap): Float {
                 val r = (argb ushr 16) and 0xFF
                 val g = (argb ushr 8) and 0xFF
                 val b = argb and 0xFF
-                // sRGB → linear, then WCAG luminance.
                 fun lin(c: Int): Double {
                     val v = c / 255.0
                     return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)

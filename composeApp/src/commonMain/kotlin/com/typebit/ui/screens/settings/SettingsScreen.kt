@@ -74,18 +74,12 @@ private enum class SettingsCategory {
     RSS,
 }
 
-/**
- * MD3-Expressive settings screen. Desktop shows a navigation sidebar
- * (large-radius items with icons + secondaryContainer selection) beside a
- * surfaceContainerLowest editor pane; mobile uses a dropdown switcher.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     state: AppState,
     store: AppStore,
     onBack: () -> Unit,
-    /** Hidden when embedded in the mobile bottom-nav shell. */
     showBack: Boolean = true,
 ) {
     val strings = LocalStrings.current
@@ -196,10 +190,6 @@ fun SettingsScreen(
     }
 }
 
-/**
- * Material 3 category switcher for narrow screens: leading-icon filter
- * chips in a horizontal scroll row (no wrap, no overflow).
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MobileCategoryBar(

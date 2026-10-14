@@ -18,19 +18,10 @@ import typebittorrent.composeapp.generated.resources.noto_sans_sc
 import typebittorrent.composeapp.generated.resources.opensans
 import typebittorrent.composeapp.generated.resources.roboto
 
-/**
- * Bundled Google Font stacks. Each stack is one variable font per family
- * (wght axis) registered at every UI weight, so a single ~0.5-17 MB file
- * renders all weights — no static-font explosion. The Latin font comes
- * first in the family; CJK glyphs fall back to Noto Sans SC (registered
- * last), so Chinese text always renders from a bundled font.
- *
- * `DEFAULT` = Inter (Latin) + Noto Sans SC (CJK). Inter is compact for
- * Latin UI and Noto Sans SC is the reference CJK face — the pair stays
- * legible on every density, which is why it is the app default.
- */
+/** Bundled font stacks: one variable font (wght axis) per family renders every UI weight,
+ * with the Latin face first and Noto Sans SC last so Chinese text always resolves from
+ * a bundled font. */
 
-/** The five UI weights a variable font registers (wght axis values). */
 private val UI_WEIGHTS =
         listOf(
                 FontWeight.Normal to 400f,
@@ -40,7 +31,6 @@ private val UI_WEIGHTS =
                 FontWeight.ExtraBold to 800f,
         )
 
-/** Build the [Font] list for one variable font resource at every UI weight. */
 @OptIn(ExperimentalResourceApi::class)
 @Composable
 private fun variableFonts(resource: FontResource): List<Font> =
@@ -53,12 +43,6 @@ private fun variableFonts(resource: FontResource): List<Font> =
             )
         }
 
-/**
- * Resolve the bundled [FontFamily] for a [FontChoice]. The Latin font (when
- * present) is registered first so Latin text shapes from it; Noto Sans SC is
- * always registered last as the CJK fallback. `SYSTEM` returns the platform
- * default.
- */
 @OptIn(ExperimentalResourceApi::class)
 @Composable
 fun fontFamilyFor(choice: FontChoice): FontFamily =

@@ -30,43 +30,18 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * The built-in WebUI server — what makes TypeBitTorrent usable on a headless
- * box (飞牛 fnOS, Unraid, any Linux NAS) where a Compose window cannot exist.
- *
- * It is deliberately dependency-free (`com.sun.net.httpserver` ships with the
- * JDK) and drives the SAME [AppStore] the desktop UI drives, so a browser is a
- * full client: transfers, per-file priorities, renames, trackers, peers,
- * settings, engine statistics, search, RSS and torrent creation all execute
- * the identical engine commands. Nothing here is a read-only mirror and
- * nothing is faked.
- *
- * Security posture (the endpoint is reachable from the LAN by definition):
- * * every mutating request must carry `X-TypeBit: 1`; a cross-site form,
- *   `<img>` or `<script>` cannot set a custom header without a preflight we
- *   never answer, so that header *is* the CSRF defence — together with
- *   `SameSite=Strict`, `HttpOnly` session cookies;
- * * sessions are 256-bit opaque tokens with a TTL, never derived from the
- *   password;
- * * PBKDF2-HMAC-SHA256 password storage, constant-time comparison, per-address
- *   login throttling with a ban window;
- * * a strict static whitelist (no path traversal), a 32 MiB request cap,
- *   `X-Frame-Options: DENY` and a CSP without `'unsafe-inline'`.
+ * The built-in WebUI server (dependency-free `com.sun.net.httpserver`) driving the same [AppStore] as the
+ * desktop UI — a browser is a full client on a headless box. Security: `X-TypeBit: 1` on mutating requests
+ * is the CSRF defence; sessions are opaque tokens, logins are throttled, static files come from a whitelist.
  */
 class WebUiServer(
     private val store: AppStore,
-    /** Live settings accessor — the WebUI section can be edited at runtime. */
     private val settings: () -> WebUiSettings,
     private val bindAddress: String,
     private val port: Int,
-    /**
-     * Explicit `frame-ancestors` CSP source list for deployments that are
-     * *meant* to be embedded: the 飞牛 fnOS App Center card is an iframe, and
-     * its origin (the NAS UI port) is not known in advance, so `cmd/main`
-     * starts the server with `--frame-ancestors=*`. `null` keeps the desktop
-     * default — [WebUiSettings.clickjackingProtection] decides.
-     */
+    /** Explicit `frame-ancestors` list for deployments meant to be embedded (the fnOS App Center iframe has
+     *  an unknown origin); `null` keeps the desktop clickjacking-protection default. */
     private val frameAncestors: String? = null,
-    /** Startup banner / advisories. */
     private val log: (String) -> Unit = { println(it) },
 ) {
     private val json =
@@ -76,12 +51,8 @@ class WebUiServer(
             explicitNulls = false
         }
 
-    /**
-     * Settings are the one request body where an unknown field is a *user*
-     * error worth reporting: the WebUI form used to send `port` / `dhtEnabled`
-     * instead of `listenPort` / `enableDht`, and because unknown keys were
-     * dropped silently the switch appeared to reset itself after every save.
-     */
+    /** Unknown settings fields are a *user* error worth reporting: dropping them silently makes a mis-named
+     *  field look like a switch that resets itself on every save. */
     private val strictJson = Json {
         ignoreUnknownKeys = false
         encodeDefaults = true
@@ -106,7 +77,6 @@ class WebUiServer(
             createContext("/") { exchange -> handle(exchange) }
         }
 
-    /** Files the SPA may fetch; nothing else is ever served from disk. */
     private val staticAssets =
         mapOf(
             "/" to "index.html",
@@ -132,11 +102,7 @@ class WebUiServer(
         (http.executor as? ExecutorService)?.shutdownNow()
     }
 
-    // ------------------------------------------------------------------
-    // HTTP plumbing
-    // ------------------------------------------------------------------
-
-    private fun handle(exchange: HttpExchange) {
+private fun handle(exchange: HttpExchange) {
         try {
             val path = exchange.requestURI.path ?: "/"
             if (path.startsWith("/api/")) {
@@ -159,8 +125,7 @@ class WebUiServer(
     }
 
     private fun applyApiHeaders(exchange: HttpExchange) {
-        // `X-Frame-Options` cannot express "any ancestor", so a framed
-        // deployment gets the CSP directive only.
+        // `X-Frame-Options` cannot express "any ancestor", so a framed deployment gets the CSP directive only.
         when {
             frameAncestors != null ->
                 exchange.responseHeaders.add(
@@ -188,8 +153,7 @@ class WebUiServer(
             }
         val headers = exchange.responseHeaders
         headers.add("Content-Type", contentTypeOf(asset))
-        // Never let a stale SPA hide a server fix: a cached app.js once kept
-        // sending settings field names the server had stopped accepting.
+        // No caching: a stale app.js once hid a server-side settings rename.
         headers.add("Cache-Control", "no-cache")
         headers.add("Content-Security-Policy", staticCsp())
         headers.add("X-Content-Type-Options", "nosniff")
@@ -206,12 +170,8 @@ class WebUiServer(
             else -> "application/octet-stream"
         }
 
-    /**
-     * Document CSP. `frame-ancestors` follows the same policy as
-     * [applyApiHeaders]: an explicit [frameAncestors] wins, then the
-     * clickjacking switch; with protection off the directive is omitted, which
-     * CSP reads as "no restriction".
-     */
+    /** `frame-ancestors` follows [applyApiHeaders]: explicit [frameAncestors] first, then the clickjacking
+     *  switch; with protection off the directive is omitted (CSP: no restriction). */
     private fun staticCsp(): String {
         val base =
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
@@ -222,7 +182,6 @@ class WebUiServer(
         return if (directive == null) base else "$base; $directive"
     }
 
-    /** Serializes any DTO/list/DTO-tree into a JSON element. */
     private inline fun <reified T> jsonOf(value: T): JsonElement = json.encodeToJsonElement(value)
 
     private fun sendJson(exchange: HttpExchange, code: Int, body: JsonElement) {
@@ -245,7 +204,6 @@ class WebUiServer(
         exchange.responseBody.use { it.write(bytes) }
     }
 
-    /** Reads at most [maxBytes] of the request body; null when too large. */
     private fun readBody(exchange: HttpExchange, maxBytes: Int = 32 * 1024 * 1024): String? {
         exchange.requestHeaders.getFirst("Content-Length")?.toLongOrNull()?.let {
             if (it > maxBytes) return null
@@ -265,7 +223,6 @@ class WebUiServer(
             ?.substringAfter('=')
             ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8) }
 
-    /** Turns a strict-decode failure into an actionable sentence. */
     private fun unknownSettingField(json: Json, body: String): String {
         val message =
             runCatching { json.decodeFromString<AppSettings>(body) }
@@ -286,11 +243,7 @@ class WebUiServer(
     private fun isLoopback(exchange: HttpExchange): Boolean =
         exchange.remoteAddress?.address?.isLoopbackAddress == true
 
-    // ------------------------------------------------------------------
-    // authentication / request hardening
-    // ------------------------------------------------------------------
-
-    private fun cookie(exchange: HttpExchange, name: String): String? =
+private fun cookie(exchange: HttpExchange, name: String): String? =
         exchange.requestHeaders.getFirst("Cookie")
             ?.split(';')
             ?.map { it.trim() }
@@ -311,7 +264,6 @@ class WebUiServer(
         return false
     }
 
-    /** CSRF: only a same-origin caller can set the custom header. */
     private fun passesCsrf(exchange: HttpExchange): Boolean {
         if (settings().csrfProtection && exchange.requestHeaders.getFirst("X-TypeBit") != "1") {
             return false
@@ -334,11 +286,7 @@ class WebUiServer(
     private fun localHostname(): String =
         runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrDefault("")
 
-    // ------------------------------------------------------------------
-    // GET
-    // ------------------------------------------------------------------
-
-    private fun handleGet(exchange: HttpExchange, path: String) {
+private fun handleGet(exchange: HttpExchange, path: String) {
         if (!checkHostHeader(exchange)) {
             fail(exchange, 421, "Host header rejected")
             return
@@ -411,11 +359,7 @@ class WebUiServer(
         }
     }
 
-    // ------------------------------------------------------------------
-    // POST
-    // ------------------------------------------------------------------
-
-    private fun handlePost(exchange: HttpExchange, path: String) {
+private fun handlePost(exchange: HttpExchange, path: String) {
         if (!checkHostHeader(exchange)) {
             fail(exchange, 421, "Host header rejected")
             return
@@ -491,8 +435,7 @@ class WebUiServer(
                     "pause" -> store.pause(req.hash)
                     "resume" -> store.resume(req.hash)
                     "remove" -> store.remove(req.hash)
-                    // Disk verification: turns files that are already on disk
-                    // into a seed (the engine starts every session empty).
+                    // Verification turns files already on disk into a seed (a new session starts empty).
                     "recheck" -> store.recheck(req.hash)
                     "recheck-cancel" -> store.cancelRecheck()
                     else -> {
@@ -558,8 +501,7 @@ class WebUiServer(
                     fail(exchange, 400, "bad request")
                     return
                 }
-                // Strict on purpose (see [strictJson]): an unknown field is a
-                // client bug the user must hear about, not a silent no-op.
+                // Strict on purpose (see [strictJson]): an unknown field is a client bug worth reporting.
                 val incoming =
                     decodeSettings(strictJson, body)
                         ?: run {
@@ -567,17 +509,15 @@ class WebUiServer(
                             return
                         }
                 val before = store.state.value.settings
-                // DHT / LSD / port / UPnP / proxy / resolver settings are read
-                // once, when the engine is created — applying them means
-                // rebuilding it. Transfers keep their resume data.
+                // DHT/LSD/port/UPnP/proxy settings are read once at engine creation, so applying them
+                // rebuilds the engine; transfers keep their resume data.
                 val needsRestart = store.settingsNeedEngineRestart(before, incoming)
                 store.updateSettings(incoming)
                 val subscriptionChanged =
                     before.bitTorrent.trackerUpdateUrl != incoming.bitTorrent.trackerUpdateUrl ||
                         before.bitTorrent.trackerUpdateHours != incoming.bitTorrent.trackerUpdateHours
                 if (subscriptionChanged) {
-                    // Fire and forget: a dead subscription URL must not turn a
-                    // settings save into a 15-second request.
+                    // Fire and forget: a dead subscription URL must not stall a settings save.
                     store.requestTrackerSubscriptionRefresh()
                 }
                 val suffix = if (subscriptionChanged) "；正在更新 Tracker 订阅…" else ""
@@ -638,11 +578,7 @@ class WebUiServer(
         }
     }
 
-    // ------------------------------------------------------------------
-    // handlers
-    // ------------------------------------------------------------------
-
-    private fun stateDto(): StateDto {
+private fun stateDto(): StateDto {
         val s = store.state.value
         return StateDto(
             engineRunning = s.engineRunning,
@@ -825,7 +761,6 @@ class WebUiServer(
         )
     }
 
-    /** Recursive server-side directory listing: (absolute path, relative path components). */
     private fun walk(root: File): List<Pair<String, List<String>>> {
         val out = ArrayList<Pair<String, List<String>>>()
         fun rec(dir: File, prefix: List<String>) {
@@ -869,7 +804,6 @@ class WebUiServer(
         )
     }
 
-    /** The same engine set the desktop search screen uses. */
     private fun searchEngines(): List<com.typebit.search.TorrentSearchEngine> =
         listOf(
             NyaaEngine(SearchHttpClient()),
@@ -963,10 +897,8 @@ class WebUiServer(
         private const val COOKIE = "typebit_session"
         private val MAGNET = Regex("magnet:\\?xt=urn:btih:[A-Za-z0-9]+[^\"'<>\\s\\\\]*")
 
-        /** Public for the CLI/settings screen: hash a password for storage. */
         fun hashPassword(password: String): String = WebUiCrypto.hash(password)
 
-        /** Public for tests. */
         fun verifyPassword(password: String, stored: String): Boolean =
             WebUiCrypto.verify(password, stored)
     }

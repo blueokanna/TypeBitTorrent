@@ -9,14 +9,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * CAM16 — the color appearance model behind HCT (Material You).
- *
- * Forward: ARGB -> (hue, chroma, J). Inverse: (J, C, H) -> XYZ.
- * Faithfully reproduces the reference implementation's pipeline:
- *   CAT02 adaptation (with the D discounting factor `rgbD`), 0.42-power
- *   nonlinear compression through `fl`, opponent hue equations, and the
- *   standard J/C correlates. The default viewing conditions are the exact
- *   constants the reference library caches.
+ * CAM16, the color appearance model behind HCT: ARGB -> (hue, chroma, J) and
+ * the inverse. Follows the reference implementation — CAT02 adaptation with the
+ * D discounting factor, 0.42-power compression, opponent hue equations.
  */
 class Cam16 internal constructor(
     val hue: Double,
@@ -24,10 +19,6 @@ class Cam16 internal constructor(
     val j: Double,
 )
 
-/**
- * Default viewing conditions (D65 white, 200 lux, average surround) — the
- * exact cached constants from the reference implementation.
- */
 private object Vc {
     const val N = 0.184186503
     const val AW = 29.981000900
@@ -41,14 +32,12 @@ private object Vc {
     val RGB_D = doubleArrayOf(1.021177769, 0.986307740, 0.933960497)
 }
 
-/** XYZ -> adapted cone responses (CAT02). */
 private val XYZ_TO_CAM16RGB = arrayOf(
     doubleArrayOf(0.401288, 0.650173, -0.051461),
     doubleArrayOf(-0.250268, 1.204414, 0.045854),
     doubleArrayOf(-0.002079, 0.048952, 0.953127),
 )
 
-/** Adapted cone responses -> XYZ (CAT02 inverse). */
 private val CAM16RGB_TO_XYZ = arrayOf(
     doubleArrayOf(1.86206786, -1.01125463, 0.14918677),
     doubleArrayOf(0.38752654, 0.62144744, -0.00897398),
@@ -66,7 +55,6 @@ private fun sanitizeDegrees(d: Double): Double {
     return if (x < 0) x + 360.0 else x
 }
 
-/** Forward CAM16 from ARGB. */
 fun cam16Of(argb: Int): Cam16 {
     val cone = matMul(XYZ_TO_CAM16RGB, argbToXyz(argb))
     val rD = Vc.RGB_D[0] * cone[0]
@@ -81,7 +69,6 @@ fun cam16Of(argb: Int): Cam16 {
     val gA = sign(gD) * 400.0 * gAF / (gAF + 27.13)
     val bA = sign(bD) * 400.0 * bAF / (bAF + 27.13)
 
-    // Opponent color axes.
     val aOpp = (11.0 * rA - 12.0 * gA + bA) / 11.0
     val bOpp = (rA + gA - 2.0 * bA) / 9.0
     val u = (20.0 * rA + 20.0 * gA + 21.0 * bA) / 20.0
@@ -101,7 +88,6 @@ fun cam16Of(argb: Int): Cam16 {
     return Cam16(hue, chroma, j)
 }
 
-/** Inverse CAM16: (J, C, H) -> CIE XYZ. */
 fun cam16ToXyz(j: Double, c: Double, h: Double): DoubleArray {
     val alpha = if (c == 0.0 || j == 0.0) 0.0 else c / sqrt(j / 100.0)
     val t = (alpha / (1.64 - 0.29.pow(Vc.N)).pow(0.73)).pow(1.0 / 0.9)

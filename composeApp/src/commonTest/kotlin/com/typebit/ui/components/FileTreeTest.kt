@@ -4,12 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Regression tests for [buildFileTree] — the tree must render for EVERY
- * path shape, most importantly root-level single-segment files, which used
- * to be bucketed into a phantom `d:` directory and produced an EMPTY tree
- * ("文件树空白，无法选择文件").
- */
+// Regression tests for [buildFileTree]: the tree must render for every path shape — root-level
+// single-segment files used to be bucketed into a phantom `d:` directory and produced an empty tree.
 class FileTreeTest {
 
     @Test
@@ -21,7 +17,6 @@ class FileTreeTest {
                         TreeLeaf(2, listOf("README.txt"), 128),
                 )
         val roots = buildFileTree(files)
-        // Three top-level leaves, no phantom directory.
         assertEquals(3, roots.size, "root-level files must be root nodes")
         assertTrue(roots.all { !it.isDir }, "no phantom directory allowed")
         assertEquals(listOf(0, 1, 2), roots.flatMap { it.leafIndices }.sorted())
@@ -54,7 +49,6 @@ class FileTreeTest {
 
     @Test
     fun allLeavesReachableByDepthFirst() {
-        // Every leaf must appear exactly once when walking only leaf nodes.
         val files =
                 listOf(
                         TreeLeaf(0, listOf("a.mkv"), 1),

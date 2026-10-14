@@ -11,23 +11,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import java.io.File
 
-/**
- * Android picker for torrent creation.
- *
- * SAF returns `content://` URIs, which the Rust maker cannot open, so every
- * picked byte is staged into a private cache directory first and the torrent
- * is built from those staged paths (removed again when the screen finishes
- * with them).
- *
- * Two correctness details that the previous version got wrong:
- * * the display name comes from `OpenableColumns.DISPLAY_NAME` — deriving it
- *   from `lastPathSegment` yielded names like `primary` (the URI's document
- *   *authority* prefix), so multi-file torrents were built with garbage file
- *   names;
- * * folder picks walk the SAF tree (`DocumentsContract`) and keep each
- *   document's directory structure, so a folder torrent is a real folder
- *   torrent instead of a flat pile of files.
- */
+// SAF `content://` bytes are staged into the app cache for the Rust maker. Names come from
+// `OpenableColumns.DISPLAY_NAME` (`lastPathSegment` yields the URI authority, e.g. "primary"), and
+// folder picks walk the SAF tree so the directory structure is preserved.
 @Composable
 actual fun rememberCreateTorrentPicker(
     onPicked: (List<CreateTorrentInput>) -> Unit,
@@ -40,7 +26,6 @@ actual fun rememberCreateTorrentPicker(
         return dir
     }
 
-    /** Copies `uri` to `target`, creating parents; true on success. */
     fun copyTo(uri: Uri, target: File): Boolean =
         try {
             target.parentFile?.mkdirs()
@@ -97,8 +82,6 @@ actual fun rememberCreateTorrentPicker(
         CreateTorrentPicker(
             pickFiles = { filesLauncher.launch(arrayOf("application/octet-stream", "*/*")) },
             pickFolder = { folderLauncher.launch(null) },
-            // The staged copies exist only to give the native maker a real
-            // path; they are dead weight once the build is done.
             cleanup = {
                 runCatching { File(context.cacheDir, "create_torrent").deleteRecursively() }
                 Unit
@@ -107,7 +90,6 @@ actual fun rememberCreateTorrentPicker(
     }
 }
 
-/** Resolves the user-visible file name of a SAF document. */
 private fun displayName(context: Context, uri: Uri): String? =
     try {
         context.contentResolver
@@ -117,10 +99,6 @@ private fun displayName(context: Context, uri: Uri): String? =
         null
     }
 
-/**
- * Depth-first walk of a SAF tree, returning `(relative path, document)` pairs
- * for every non-directory document.
- */
 private fun collectTree(context: Context, treeUri: Uri): List<Pair<List<String>, Uri>> {
     val out = ArrayList<Pair<List<String>, Uri>>()
     val rootId =
@@ -154,7 +132,6 @@ private fun collectTree(context: Context, treeUri: Uri): List<Pair<List<String>,
                     while (c.moveToNext()) {
                         val id = c.getString(0) ?: continue
                         val name = c.getString(1)?.takeIf { it.isNotBlank() } ?: continue
-                        // Skip names that cannot be represented in a torrent.
                         if (name == "." || name == ".." || name.contains('/')) continue
                         val mime = c.getString(2)
                         if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {

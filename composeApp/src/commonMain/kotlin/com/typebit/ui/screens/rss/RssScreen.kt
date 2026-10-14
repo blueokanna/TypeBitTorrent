@@ -50,18 +50,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * RSS reader: subscribe to feeds, refresh them, and copy article links.
- * Honest implementation — feeds are fetched over HTTP and parsed with the
- * JVM's built-in XML parser; no fake article data anywhere.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RssScreen(
     state: AppState,
     store: AppStore,
     onBack: () -> Unit,
-    /** Hidden when embedded in the mobile bottom-nav shell. */
     showBack: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
@@ -118,8 +112,6 @@ fun RssScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(12.dp)) {
-            // Subscribe field on the first row, subscribe button on the
-            // SECOND row (full width) — matches the search screen layout.
             OutlinedTextField(
                 value = newUrl,
                 onValueChange = { newUrl = it },
@@ -180,8 +172,6 @@ private fun FeedCard(feed: RssFeed, onRemove: () -> Unit) {
                 }
             }
             feed.items.take(30).forEach { item ->
-                // Every article opens in the default browser (like a real
-                // RSS reader); no dead rows.
                 Row(
                     Modifier
                         .fillMaxWidth()

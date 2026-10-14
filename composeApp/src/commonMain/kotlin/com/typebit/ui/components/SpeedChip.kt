@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import com.typebit.ui.util.Format
 
-/** Download / upload speed pair, qBittorrent style. */
 @Composable
 fun SpeedPair(
     down: Long,

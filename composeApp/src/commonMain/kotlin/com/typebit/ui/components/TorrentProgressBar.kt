@@ -16,7 +16,6 @@ import androidx.compose.ui.unit.dp
 import com.typebit.model.TorrentStatus
 import com.typebit.ui.theme.TypeBitThemeColors
 
-/** The accent color of a progress bar depends on torrent status. */
 @Composable
 fun progressColor(status: TorrentStatus): Color {
     val s = TypeBitThemeColors.status
@@ -30,7 +29,6 @@ fun progressColor(status: TorrentStatus): Color {
     }
 }
 
-/** Thin M3 progress bar with status-aware color. */
 @Composable
 fun TorrentProgressBar(
     progress: Float,

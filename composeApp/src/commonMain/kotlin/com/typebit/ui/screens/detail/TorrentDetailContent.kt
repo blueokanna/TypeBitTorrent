@@ -28,16 +28,8 @@ private enum class DetailTab(val label: String) {
     RECEIPTS("回执"),
 }
 
-/**
- * Tabbed torrent detail. Used as the fixed-height bottom panel on desktop
- * and as a full-screen page on mobile.
- *
- * MD3E navigation: the six labels live in a **scrollable** tab row (they
- * scroll horizontally on narrow phones instead of being squeezed into
- * half-width pills), and the content is a **pager** — swipe left/right to
- * flip tabs, tap a label to jump. The tab row is the selected-page
- * indicator.
- */
+/** Tabbed detail: bottom panel on desktop, full-screen page on mobile, with a scrollable
+ * tab row driving a pager (swipe or tap to switch tabs). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TorrentDetailContent(
@@ -79,7 +71,6 @@ fun TorrentDetailContent(
     }
 }
 
-/** Desktop bottom panel wrapper. */
 @Composable
 fun DetailPanel(
     torrent: Torrent,

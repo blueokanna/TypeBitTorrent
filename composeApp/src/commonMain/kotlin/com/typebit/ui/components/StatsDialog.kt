@@ -19,13 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.typebit.engine.EngineStatsDto
 import com.typebit.ui.util.Format
 
-/**
- * qBittorrent-style statistics dialog. Every row is backed by a real engine
- * counter (see [EngineStatsDto]); nothing is fabricated. The caller polls
- * [EngineStatsDto] while the dialog is open and passes the live network
- * counters ([dhtNodes], [trackerCount], [extIp]/[extPort]) so the DHT and
- * tracker status the user sees is always current.
- */
+/** Statistics dialog: every row is a real engine counter (see [EngineStatsDto]). */
 @Composable
 fun StatsDialog(
     stats: EngineStatsDto,
@@ -52,10 +46,8 @@ fun StatsDialog(
                         if (extPort != 0) "$extIp:$extPort" else extIp,
                     )
                 }
-                // LSD (BEP-14) LAN discovery — visible proof it is alive:
-                // announces sent, BT-SEARCH datagrams received, LAN peers
-                // discovered. All three at 0 = the LAN multicast is blocked
-                // (router AP isolation / firewall / missing multicast lock).
+                // LSD (BEP-14) LAN discovery: all three counters at 0 means the LAN
+                // multicast is blocked (AP isolation / firewall / missing multicast lock).
                 StatRow("LSD 发送 (LAN 广播)", lsdSent.toString())
                 StatRow("LSD 接收 (BT-SEARCH)", lsdRecv.toString())
                 StatRow("LSD 发现局域网 Peer", lsdPeers.toString())
@@ -81,10 +73,8 @@ fun StatsDialog(
                 StatRow("合并节约的写入", Format.bytes(stats.c_coalesced))
                 StatRow("磁盘读取量", Format.bytes(stats.c_read_bytes))
                 StatRow("缓存淘汰次数", stats.c_evictions.toString())
-                // Name resolution: which mode the resolver is in, whether its
-                // upstreams are actually reachable, and how much of the traffic
-                // the memo absorbed. A user whose trackers stopped resolving can
-                // see whether resolution is the cause instead of guessing.
+                // Name-resolution mode, upstream reachability and memo hit share — lets
+                // a user see whether DNS is why trackers stopped resolving.
                 stats.dnsSummary?.let {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     SectionTitle("域名解析")

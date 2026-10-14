@@ -63,20 +63,14 @@ import com.typebit.ui.components.StatusBadge
 import com.typebit.ui.util.Format
 import kotlinx.coroutines.launch
 
-/**
- * Integrated search screen: type a query, tap 搜索 and the app crawls the
- * configured torrent sites (Nyaa / 1337x / The Pirate Bay) in the background
- * — no browser, no manual link-clicking. Online-video / cloud-drive results
- * are filtered out; every result carries a real magnet and can be added to
- * the download list in one tap.
- */
+/** Integrated search: the app crawls the configured torrent sites itself, and
+ * every result carries a real magnet that can be added in one tap. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
     state: AppState,
     store: AppStore,
     onBack: () -> Unit,
-    /** Hidden when embedded in the mobile bottom-nav shell. */
     showBack: Boolean = true,
 ) {
     var query by remember { mutableStateOf("") }
@@ -92,7 +86,6 @@ fun SearchScreen(
                 NyaaEngine(SearchHttpClient()),
                 X1337xEngine(SearchHttpClient()),
                 PirateBayEngine(SearchHttpClient()),
-                // 国内磁力搜索站（自动抓取，过滤在线视频/网盘内容）。
                 MagnetIndexEngine(
                     name = "黑马磁力",
                     http = SearchHttpClient(),
@@ -158,9 +151,6 @@ fun SearchScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(12.dp)) {
-            // Search field on the first row, action button on the SECOND row
-            // (full width) so the placeholder never gets squeezed by the
-            // button on narrow screens.
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -188,7 +178,6 @@ fun SearchScreen(
                 Text(if (searching) "搜索中" else "搜索")
             }
 
-            // Live per-engine progress.
             if (progress.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -266,7 +255,6 @@ fun SearchScreen(
     }
 }
 
-/** One engine's live status during a search. */
 @Composable
 private fun EngineStatusRow(p: SearchEngineProgress) {
     val (label, color) =
@@ -306,7 +294,6 @@ private fun EngineStatusRow(p: SearchEngineProgress) {
     }
 }
 
-/** One search result with a one-tap "add to downloads" action. */
 @Composable
 private fun SearchResultCard(
     result: TorrentSearchResult,

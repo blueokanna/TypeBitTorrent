@@ -53,10 +53,6 @@ import com.typebit.ui.wallpaper.prepareWallpaper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// ---------------------------------------------------------------------------
-// 外观
-// ---------------------------------------------------------------------------
-
 @Composable
 fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val s = settings.appearance
@@ -171,7 +167,6 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     }
 }
 
-/** Wallpaper picker + clear buttons. */
 @Composable
 private fun WallpaperButtons(
     s: AppearanceSettings,
@@ -198,13 +193,8 @@ private fun WallpaperButtons(
     }
 }
 
-/**
- * Label + Material 3 slider row that only reports the value when the drag
- * ENDS. While the thumb moves, only the local value changes, so the
- * expensive global recomposition (and the one-shot wallpaper re-blur) runs
- * once per drag instead of on every frame — this is what keeps the
- * wallpaper sliders buttery instead of janky.
- */
+/** Slider that reports its value only when the drag ENDS, so the global recomposition and
+ * the one-shot wallpaper re-blur run once per drag instead of every frame. */
 @Composable
 private fun CommitSlider(
     label: String,
@@ -232,7 +222,6 @@ private fun CommitSlider(
     }
 }
 
-/** Preset Material-You seed swatches + a hex field for a manual override. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SeedOverrideRow(
@@ -275,7 +264,6 @@ private fun SeedOverrideRow(
             )
         }
     }
-    // Simple hex input as an alternative to the swatches.
     var hex by remember(s.seedOverride) {
         mutableStateOf(s.seedOverride?.let { "#%06X".format(it and 0xFFFFFF) } ?: "")
     }
@@ -290,7 +278,6 @@ private fun SeedOverrideRow(
     )
 }
 
-/** "0xFFRRGGBB" / "#RRGGBB" / "RRGGBB" → ARGB Int, null when invalid. */
 internal fun parseArgb(text: String): Int? {
     val t = text.trim().removePrefix("#").removePrefix("0x").removePrefix("0X")
     if (t.length != 6 && t.length != 8) return null
@@ -298,15 +285,6 @@ internal fun parseArgb(text: String): Int? {
     return if (t.length == 6) (0xFF000000L or v).toInt() else v.toInt()
 }
 
-// ---------------------------------------------------------------------------
-// 预览
-// ---------------------------------------------------------------------------
-
-/**
- * Live preview of the wallpaper treatment: the exact [WallpaperLayer] the app
- * uses, with sample surfaces + text, so the user sees blur, DIM and text
- * contrast before committing.
- */
 @Composable
 private fun WallpaperPreviewDialog(
     appearance: AppearanceSettings,
@@ -318,10 +296,8 @@ private fun WallpaperPreviewDialog(
         ThemeMode.DARK, ThemeMode.AMOLED -> true
         ThemeMode.SYSTEM -> systemDark
     }
-    // Decode + prepare (downscale + blur) off the UI thread; keyed by path
-    // and radius so a stale load is cancelled and the old bitmap is released
-    // to GC. The blur is applied here (one-shot) because WallpaperLayer only
-    // draws static, pre-blurred bitmaps — identical to the app background.
+    // Decode + prepare off the UI thread, keyed by path and radius so a stale load is
+    // cancelled; the blur is one-shot because WallpaperLayer only draws pre-blurred bitmaps.
     val bitmap by produceState<ImageBitmap?>(null, appearance.wallpaperPath, appearance.blurRadiusPx) {
         val raw = withContext(Dispatchers.IO) { loadWallpaperBitmap(appearance.wallpaperPath) }
         value = raw?.let {
@@ -340,8 +316,7 @@ private fun WallpaperPreviewDialog(
                     bitmap = bitmap,
                     dimAmount = appearance.dimAlpha,
                     scrimColor = if (dark) Color.Black else Color.White,
-                    // Always paint a solid backdrop so a failed decode still
-                    // shows a clean panel instead of a transparent hole.
+                    // Solid backdrop: a failed decode must not leave a transparent hole.
                     backgroundColor = previewBg,
                     contentScale = if (appearance.wallpaperFit) ContentScale.Fit else ContentScale.Crop,
                     verticalOffsetRatio = appearance.wallpaperOffsetY,

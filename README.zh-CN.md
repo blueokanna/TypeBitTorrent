@@ -650,6 +650,12 @@ free-ride 地板的一律不按指纹阻断。
 `aarch64-linux-android` / `armv7-linux-androideabi` / `x86_64-linux-android`
 targets。x86 也编，因为模拟器）。
 
+工具链：Gradle 9.8 / AGP 9.4 / Kotlin 2.4 / Compose Multiplatform 1.12
+（版本都在 `gradle/libs.versions.toml`）。AGP 9 默认不再允许在 Kotlin
+Multiplatform 模块里直接用 `com.android.application`，因此 `gradle.properties`
+保留了 `android.builtInKotlin=false` 与 `android.newDsl=false`；等 KMP 的
+application 插件发布后即可删掉这两行。
+
 ```powershell
 # 1. 桌面 DLL → composeApp/src/desktopMain/resources/native/typebit_native.dll
 .\scripts\build-desktop.ps1

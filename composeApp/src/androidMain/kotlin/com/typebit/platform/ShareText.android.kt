@@ -3,7 +3,6 @@ package com.typebit.platform
 import android.content.Intent
 import com.typebit.AppContextHolder
 
-/** Android actual: system share sheet via `ACTION_SEND`. */
 actual fun shareText(subject: String, text: String) {
     val ctx = AppContextHolder.context
     val send = Intent(Intent.ACTION_SEND).apply {

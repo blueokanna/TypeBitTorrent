@@ -10,11 +10,6 @@ import java.net.ServerSocket
 actual object Platform {
     private var backgroundServiceUp = false
 
-    // Android's WiFi driver drops multicast by default — without a
-    // MulticastLock the engine's LSD (BEP-14) announces and LAN peer
-    // replies never arrive, so "download from my PC on the LAN" silently
-    // fails. Held exactly while any transfer is live (same window as the
-    // foreground service).
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
 
     actual val name: String = "Android"
@@ -24,22 +19,9 @@ actual object Platform {
     actual fun appDataDir(): String =
         AppContextHolder.context.filesDir.absolutePath
 
-    /**
-     * A directory the app is actually allowed to write to.
-     *
-     * The public `Downloads/` path is NOT writable by this app: since
-     * Android 10 (API 29) scoped storage forbids direct file access to
-     * `/storage/emulated/0/Download` without `MANAGE_EXTERNAL_STORAGE`
-     * (which Play policy rejects for a torrent client), and this app declares
-     * no storage permission at all. Pointing the engine there made every
-     * `.part` write fail with EACCES.
-     *
-     * `getExternalFilesDir(DIRECTORY_DOWNLOADS)` is the app's own external
-     * files directory — writable with NO permission, visible to the user
-     * under `Android/data/<pkg>/files/Download`, and already covered by the
-     * FileProvider roots (`<external-files-path>`), so 边下边播 can hand a
-     * `.part` file to the system player through a temporary content URI.
-     */
+    /** `getExternalFilesDir(DIRECTORY_DOWNLOADS)`: public `Downloads/` is not writable since Android 10
+     *  scoped storage (no permission is even declared), while this directory needs none and the
+     *  FileProvider roots already cover it. */
     actual fun defaultDownloadDir(): String {
         val ctx = AppContextHolder.context
         val external = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -55,7 +37,6 @@ actual object Platform {
         return defaultDownloadDir()
     }
 
-    /** True when the directory exists (or can be created) AND accepts a write. */
     private fun isWritableDir(dir: File): Boolean {
         return try {
             if (!dir.exists() && !dir.mkdirs()) {
@@ -89,14 +70,8 @@ actual object Platform {
         }
     }
 
-    /**
-     * Public entry: acquire the WiFi multicast lock as early as possible —
-     * the Application.onCreate path runs BEFORE the engine creates its UDP
-     * sockets, and on some OEM ROMs (OPPO/ColorOS…) a lock acquired only
-     * after socket creation does not retroactively enable multicast. With
-     * the lock held from process start, LSD (BEP-14) LAN discovery works
-     * from the very first announce. Idempotent.
-     */
+    /** Acquire the WiFi multicast lock before the engine opens its UDP sockets: on several OEM ROMs a lock
+     *  taken afterwards does not retroactively enable multicast. Idempotent. */
     fun ensureLsdMulticastEarly() {
         acquireMulticastLock()
     }
@@ -113,8 +88,7 @@ actual object Platform {
                 }
             }
         } catch (_: Exception) {
-            // Not on WiFi / driver quirk: LSD just won't receive — the
-            // engine still announces out and DHT/Tracker keep working.
+            // Not on WiFi: LSD cannot receive, but DHT/trackers still work.
         }
     }
 
@@ -122,14 +96,11 @@ actual object Platform {
         try {
             multicastLock?.release()
         } catch (_: Exception) {
-            // Already released / not held.
         }
         multicastLock = null
     }
 
     actual fun backgroundModeEnabled(): Boolean {
-        // True when the app is exempt from battery restrictions AND the
-        // foreground service is up.
         return batteryOptimizationExempt() && backgroundServiceUp
     }
 
@@ -142,10 +113,8 @@ actual object Platform {
     actual fun openBatteryOptimizationSettings() {
         val ctx = AppContextHolder.context
         if (batteryOptimizationExempt()) return
-        // Prefer the canonical "allow" dialog; it is only available on
-        // API 23+. Some OEMs (OPPO/ColorOS…) silently drop the action, so
-        // we always fall back to the app-details page where the user can
-        // flip the switch manually.
+        // The canonical "allow" dialog is API 23+; some OEMs (ColorOS…) drop the action, so fall back to
+        // the app-details page where the user can flip the switch by hand.
         val request =
                 android.content.Intent(
                         android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -156,7 +125,6 @@ actual object Platform {
             ctx.startActivity(request)
             launched = true
         } catch (_: Exception) {
-            // Fall through to the details page.
         }
         if (!launched) {
             try {
@@ -167,7 +135,6 @@ actual object Platform {
                         ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
                 ctx.startActivity(details)
             } catch (_: Exception) {
-                // No settings screen available — nothing more we can do.
             }
         }
     }

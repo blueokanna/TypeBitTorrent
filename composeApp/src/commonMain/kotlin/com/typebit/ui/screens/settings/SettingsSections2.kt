@@ -36,14 +36,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// ---------------------------------------------------------------------------
-// BitTorrent
-// ---------------------------------------------------------------------------
-
-/**
- * Import a tracker list from a URL (e.g. an `ngosang/trackerslist` raw endpoint). Fetches, parses
- * (plain/JSON/HTML), de-duplicates and appends the results to the extra-trackers field.
- */
 @Composable
 private fun TrackerImportRow(
         s: BitTorrentSettings,
@@ -340,7 +332,6 @@ fun BitTorrentSection(
     }
 }
 
-/** Human-readable UPnP/NAT-PMP status from the live engine state. */
 private fun upnpStatusText(
         state: com.typebit.store.AppState,
         verbose: Boolean = false,
@@ -355,11 +346,8 @@ private fun upnpStatusText(
         }
 
 /**
- * Windows firewall (ICF) + Internet Connection Sharing (ICS) card.
- * Desktop only: `netsh advfirewall` needs elevation, so a failed direct
- * attempt is followed by a one-time UAC retry; ICS is an explicit,
- * admin-gated action that changes system networking.
- */
+ * Windows firewall (ICF) + ICS card. Desktop only: `netsh advfirewall` needs elevation,
+ * so a failed attempt retries once via UAC; ICS is an explicit admin-gated action. */
 @Composable
 private fun WindowsFirewallCard(
         state: com.typebit.store.AppState,
@@ -416,17 +404,9 @@ private fun WindowsFirewallCard(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Background (Android foreground service + battery optimization)
-// ---------------------------------------------------------------------------
-
-/**
- * Background-transfer controls. Android keeps a `dataSync` foreground service + partial wake lock
- * running while any torrent is active, so downloads continue with the screen locked or the app
- * backgrounded. The battery-optimization exemption is the one piece a user must grant through the
- * system dialog (apps cannot self-exempt) — this card surfaces the current state and opens that
- * dialog. Desktop needs none of it.
- */
+/** Android background transfer: a `dataSync` foreground service + partial wake lock keep
+ * torrents running while backgrounded; the battery-optimization exemption is user-granted
+ * only, so this card surfaces and opens that dialog. */
 @Composable
 fun BackgroundSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     var exempt by remember {
@@ -444,8 +424,7 @@ fun BackgroundSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                     "前台服务 + 唤醒锁保证进程存活；关闭后仅前台运行",
                     settings.behavior.backgroundDownloads,
                     { on ->
-                        // The master switch is a REAL setting: it gates the
-                        // foreground service in AppStore.refreshStats.
+                        // The master switch gates the foreground service in AppStore.refreshStats.
                         onChange(settings.copy(behavior = settings.behavior.copy(backgroundDownloads = on)))
                         scope.launch {
                             kotlinx.coroutines.delay(300)
@@ -482,10 +461,6 @@ fun BackgroundSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// WebUI
-// ---------------------------------------------------------------------------
 
 @Composable
 fun WebUiSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
@@ -590,10 +565,6 @@ fun WebUiSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
     }
 }
-
-// ---------------------------------------------------------------------------
-// 高级
-// ---------------------------------------------------------------------------
 
 @Composable
 fun AdvancedSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
@@ -760,10 +731,6 @@ fun AdvancedSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
     }
 }
-
-// ---------------------------------------------------------------------------
-// RSS
-// ---------------------------------------------------------------------------
 
 @Composable
 fun RssSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {

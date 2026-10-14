@@ -33,11 +33,8 @@ import org.junit.Test
 import java.io.File
 import javax.imageio.ImageIO
 
-/**
- * Isolates the desktop settings-pane layout bug: each candidate structure
- * draws a distinctly colored card; the PNG is then pixel-analyzed to see
- * which structures actually render.
- */
+// Isolates the settings-pane layout bug: each candidate structure draws a distinctly colored card, then the
+// PNG is pixel-analyzed to see which structures actually render.
 class LayoutProbeTest {
 
     @get:Rule
@@ -117,7 +114,6 @@ class LayoutProbeTest {
                         Column(Modifier.width(200.dp).fillMaxHeight()) {
                             Text("side", Modifier.padding(8.dp))
                         }
-                        // No verticalScroll this time.
                         Column(
                             Modifier.weight(1f).fillMaxHeight()
                                 .background(Color(0xFF222222))
@@ -153,7 +149,6 @@ class LayoutProbeTest {
         dump("probeE.png")
     }
 
-    /** Full SettingsScreen structure (Scaffold+Row) with probe text. */
     @Test
     fun probeF_fullSettingsWithProbe() {
         rule.setContent {
@@ -183,7 +178,6 @@ class LayoutProbeTest {
         dump("probeF.png")
     }
 
-    /** Same as probeF but with the divider fixed to width(1.dp). */
     @Test
     fun probeG_fixedDivider() {
         rule.setContent {

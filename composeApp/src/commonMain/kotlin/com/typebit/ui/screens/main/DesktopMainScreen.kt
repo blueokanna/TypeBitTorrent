@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AllInbox
@@ -42,7 +43,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
@@ -99,12 +99,6 @@ import com.typebit.ui.components.StatsDialog
 import com.typebit.ui.components.TorrentGrid
 import com.typebit.ui.screens.detail.DetailPanel
 
-/**
- * MD3-Expressive desktop layout: a permanent sidebar (brand + filters +
- * categories with leading icons), a surfaceContainer top bar with a
- * large-radius search field and FilledTonal actions, a large-radius
- * transfer-table card, a springy detail panel and a slim status bar.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DesktopMainScreen(
@@ -116,12 +110,10 @@ fun DesktopMainScreen(
     var showStats by remember { mutableStateOf(false) }
     var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
 
-    // Per-torrent long-press / right-click actions (rename / share / pause / delete).
     var actionsFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
     var renameFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
     var deleteFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
 
-    // Poll engine statistics while the dialog is open (once per second).
     LaunchedEffect(showStats) {
         if (showStats) {
             while (true) {
@@ -147,7 +139,6 @@ fun DesktopMainScreen(
                 onStats = { showStats = true },
             )
 
-            // Content switches between empty state and the table card.
             AnimatedContent(
                 targetState = state.torrents.isEmpty(),
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
@@ -182,7 +173,6 @@ fun DesktopMainScreen(
                 }
             }
 
-            // Bottom detail panel for the selected torrent (springy slide-in).
             AnimatedVisibility(
                 visible = state.selectedTorrent != null,
                 enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
@@ -222,8 +212,6 @@ fun DesktopMainScreen(
         }
     }
 
-    // Per-torrent actions: long-press a row (or hold the mouse) → sheet with
-    // rename / share / pause-resume / delete, same as the mobile app.
     actionsFor?.let { t ->
         com.typebit.ui.components.TorrentActionsSheet(
             torrent = t,
@@ -277,7 +265,6 @@ fun DesktopMainScreen(
     }
 }
 
-/** Brand + filter/category navigation sidebar. */
 @Composable
 private fun Sidebar(state: AppState, store: AppStore) {
     Column(
@@ -285,8 +272,7 @@ private fun Sidebar(state: AppState, store: AppStore) {
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(12.dp),
     ) {
-        // Brand header on an OPAQUE surface so the title + subtitle keep
-        // full contrast no matter how bright the wallpaper behind is.
+        // Brand header on an OPAQUE surface so it keeps contrast on any wallpaper.
         Row(
             Modifier
                 .fillMaxWidth()
@@ -311,8 +297,6 @@ private fun Sidebar(state: AppState, store: AppStore) {
             }
             Spacer(Modifier.width(10.dp))
             Column {
-                // 18sp keeps the 13-char brand on ONE line in the narrow
-                // sidebar (titleLarge 22sp used to clip "…Torre").
                 Text(
                     "TypeBitTorrent",
                     style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
@@ -331,9 +315,8 @@ private fun Sidebar(state: AppState, store: AppStore) {
             }
         }
 
-        // Filters + categories share ONE scroll region so the 13 filter
-        // entries never push the bottom status card (or categories) off a
-        // short window — the whole nav area scrolls instead.
+        // Filters + categories share ONE scroll region so the 13 entries never push the
+        // status card or the categories off a short window.
         Column(
             Modifier
                 .weight(1f)
@@ -379,7 +362,6 @@ private fun Sidebar(state: AppState, store: AppStore) {
             }
         }
 
-        // Engine status mini-card at the bottom.
         Surface(
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             shape = MaterialTheme.shapes.medium,
@@ -450,11 +432,6 @@ private fun filterIcon(f: TorrentFilter): ImageVector = when (f) {
     TorrentFilter.ERROR -> Icons.Default.ErrorOutline
 }
 
-/**
- * Single MD3-Expressive header row: title + search field + bulk actions +
- * navigation. Wire speeds live per-task in the transfer table only — the
- * header stays clean.
- */
 @Composable
 private fun AppTopBar(
     state: AppState,
@@ -486,8 +463,6 @@ private fun AppTopBar(
                     )
                 }
                 Spacer(Modifier.width(20.dp))
-                // Large-radius search field, MD3 search-bar styling. The
-                // widthIn floor stops it from collapsing on narrow windows.
                 OutlinedTextField(
                     value = query,
                     onValueChange = {
@@ -510,10 +485,8 @@ private fun AppTopBar(
                 )
                 Spacer(Modifier.width(12.dp))
                 FilledTonalIconButton(onClick = {
-                    // “全部开始” resumes paused torrents too — the old filter
-                    // excluded PAUSED, so after 全部暂停 the play button could
-                    // never bring them back. start() is idempotent for running
-                    // torrents, so we only skip already-seeding ones.
+                    // Resume must also lift PAUSED (a filter excluding it made pause-all unrecoverable);
+                    // start() is idempotent, so only already-seeding torrents are skipped.
                     state.torrents.filter { it.status != TorrentStatus.SEEDING }
                         .forEach { store.start(it.hash) }
                 }) {
@@ -524,14 +497,12 @@ private fun AppTopBar(
             }) {
                 Icon(Icons.Default.Pause, contentDescription = "全部暂停")
             }
-            // 校验本地数据 — the engine starts every session with an empty
-            // bitfield, so files it did not download itself (another client,
-            // a restored backup, or the source of a torrent just created)
-            // must be hashed once before they can seed and upload.
+            // Local-data verification: the engine starts every session with an empty bitfield,
+            // so files it did not download itself must be hashed once before they can seed.
             FilledTonalIconButton(onClick = {
                 state.selectedHash?.let { store.recheck(it) }
             }) {
-                Icon(Icons.Default.FactCheck, contentDescription = "校验本地数据（做种）")
+                Icon(Icons.AutoMirrored.Filled.FactCheck, contentDescription = "校验本地数据（做种）")
             }
             FilledTonalIconButton(onClick = {
                 state.selectedHash?.let { store.remove(it) }
@@ -565,7 +536,6 @@ private fun AppTopBar(
     }
 }
 
-/** Slim bottom status bar: totals + DHT + engine state. */
 @Composable
 private fun StatusBar(state: AppState, store: AppStore) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {

@@ -12,11 +12,7 @@ actual object Platform {
 
     actual val isDesktop: Boolean = true
 
-    /**
-     * `<home>/.typebit`, or the directory named by `-Dtypebit.data.dir` — the
-     * knob the headless/NAS entry point sets so a container can keep settings,
-     * resume data and receipts on a mounted `/config` volume.
-     */
+    // `<home>/.typebit`, or the `-Dtypebit.data.dir` override containers use for a mounted volume.
     actual fun appDataDir(): String {
         val override = System.getProperty("typebit.data.dir")?.takeIf { it.isNotBlank() }
         val dir = if (override != null) File(override) else File(System.getProperty("user.home"), ".typebit")

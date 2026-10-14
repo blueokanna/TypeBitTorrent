@@ -2,14 +2,7 @@ package com.typebit.webui
 
 import kotlinx.serialization.Serializable
 
-/**
- * Wire contract of the built-in WebUI (`/api/…` endpoints).
- *
- * Every field has a default so an older/newer SPA never fails to decode a
- * response; the server is the single place that maps [com.typebit.model.Torrent]
- * and engine state onto these shapes. This is what makes the same client core
- * usable from a browser on fnOS / Unraid / any headless box.
- */
+/** Wire contract of the built-in WebUI; every field has a default so any SPA version still decodes. */
 
 @Serializable
 data class LoginRequest(
@@ -20,14 +13,11 @@ data class LoginRequest(
 @Serializable
 data class SessionDto(
     val authenticated: Boolean = false,
-    /** True when the server has no password configured yet. */
     val passwordRequired: Boolean = false,
-    /** True when this client may act without logging in (loopback bypass). */
     val localBypass: Boolean = false,
     val username: String = "",
     val version: String = "",
     val platform: String = "",
-    /** Unix seconds until the current session expires (0 = none). */
     val expiresAt: Long = 0L,
 )
 
@@ -37,13 +27,8 @@ data class OkResponse(
     val message: String = "",
 )
 
-/**
- * Disk-verification ("重新校验") state.
- *
- * The engine starts every session with an empty piece bitfield, so files that
- * did not come from this client are invisible to it until a verification pass
- * hashes them — this is what the UI shows while that happens.
- */
+/** Disk verification ("重新校验"): sessions start with an empty piece bitfield, so files not written by
+ *  this client stay invisible until a pass has hashed them. */
 @Serializable
 data class RecheckDto(
     val hash: String = "",
@@ -86,9 +71,7 @@ data class StateDto(
     val platform: String = "",
     val peerId: String = "",
     val dhtNodes: Int = 0,
-    /** Trackers currently announcing successfully across all torrents. */
     val activeTrackers: Int = 0,
-    /** Disk verification ("重新校验") progress, so the UI can show it live. */
     val recheck: RecheckDto = RecheckDto(),
     val listenPort: Int = 0,
     val extIp: String = "",
@@ -168,7 +151,7 @@ data class ReceiptDto(
 @Serializable
 data class AddRequest(
     val magnet: String = "",
-    /** Base64 of a `.torrent` file (the SPA uploads it inline — no multipart). */
+    /** Base64 of a `.torrent` file (the SPA posts it inline — no multipart). */
     val torrentBase64: String = "",
     val fileName: String = "",
     val savePath: String = "",
@@ -215,9 +198,7 @@ data class MakeTorrentPath(
 
 @Serializable
 data class MakeTorrentRequest(
-    /** Files to hash: absolute server paths + their relative path inside the torrent. */
     val files: List<MakeTorrentPath> = emptyList(),
-    /** Convenience: a directory on the server; walked recursively. */
     val directory: String = "",
     val name: String = "",
     val pieceLength: Long = 0L,
@@ -296,7 +277,6 @@ data class RssRequest(
     val url: String = "",
 )
 
-/** WebUI password change; the plaintext never touches the settings store. */
 @Serializable
 data class PasswordRequest(
     val password: String = "",

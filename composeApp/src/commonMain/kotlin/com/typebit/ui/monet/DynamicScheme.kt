@@ -6,22 +6,14 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 
 /**
- * Material You dynamic scheme built from a seed color using HCT.
- *
- * Mirrors the tonal-role tones of the reference dynamic scheme:
- *   primary/secondary/tertiary at tone 40 (light) / 80 (dark),
- *   containers at 90 / 30, the neutral surface ramp at 98→6, and the
- *   neutral-variant outline ramp. Secondary/tertiary chroma are scaled
- *   down; tertiary hue is rotated 60°. Error keeps the standard hue/chroma.
- *
- * Produces a full M3 [ColorScheme] so the rest of the app is plain Material 3.
+ * Material You scheme from a seed: primary/secondary/tertiary at tone 40 (light)
+ * or 80 (dark), containers at 90/30, neutral ramp 98..6, tertiary hue +60°.
  */
 object DynamicScheme {
 
     private const val ERROR_HUE = 25.0
     private const val ERROR_CHROMA = 84.0
 
-    /** Primary chroma stays at the seed's; others are scaled. */
     private class Roles(seed: Hct) {
         val primary = TonalPalette.of(seed.hue, seed.chroma)
         val secondary = TonalPalette.of(seed.hue, seed.chroma * 0.5)
@@ -31,7 +23,6 @@ object DynamicScheme {
         val error = TonalPalette.of(ERROR_HUE, ERROR_CHROMA)
     }
 
-    /** Full light color scheme for a seed ARGB. */
     fun light(argb: Int): ColorScheme {
         val r = Roles(hctOf(argb))
         return lightColorScheme(
@@ -72,7 +63,6 @@ object DynamicScheme {
         )
     }
 
-    /** Full dark color scheme for a seed ARGB. */
     fun dark(argb: Int): ColorScheme {
         val r = Roles(hctOf(argb))
         return darkColorScheme(
@@ -113,10 +103,7 @@ object DynamicScheme {
         )
     }
 
-    /**
-     * AMOLED variant: pure-black surfaces in dark mode (saves OLED power and
-     * guarantees maximum contrast for text on any dimmed wallpaper).
-     */
+/** AMOLED variant: pure-black surfaces in dark mode (saves OLED power). */
     fun darkAmoled(argb: Int): ColorScheme {
         val base = dark(argb)
         return base.copy(

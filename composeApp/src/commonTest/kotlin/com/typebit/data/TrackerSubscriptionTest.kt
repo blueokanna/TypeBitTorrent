@@ -4,16 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Tracker subscriptions: what a public trackerslist document is allowed to
- * put into the engine.
- *
- * These lists are community-maintained text files, so they arrive with
- * comments, "both schemes" markers, blank lines and occasionally a line that
- * is not an announce URL at all. Anything that survives [parseTrackerList] is
- * handed to the engine verbatim, which is why the filter is tested rather
- * than trusted.
- */
+// What a public trackerslist document may put into the engine: these lists are community-maintained and
+// arrive with comments, "both schemes" markers and blank lines, and whatever survives [parseTrackerList]
+// reaches the engine verbatim — hence the filter is tested rather than trusted.
 class TrackerSubscriptionTest {
 
     @Test

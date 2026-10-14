@@ -6,13 +6,8 @@ import java.util.Base64
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
-/**
- * JVM actual (Android + desktop): PBKDF2-HMAC-SHA256 via `javax.crypto`.
- *
- * No third-party dependency, no hand-rolled KDF, and no plaintext storage:
- * iteration count and salt live in the hash string so parameters can be raised
- * later without invalidating existing credentials.
- */
+// JVM actual (Android + desktop): PBKDF2-HMAC-SHA256 via `javax.crypto` — no third-party KDF. Iteration
+// count and salt live inside the hash string, so parameters can be raised without invalidating stored hashes.
 private const val ALGORITHM = "PBKDF2WithHmacSHA256"
 private const val ITERATIONS = 120_000
 private const val KEY_BITS = 256

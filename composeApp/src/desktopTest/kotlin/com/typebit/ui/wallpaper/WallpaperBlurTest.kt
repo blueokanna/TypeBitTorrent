@@ -21,7 +21,6 @@ class WallpaperBlurTest {
     fun radiusZeroReturnsSource() {
         val src = solidImage(32, 32, 0xFF112233.toInt())
         val out = blurWallpaper(src, 0f)
-        // For radius ~0 the pipeline short-circuits and reuses the source.
         assert(out === src) { "radius 0 should reuse the source bitmap" }
         assertEquals(32, out.width)
         assertEquals(32, out.height)
@@ -81,7 +80,6 @@ class WallpaperBlurTest {
         val blurred = blurWallpaper(src, 24f)
         assertEquals(src.width, blurred.width)
         assertEquals(src.height, blurred.height)
-        // A blurred opaque image must still be opaque after the round trip.
         val px = IntArray(1)
         blurred.readPixels(px, blurred.width / 2, blurred.height / 2, 1, 1, 0, 1)
         val alpha = (px[0] ushr 24) and 0xFF
@@ -90,21 +88,16 @@ class WallpaperBlurTest {
 
     @Test
     fun prepareWallpaperDownscalesAndBlurs() {
-        // The app background pipeline must return a blurred bitmap whose
-        // longest edge stays within the documented draw cap
-        // (`MAX_BG_EDGE`), even when the source is huge — that cap is what
-        // keeps the per-frame GPU blit cheap.
+        // The background pipeline must stay within the documented `MAX_BG_EDGE` cap even for a huge source —
+        // that cap is what keeps the per-frame GPU blit cheap.
         val src = solidImage(1200, 800, 0xFF446688.toInt())
         val prepared = prepareWallpaper(src, 24f)
         assert(prepared.width <= 1440) { "background should stay under the draw cap, got ${prepared.width}" }
         assert(prepared.height <= 1440) { "background should stay under the draw cap, got ${prepared.height}" }
-        // The prepared bitmap must be opaque (no alpha loss).
         val px = IntArray(1)
         prepared.readPixels(px, prepared.width / 2, prepared.height / 2, 1, 1, 0, 1)
         assert(((px[0] ushr 24) and 0xFF) >= 250) { "prepared wallpaper must stay opaque" }
 
-        // A source above the cap is really downscaled (4K wallpapers are the
-        // common case on desktop).
         val huge = solidImage(3840, 2160, 0xFF446688.toInt())
         val shrunk = prepareWallpaper(huge, 24f)
         assertEquals(1440, shrunk.width)
@@ -115,7 +108,6 @@ class WallpaperBlurTest {
     fun downscaleImageKeepsSmall() {
         val src = solidImage(200, 100, 0xFF123456.toInt())
         val out = downscaleImage(src, 640)
-        // Already under the cap → returned unchanged (same instance).
         assert(out === src) { "small source should be reused" }
         val big = solidImage(2000, 1000, 0xFF123456.toInt())
         val small = downscaleImage(big, 640)

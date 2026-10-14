@@ -9,19 +9,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-/**
- * Keeps the embedded WebUI server aligned with the stored [WebUiSettings] in
- * the desktop build, so toggling "启用 WebUI", changing the port or allowing
- * LAN access takes effect immediately instead of "after a restart".
- *
- * Restart policy: the socket is rebound only when something that affects it
- * changes (enabled / port / LAN access). Username and password are read live
- * through the settings accessor, so editing a credential does not drop the
- * connections of the other browsers.
- *
- * Failure is never fatal: if the port is taken we log it, the desktop UI stays
- * fully usable, and the next settings change retries.
- */
+// Keeps the embedded server aligned with [WebUiSettings]: enabled/port/LAN changes rebind the socket at
+// once, credentials are read live, and a failed take-over is logged but never fatal.
 internal class WebUiHost(private val store: AppStore) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -65,7 +54,6 @@ internal class WebUiHost(private val store: AppStore) {
                 boundTo = endpoint
             }
             .onFailure { error ->
-                // A clear, actionable message beats a stack trace in the log.
                 System.err.println(
                     "WebUI 无法监听 ${endpoint.host}:${endpoint.port} — " +
                         "${error.message ?: error.javaClass.simpleName}。" +

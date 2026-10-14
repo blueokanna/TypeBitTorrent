@@ -1,39 +1,25 @@
 package com.typebit.engine
 
-// Shared JVM actuals (compiled for both Android and desktop).
-//
-// The `external` functions map to the JNI symbols exported by the Rust
-// `typebit_native` cdylib; the JVM class is `com.typebit.engine.NativeBridgeKt`
-// because these live in NativeBridge.kt (see native/src/jni_glue.rs).
+// Shared JVM actuals (Android + desktop). The `external` functions map to the JNI symbols the Rust
+// `typebit_native` cdylib exports for class `NativeBridgeKt` (see native/src/jni_glue.rs).
 
 actual external fun nativeBridgeAbi(): Int
 
 actual external fun nativeCreateEngine(configJson: String, saveDir: String): Long
 actual external fun nativeDestroyEngine(handle: Long)
-/** Parse `.torrent` bytes → metainfo JSON (no engine add) for the dialog. */
 actual external fun nativeParseTorrent(data: ByteArray): String?
-/** Create a v1 `.torrent` from an options object (blocking; off the main thread). */
 actual external fun nativeMakeTorrent(optionsJson: String): ByteArray?
 
-/** Live progress of the in-flight build (`done`/`total`/`running`/`cancelled`). */
 actual external fun nativeMakeTorrentProgress(): String
 
-/** Requests cancellation of the in-flight build (1 = signalled, 0 = idle). */
 actual external fun nativeMakeTorrentCancel(): Int
 
-/**
- * Verifies the data a torrent already has on disk against its piece hashes
- * ("重新校验"). Blocking — reads the whole payload — so call it off the UI
- * thread. Returns the number of pieces that hash correctly (the engine then
- * treats them as verified, which is what makes existing files seedable);
- * negative on error (`-1` unknown torrent, `-2` verification failed).
- */
+/** Verifies on-disk data against the piece hashes ("重新校验") — blocking, so call it off the UI thread.
+ *  Returns the verified piece count, negative on error. */
 actual external fun nativeRecheckData(handle: Long, hash: String): Int
 
-/** Live progress of the in-flight `nativeRecheckData` (`done`/`total`/`running`/`cancelled`). */
 actual external fun nativeRecheckProgress(): String
 
-/** Requests cancellation of the in-flight verification (1 = signalled, 0 = idle). */
 actual external fun nativeRecheckCancel(): Int
 
 actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
@@ -68,7 +54,6 @@ actual external fun nativeFilePriorities(handle: Long, hash: String): String?
 actual external fun nativeAddTracker(handle: Long, hash: String, url: String): Int
 actual external fun nativeRemoveTracker(handle: Long, hash: String, url: String): Int
 actual external fun nativeTrackers(handle: Long, hash: String): String?
-/** Export a signed proof-of-download receipt (JSON) or `{"error":"…"}`. */
 actual external fun nativeExportReceipt(
     handle: Long,
     hash: String,
@@ -77,7 +62,6 @@ actual external fun nativeExportReceipt(
     epochStart: Long,
     epochEnd: Long,
 ): String?
-/** Verify a receipt JSON; returns a `ReceiptVerifyResultDto` JSON. */
 actual external fun nativeVerifyReceipt(handle: Long, json: String): String?
 actual external fun nativeSaveState(handle: Long): ByteArray?
 actual external fun nativeLoadState(handle: Long, data: ByteArray): Int

@@ -3,28 +3,22 @@ package com.typebit.engine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/**
- * Wire DTOs exchanged with the Rust engine. Field names intentionally mirror the JSON produced by
- * `native/src/` (snake_case) — no renaming magic, so the contract stays greppable on both sides.
- */
-
-/** A single file entry from the mirrored metainfo. */
+/** Wire DTOs; property names mirror the Rust JSON (snake_case), so the contract stays greppable. */
 @Serializable
 data class FileDto(
         val path: List<String> = emptyList(),
         val length: Long = 0L,
-        /** User rename (relative path) — null when the original name is kept. */
+        /** User rename (relative path); null keeps the original name. */
         val renamed: String? = null,
 ) {
     val displayPath: String
         get() = path.joinToString("/")
 
-    /** Name shown to the user: the rename wins over the original path. */
     val effectivePath: String
         get() = renamed ?: displayPath
 }
 
-/** The full mirrored metainfo for one torrent (null for unresolved magnets). */
+/** Mirrored metainfo for one torrent; unresolved magnets have no entry. */
 @Serializable
 data class TorrentInfoDto(
         val hash: String = "",
@@ -45,12 +39,10 @@ data class TorrentInfoDto(
     val trackers: List<String>
         get() = announce_list.flatten()
 
-    /** Single-file torrents get a clean name; multi-file use the top folder. */
     fun effectiveName(): String =
             if (name.isNotBlank()) name else files.firstOrNull()?.path?.firstOrNull() ?: hash
 }
 
-/** Per-torrent persisted state returned by `nativeTorrentStates`. */
 @Serializable
 data class TorrentStateDto(
         val hash: String = "",
@@ -61,55 +53,39 @@ data class TorrentStateDto(
         val paused: Boolean = false,
 )
 
-/**
- * Per-torrent runtime row inside one batched snapshot. Field names mirror the compact keys produced
- * by `Cmd::Snapshot` (see native/src/engine.rs).
- */
+/** Compact-key runtime row from `Cmd::Snapshot` (native/src/engine.rs). */
 @Serializable
 data class TorrentSnapshotDto(
         val h: String = "",
         /** Progress 0.0..1.0. */
         val p: Double = 0.0,
-        /** Payload bytes downloaded. */
+        /** Payload bytes downloaded / uploaded, without protocol overhead. */
         val d: Long = 0L,
-        /** Payload bytes uploaded. */
         val u: Long = 0L,
-        /** True once every piece is verified. */
         val c: Boolean = false,
-        /** Engine-side paused flag (from saved state). */
         val paused: Boolean = false,
-        /** Verified piece count. */
         val have: Long = 0L,
         /** Verified-piece bitfield, MSB-first, hex-encoded. */
         val hx: String = "",
-        /** Metadata mirror name (empty until known). */
         val name: String = "",
-        /** Total size in bytes (0 until metadata is known). */
         val size: Long = 0L,
-        /** Total piece count (0 until metadata is known). */
         val pieces: Long = 0L,
-        /** True once the metadata mirror is complete (magnets). */
         val meta: Boolean = false,
 )
 
-/** A live peer entry (from the engine swarm, not fabricated). */
 @Serializable
 data class PeerDto(
         val addr: String = "",
         val client: String = "",
-        /**
-         * ISO-3166 alpha-2 country code ("" when unknown/private). The Peers tab renders the
-         * national flag before the address from this.
-         */
+        /** ISO-3166 alpha-2 country code; empty when unknown or private. */
         val cc: String = "",
         /** 0=Connecting 1=Handshake 2=Ready 3=Closed. */
         val phase: Int = 0,
         val seed: Boolean = false,
-        /** Smoothed download rate (bytes/s). */
+        /** Smoothed rates, bytes/s. */
         val down: Long = 0L,
-        /** Smoothed upload rate (bytes/s). */
         val up: Long = 0L,
-        /** Outstanding request blocks. */
+        /** Outstanding request blocks (pipeline depth). */
         val inflight: Int = 0,
 ) {
     val phaseLabel: String
@@ -122,59 +98,39 @@ data class PeerDto(
                 }
 }
 
-/** Global wire counters embedded in a snapshot. */
 @Serializable
 data class SnapshotTotalsDto(
         val d: Long = 0L,
         val u: Long = 0L,
 )
 
-/** One batched snapshot for the whole UI poll tick (see `Cmd::Snapshot`). */
-///
-/// **The `@SerialName` annotations are load-bearing.** The bridge's JSON uses
-/// snake_case keys (`ext_ip`, `listen_port`, …) and this decoder has no naming
-/// strategy (`Json { ignoreUnknownKeys = true }`), so a camelCase property
-/// without an annotation silently stays at its default. That is how the bound
-/// listen port and the port-mapping phase used to read 0 everywhere.
+/**
+ * Batched snapshot per UI poll tick. `@SerialName` is load-bearing: the JSON is snake_case and
+ * this decoder has no naming strategy, so an unannotated camelCase property keeps its default.
+ */
 @Serializable
 data class EngineSnapshotDto(
-        /** DHT routing-table size (live). */
         val dht: Int = 0,
-        /** Trackers currently active (not failed) across all torrents (live). */
+        /** Active (not failed) trackers, all torrents. */
         val trackers: Int = 0,
-        /** NAT-detected external UDP IP (BEP-42), empty until confirmed. */
+        /** NAT-detected external UDP endpoint (BEP-42); empty / 0 until confirmed. */
         @SerialName("ext_ip") val extIp: String = "",
-        /** NAT-detected external UDP port (BEP-42), 0 until confirmed. */
         @SerialName("ext_port") val extPort: Int = 0,
-        /**
-         * UPnP/NAT-PMP port-mapping phase (0=idle … 5=mapping, 6=mapped, 8=done, 9=failed). See
-         * `typebit::portmap::PortMapPhase::code`.
-         */
+        /** UPnP/NAT-PMP phase code (6 = mapped, 9 = failed); `typebit::portmap::PortMapPhase::code`. */
         @SerialName("pm_phase") val pmPhase: Int = 0,
-        /** External port granted by the gateway, 0 until mapped. */
         @SerialName("pm_port") val pmPort: Int = 0,
-        /**
-         * Actual bound TCP listen port (0 when not listening).
-         *
-         * This is the port inbound peers connect to and the one a firewall rule
-         * must open, which is why it is read from the engine instead of from
-         * the configured value.
-         */
+    /** Actually bound TCP port (0 = not listening) — the port inbound peers reach and a firewall rule must open. */
         @SerialName("listen_port") val listenPort: Int = 0,
-        /** LSD (BEP-14): LAN announces multicast out (live). JSON key `lsd_sent`. */
+        /** LSD (BEP-14) counters: announces sent, BT-SEARCH datagrams received, peers found. */
         val lsd_sent: Long = 0,
-        /** LSD (BEP-14): BT-SEARCH datagrams received (live). JSON key `lsd_recv`. */
         val lsd_recv: Long = 0,
-        /** LSD (BEP-14): peers discovered via LAN multicast (live). JSON key `lsd_peers`. */
         val lsd_peers: Long = 0,
-        /** Cumulative wire bytes: (downloaded, uploaded). */
         val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
         val torrents: List<TorrentSnapshotDto> = emptyList(),
 ) {
     val totalsPair: Pair<Long, Long>
         get() = totals.d to totals.u
 
-    /** Human-readable UPnP/NAT-PMP mapping status for the settings card. */
     val portMappingLabel: String
         get() =
                 when (pmPhase) {
@@ -190,11 +146,10 @@ data class EngineSnapshotDto(
 }
 
 /**
- * One engine event. `t` selects the variant: 1=PeerConnected(h,a,p) 2=PieceVerified(h,piece)
+ * One engine event; `t` selects the variant: 1=PeerConnected(h,a,p) 2=PieceVerified(h,piece)
  * 3=HashFailure(h,piece) 4=TorrentComplete(h) 5=MetadataComplete(h) 6=MetadataFailed(h)
- * 7=TrackerAnnounced(h,peers) 8=DhtNodeCount(n) 9=LeechClientSeen(h? no, c=client,a=addr)
- * 10=PeerBanned(h,a,r=reason) 11=EngineError(code,detail) (typebit 0.1.3: non-fatal degradation
- * notice) 12=PortMapping(phase,port) (typebit 0.1.7: UPnP/NAT-PMP lifecycle)
+ * 7=TrackerAnnounced(h,peers) 8=DhtNodeCount(n) 9=LeechClientSeen(c=client,a=addr)
+ * 10=PeerBanned(h,a,r=reason) 11=EngineError(code,detail) 12=PortMapping(phase,port)
  */
 @Serializable
 data class EngineEventDto(
@@ -209,27 +164,21 @@ data class EngineEventDto(
         val c: String? = null,
         /** Anti-leech ban reason code: corrupt | protocol | free-ride (t=10). */
         val r: String? = null,
-        /** Engine-level degradation notice (t=11): 0=udp_open_failed, 1=dht_no_seeds. */
+        /** t=11 degradation notice: 0=udp_open_failed, 1=dht_no_seeds; `detail` is the stable tag. */
         val code: Int? = null,
-        /** Engine-level degradation notice (t=11): stable tag, e.g. "udp_open_failed". */
         val detail: String? = null,
-        /** Port-mapping phase (t=12), `PortMapPhase::code` (6 = mapped). */
+        /** Port-mapping phase (t=12); `PortMapPhase::code`, 6 = mapped. */
         val phase: Int? = null,
-        /** Port-mapping external port (t=12). */
         val port: Int? = null,
 )
 
-/**
- * Result of a Windows system-configuration action (firewall / ICS). The Rust side returns
- * `{"ok":bool,"message":".."}` from `firewall.rs`.
- */
+/** Windows system action result; the Rust side returns `{"ok":bool,"message":".."}` (firewall.rs). */
 @Serializable
 data class SystemResultDto(
         val ok: Boolean = false,
         val message: String = "",
 ) {}
 
-/** Human-readable names for the UPnP/NAT-PMP port-mapping phases. */
 val portMappingPhaseName: (Int) -> String = { phase ->
     when (phase) {
         0 -> "Disabled"
@@ -243,14 +192,12 @@ val portMappingPhaseName: (Int) -> String = { phase ->
     }
 }
 
-/** A log line drained from the engine. */
 @Serializable
 data class LogEntryDto(
         val l: Int = 0,
         val m: String = "",
 )
 
-/** Global engine stats for the status bar. */
 data class GlobalStats(
         val downloadedTotal: Long = 0L,
         val uploadedTotal: Long = 0L,
@@ -258,10 +205,7 @@ data class GlobalStats(
         val torrentCount: Int = 0,
 )
 
-/**
- * Engine-wide statistics for the qBittorrent-style stats dialog. Field names mirror `Cmd::Stats`
- * JSON (see native/src/engine.rs::stats_to_json).
- */
+/** Field names mirror `Cmd::Stats` JSON (native/src/engine.rs::stats_to_json). */
 @Serializable
 data class EngineStatsDto(
         val d_total: Long = 0L,
@@ -281,18 +225,14 @@ data class EngineStatsDto(
         val c_clean: Long = 0L,
         val c_clean_budget: Long = 0L,
         val c_dirty_entries: Long = 0L,
-        /**
-         * Name-resolution counters (see `native/src/dns.rs`). `dns_mode` is 1
-         * when the resolver forwards to configured upstreams and 0 when it
-         * walks from the root itself.
-         */
+        /** 1 = forwards to the configured upstreams, 0 = walks from the root (native/src/dns.rs). */
         val dns_mode: Long = 0L,
         val dns_queries: Long = 0L,
         val dns_cache_hits: Long = 0L,
         val dns_os_fallbacks: Long = 0L,
         val dns_provider_ok: Long = 0L,
         val dns_provider_failures: Long = 0L,
-        /** Upstreams whose last measured path is healthy, out of the configured total. */
+        /** Healthy upstreams out of the configured total. */
         val dns_providers_up: Long = 0L,
         val dns_providers_total: Long = 0L,
         val dns_upstream_queries: Long = 0L,
@@ -307,7 +247,7 @@ data class EngineStatsDto(
         val dns_resolver_cache_hits: Long = 0L,
         val dns_resolver_cache_misses: Long = 0L,
         val dns_avg_resolve_us: Long = 0L,
-        /** Configured upstreams that could not be used, in the user's own words. */
+        /** Unusable upstream entries, as the user typed them. */
         val dns_problems: String = "",
 ) {
     val ratio: Double
@@ -322,22 +262,18 @@ data class EngineStatsDto(
     val readOverload: Double
         get() = if (c_clean_budget > 0) c_clean.toDouble() / c_clean_budget else 0.0
 
-    /** Two lines for the stats dialog, or `null` when nothing was resolved yet. */
     val dnsSummary: String?
         get() {
             if (dns_queries <= 0L && dns_providers_total <= 0L) return null
-            // With no upstream configured the resolver walks from the root
-            // itself, which is a mode, not a failure — say so.
+            // No upstreams means root-walking resolution: a mode, not a failure.
             val mode =
                 if (dns_providers_total <= 0L) "从根迭代"
                 else "转发 $dns_providers_up/$dns_providers_total 可用"
             val first =
                 "$mode · 查询 $dns_queries · 缓存命中 $dns_cache_hits · 系统解析回退 $dns_os_fallbacks"
             val avg = if (dns_avg_resolve_us > 0L) " · 平均 ${dns_avg_resolve_us / 1000} ms" else ""
-            // `dns_provider_ok` counts answers the resolver produced (including
-            // its own cache), `dns_upstream_queries`/`_timeouts` count the
-            // iterative walk's authoritative queries — labelled accordingly so
-            // neither reads as the other.
+            // `dns_provider_ok` counts every answer the resolver produced (cache included); the
+            // `_upstream_*` counters are only the iterative walk's authoritative queries.
             val second =
                 "解析成功 $dns_provider_ok / 失败 $dns_provider_failures · " +
                     "权威查询 $dns_upstream_queries / 超时 $dns_upstream_timeouts$avg\n" +
@@ -347,45 +283,34 @@ data class EngineStatsDto(
         }
 
     /**
-     * Unusable upstream entries, in the user's own words, or `null`.
-     *
-     * This is the feedback loop for the 上游解析器 field: a line that cannot be
-     * turned into a forwarder — a typo, a QUIC scheme this build does not
-     * compile, an encrypted entry dropped because the platform trust store was
-     * unreadable — has to be visible, because the symptom otherwise is
-     * "I added my resolver and nothing changed".
+     * Reason a rejected upstream entry is shown next to the resolver field: a dropped entry must be
+     * visible, or the only symptom is "I added my resolver and nothing changed".
      */
     val dnsProblems: String?
         get() = dns_problems.trim().ifEmpty { null }
 }
 
 /**
- * A signed proof-of-download receipt (bridge JSON schema). Hex fields keep
- * the JSON human-readable and binary-safe; the schema mirrors
- * `native/src/engine.rs::receipt_to_json` exactly.
+ * Signed proof-of-download receipt; the schema mirrors `native/src/engine.rs::receipt_to_json`.
  */
 @Serializable
 data class ReceiptDto(
         val version: Int = 1,
-        /** Info hash of the attested content (hex, 32 bytes). */
+        /** Infohash of the attested content: hex, 32 bytes. */
         val content_root: String = "",
-        /** Ed25519 public key of the signing node (hex, 32 bytes). */
+        /** Ed25519 public key of the signing node: hex, 32 bytes. */
         val node_id: String = "",
-        /** Attested byte range (inclusive start). */
+        /** Attested byte range: inclusive start, exclusive end. */
         val range_start: Long = 0L,
-        /** Attested byte range (exclusive end). */
         val range_end: Long = 0L,
-        /** Wall-clock window (unix seconds, inclusive start). */
+        /** Wall-clock window in unix seconds: inclusive start, exclusive end. */
         val epoch_start: Long = 0L,
-        /** Wall-clock window (unix seconds, exclusive end). */
         val epoch_end: Long = 0L,
-        /** Verified bytes inside the range. */
         val bytes_received: Long = 0L,
-        /** Challenge commitment (hex, 32 bytes). */
         val challenge_digest: String = "",
-        /** Hash over sampled real blocks (hex, 32 bytes). */
+        /** Hash over sampled real blocks: hex, 32 bytes. */
         val data_proof: String = "",
-        /** Ed25519 signature over the canonical message (hex, 64 bytes). */
+        /** Ed25519 signature over the canonical message: hex, 64 bytes. */
         val signature: String = "",
 ) {
     val rangeBytes: Long get() = (range_end - range_start).coerceAtLeast(0L)
@@ -394,7 +319,6 @@ data class ReceiptDto(
         get() = if (rangeBytes > 0) bytes_received.toDouble() / rangeBytes else 0.0
 }
 
-/** Result of verifying a receipt JSON. */
 @Serializable
 data class ReceiptVerifyResultDto(
         val ok: Boolean = false,

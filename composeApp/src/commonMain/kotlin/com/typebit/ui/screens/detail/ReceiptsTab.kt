@@ -36,20 +36,10 @@ import com.typebit.ui.components.LabelValueRow
 import com.typebit.ui.util.Format
 import kotlinx.coroutines.launch
 
-/**
- * 回执 tab — proof-of-download receipts for this torrent.
- *
- * A receipt is an Ed25519-signed attestation binding (content root, byte
- * range, wall-clock window, bytes received, challenge commitment, data
- * proof over real sampled blocks). Only bytes the engine actually verified
- * can be covered — exporting is impossible below 90% coverage, so a receipt
- * is evidence of a real download, not a claim.
- *
- * Per torrent you can:
- * - export a signed receipt (saved to `<appData>/receipts/`),
- * - re-verify any saved receipt,
- * - verify a receipt JSON from anyone else (paste it here).
- */
+/** Proof-of-download receipts: Ed25519-signed attestations over the content root, byte
+ * range, wall-clock window, received bytes and sampled-block proofs. Only engine-verified
+ * bytes count (coverage below 90% cannot be exported), so a receipt is evidence of a real
+ * download, not a claim. */
 @Composable
 fun ReceiptsTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()

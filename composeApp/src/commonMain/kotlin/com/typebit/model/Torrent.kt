@@ -2,30 +2,20 @@ package com.typebit.model
 
 import kotlinx.serialization.Serializable
 
-/** Lifecycle status of a torrent, mirroring typebit's `SessionStatus`. */
 enum class TorrentStatus {
-    /** Magnet link whose metadata is still being fetched. */
     FETCHING_METADATA,
 
-    /** Actively downloading. */
     DOWNLOADING,
 
-    /** All pieces verified; we are seeding (or done). */
     SEEDING,
 
-    /** Paused by the user. */
     PAUSED,
 
-    /** Stopped (files closed). */
     STOPPED,
 
-    /** Terminal failure. */
     FAILED,
 }
 
-/**
- * Left-panel filter, modeled after qBittorrent's transfer-list filters.
- */
 enum class TorrentFilter(val labelRes: String) {
     ALL("全部"),
     DOWNLOADING("下载中"),
@@ -42,20 +32,16 @@ enum class TorrentFilter(val labelRes: String) {
     ERROR("出错"),
 }
 
-/** One file inside a torrent (paths are already decoded segments). */
 data class FileEntry(
     val path: List<String>,
     val length: Long,
-    /** User rename (relative path) — null when the original name is kept. */
     val renamed: String? = null,
 ) {
     val displayPath: String get() = path.joinToString("/")
 
-    /** Name shown to the user: the rename wins over the original path. */
     val effectivePath: String get() = renamed ?: displayPath
 }
 
-/** A tracker (announce URL) and its last known state. */
 data class TrackerInfo(
     val url: String,
     val tier: Int = 0,
@@ -69,7 +55,6 @@ data class TrackerInfo(
 
 enum class TrackerStatus { UNKNOWN, WORKING, UPDATING, NOT_WORKING }
 
-/** A peer snapshot (best-effort; typebit 0.1.0 exposes limited peer info). */
 data class PeerInfo(
     val address: String = "",
     val client: String = "",
@@ -79,10 +64,7 @@ data class PeerInfo(
     val isSeed: Boolean = false,
 )
 
-/**
- * The display model the UI renders. Rebuilt from engine queries every poll
- * tick plus the add-time metadata mirror.
- */
+/** The display model the UI renders, rebuilt from engine queries every poll tick plus the add-time mirror. */
 data class Torrent(
     val hash: String,
     val name: String,
@@ -119,12 +101,8 @@ data class Torrent(
 ) {
     val remainingBytes: Long get() = (sizeBytes - downloadedBytes).coerceAtLeast(0L)
 
-    /**
-     * Sum of the SELECTED (non-skipped) file sizes — the real download
-     * target. Equals [sizeBytes] when no file is skipped (all-Normal or no
-     * priority list). The main list shows this instead of the total so a
-     * partial selection never looks like a full-torrent download.
-     */
+    /** Sum of the SELECTED (non-skipped) file sizes — the real download target. The list shows this instead
+     *  of the torrent total, so a partial selection never looks like a full download. */
     val selectedBytes: Long
         get() {
             if (files.isEmpty() || filePriorities.isEmpty()) return sizeBytes
@@ -138,7 +116,6 @@ data class Torrent(
     val ratio: Double
         get() = if (downloadedBytes > 0) uploadedBytes.toDouble() / downloadedBytes else 0.0
 
-    /** Estimated seconds remaining, or null when not downloading. */
     val etaSeconds: Long?
         get() = when {
             status != TorrentStatus.DOWNLOADING -> null
@@ -164,11 +141,8 @@ data class Torrent(
     }
 }
 
-/**
- * A persisted torrent record (app-level metadata the engine cannot carry).
- * `data` holds either raw `.torrent` bytes (kind=FILE) or a magnet URI
- * (kind=MAGNET) so torrents survive app restarts.
- */
+/** A persisted torrent record. `data` holds either raw `.torrent` bytes (kind=FILE) or a magnet URI
+ *  (kind=MAGNET) so torrents survive app restarts. */
 @Serializable
 data class TorrentRecord(
     val hash: String,
@@ -182,27 +156,15 @@ data class TorrentRecord(
     val tags: List<String> = emptyList(),
     /** Per-file priorities (0=Skip, 1=Normal, 2=High); empty = all Normal. */
     val filePriorities: List<Int> = emptyList(),
-    /** Extra tracker URLs added at runtime (persisted across restarts). */
     val trackers: List<String> = emptyList(),
-    /**
-     * Metainfo tracker URLs the user removed at runtime. The engine re-reads
-     * the announce list from the metainfo on every restart, so a removal has to
-     * be remembered here and re-applied, exactly like [trackers] is for adds.
-     */
+    // Metainfo trackers the user removed must be re-applied on restart: the engine re-reads the announce list.
     val removedTrackers: List<String> = emptyList(),
-    /** Per-file renames: file index → new relative path (persisted). */
     val renames: Map<Int, String> = emptyMap(),
-    /**
-     * Base64 of the raw bencoded `info` dict, set once metadata is fetched
-     * for a magnet. On restart the torrent is re-added WITH metadata, so it
-     * never has to re-fetch (qBittorrent parity).
-     */
+    /** Base64 of the bencoded `info` dict: on restart the torrent is re-added WITH metadata, so it never has
+     *  to re-fetch (qBittorrent parity). */
     val infoBase64: String = "",
-    /**
-     * True while a two-phase magnet is waiting for the user's per-file
-     * selection in the add dialog. The engine keeps the torrent on a
-     * data hold (metadata + discovery only) until priorities are committed;
-     * if the app dies mid-dialog, the hold is re-applied on the next boot.
-     */
+    /** True while a two-phase magnet waits for the user's per-file selection: the engine holds the data
+     *  (metadata + discovery only) until priorities are committed, and the hold is re-applied on the next
+     *  boot if the app died mid-dialog. */
     val pendingSelection: Boolean = false,
 )

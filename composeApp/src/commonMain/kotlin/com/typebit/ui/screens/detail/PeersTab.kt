@@ -35,25 +35,18 @@ import com.typebit.ui.components.flagPainter
 import com.typebit.ui.util.Format
 import kotlinx.coroutines.delay
 
-/**
- * Peers tab — shows the LIVE peer swarm straight from the engine (address,
- * fingerprint, phase, rates), refreshed every 2 s. No fabricated rows.
- */
 @Composable
 fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     var peers by remember(torrent.hash) { mutableStateOf<List<PeerDto>>(emptyList()) }
     LaunchedEffect(torrent.hash) {
         while (true) {
-            // `store.peers` is total: a stopped/busy engine or a malformed
-            // reply yields an empty list, never an exception — an exception
-            // here would cancel this effect's scope and crash the app.
+            // store.peers is total: a stopped/busy engine or a malformed reply yields an
+            // empty list; an exception here would cancel this effect's scope and crash.
             peers = store.peers(torrent.hash)
             delay(2_000)
         }
     }
 
-    // Connected peers first, then by download rate: the rows a user cares
-    // about (the ones actually moving data) stay on top on a busy swarm.
     val ordered = remember(peers) {
         peers.sortedWith(
             compareByDescending<PeerDto> { it.phase == 2 }
@@ -81,9 +74,8 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             )
         } else {
             LazyColumn(Modifier.weight(1f)) {
-                // No `key` on purpose: the engine may briefly hold two
-                // connections from the same endpoint (rapid reconnect), and
-                // a duplicate LazyColumn key would crash the composition.
+                // No `key` on purpose: a rapid reconnect can briefly list two connections
+                // from one endpoint, and duplicate LazyColumn keys crash the composition.
                 items(ordered) { p ->
                     PeerRow(p)
                 }
@@ -98,9 +90,8 @@ private fun PeerRow(peer: PeerDto) {
         Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The peer's national flag (bundled PNG — Windows cannot render
-        // flag emoji, which is why the earlier emoji version showed boxes).
-        // Unknown / private ranges fall back to a globe icon.
+        // Bundled flag PNG: Windows cannot render flag emoji (they showed as boxes);
+        // unknown/private ranges fall back to a globe icon.
         val flag = flagPainter(peer.cc)
         if (flag != null) {
             Image(

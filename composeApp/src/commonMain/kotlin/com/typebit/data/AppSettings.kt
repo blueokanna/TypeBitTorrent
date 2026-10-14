@@ -3,19 +3,8 @@ package com.typebit.data
 import kotlinx.serialization.Serializable
 
 /**
- * The full application settings model.
- *
- * Organized exactly like qBittorrent's options dialog so users coming from
- * qBittorrent/BitComet feel at home. Every category is a separate
- * `@Serializable` value class with qBittorrent-compatible defaults.
- *
- * Honesty notes (README has the details):
- * - Fields the `typebit 0.1.0` engine can actually drive are wired through
- *   to the native bridge (ports, cache, DHT, peer limits, scheduler, choke,
- *   global speed limits, tracker lists).
- * - Fields that only make sense for libtorrent (encryption mode, UPnP
- *   lease, uTP, …) are stored + shown in the UI and marked as
- *   "engine-agnostic" — see `docs/settings.md`.
+ * Fields the engine can drive are wired through the native bridge; a few (encryption mode, uTP,
+ * UPnP lease, …) are stored and shown only — see `docs/settings.md`.
  */
 
 @Serializable
@@ -31,69 +20,39 @@ data class AppSettings(
     val rss: RssSettings = RssSettings(),
 )
 
-// ---------------------------------------------------------------------------
-// 外观 (Material You / MD3-Expressive)
-// ---------------------------------------------------------------------------
-
-/** How the app decides light vs dark, mirroring Android's theme preference. */
 @Serializable
 enum class ThemeMode { SYSTEM, LIGHT, DARK, AMOLED }
 
-/**
- * Which bundled Google Font stack the UI uses.
- *
- * Latin/CJK mixed stacks pair a Latin font with Noto Sans SC so Chinese
- * text always renders from a bundled CJK font (never a missing-glyph box).
- * `SYSTEM` uses the platform default (smallest download, no bundle).
- */
+/** Latin stacks are paired with Noto Sans SC, so CJK text never renders missing-glyph boxes. */
 @Serializable
 enum class FontChoice {
-    /** Inter (Latin) + Noto Sans SC (CJK) — the app default. */
+    /** Inter + Noto Sans SC. */
     DEFAULT,
-    /** Roboto (Latin) + Noto Sans SC (CJK). */
     ROBOTO,
-    /** Open Sans (Latin) + Noto Sans SC (CJK). */
     OPEN_SANS,
-    /** Noto Sans SC only (pure CJK / global). */
+    /** Noto Sans SC only. */
     NOTO_SANS,
-    /** Platform system default font. */
     SYSTEM,
 }
 
 @Serializable
 data class AppearanceSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    /** Bundled Google Font stack (see [FontChoice]). */
     val fontChoice: FontChoice = FontChoice.DEFAULT,
-    /** Wallpaper is shown blurred + dimmed behind the whole UI. */
     val wallpaperEnabled: Boolean = false,
-    /**
-     * Absolute path of the wallpaper. Android always stores a private copy
-     * (SAF content URIs are not stable across sessions) — the picker writes
-     * the copy into the app-data dir and returns that path.
-     */
+    /** Android stores a private copy: SAF content URIs are not stable across sessions. */
     val wallpaperPath: String = "",
-    /** Gaussian blur radius in px applied to the wallpaper. */
+    /** Gaussian blur radius in px. */
     val blurRadiusPx: Float = 24f,
     /** Black (dark) / white (light) readability scrim, 0..0.85. */
     val dimAlpha: Float = 0.45f,
-    /**
-     * `false` = Crop (fill the window, may cut edges), `true` = Fit (show
-     * the whole image, letterboxed). Mirrors desktop "fill / fit" choices.
-     */
+    /** false = Crop (fills the window), true = Fit (letterboxed whole image). */
     val wallpaperFit: Boolean = false,
-    /** Vertical pan of the wallpaper in -1..1 (only effective in Crop). */
+    /** Vertical pan, -1..1 (Crop mode only). */
     val wallpaperOffsetY: Float = 0f,
-    /**
-     * Optional explicit seed color (ARGB). When set it wins over the color
-     * extracted from the wallpaper — a manual Monet override.
-     */
+    /** Explicit ARGB seed colour; wins over the colour extracted from the wallpaper. */
     val seedOverride: Int? = null,
 )
-
-// ---------------------------------------------------------------------------
-// 行为
-// ---------------------------------------------------------------------------
 
 @Serializable
 data class BehaviorSettings(
@@ -108,21 +67,12 @@ data class BehaviorSettings(
     val notifyOnDownloadAdded: Boolean = true,
     val notifyOnDownloadFinished: Boolean = true,
     val notifyOnNewVersion: Boolean = false,
-    /**
-     * Whether the Android foreground service (dataSync + wake lock) may run
-     * while a torrent is active — the "锁屏后继续下载" master switch. When
-     * off, transfers only run while the app is foregrounded.
-     */
+    /** Android foreground service (dataSync + wake lock) may run while a torrent is active. */
     val backgroundDownloads: Boolean = true,
-    /** UI refresh cadence in ms (also drives the engine poll loop). */
+    /** UI refresh cadence in ms; also drives the engine poll loop. */
     val refreshIntervalMs: Int = 500,
 )
 
-// ---------------------------------------------------------------------------
-// 下载
-// ---------------------------------------------------------------------------
-
-/** When a torrent should be stopped automatically. */
 @Serializable
 enum class StopCondition { NONE, METADATA, RATIO, TIME, BOTH }
 
@@ -136,7 +86,7 @@ data class DownloadSettings(
     val maxActiveDownloads: Int = 3,
     val maxActiveUploads: Int = 3,
     val maxActiveTorrents: Int = 5,
-    /** Automatic Torrent Management (category → save path). */
+    /** Category decides the save path (Automatic Torrent Management). */
     val autoTmmEnabled: Boolean = false,
     val categorySavePaths: Map<String, String> = emptyMap(),
     val ratioLimitEnabled: Boolean = false,
@@ -148,18 +98,11 @@ data class DownloadSettings(
     val stopCondition: StopCondition = StopCondition.NONE,
 )
 
-// ---------------------------------------------------------------------------
-// 连接
-// ---------------------------------------------------------------------------
-
 @Serializable
 enum class ProtocolMode { TCP_AND_UDP, TCP_ONLY, UDP_ONLY }
 
 /**
- * Proxy kind. The Rust engine (`typebit`) currently implements **SOCKS5**
- * only; the `SOCKS4`/`HTTP` values are retained solely so old persisted
- * settings files still decode — they are treated as "not usable" and never
- * enable a proxy (see [EngineConfigJson]).
+ * The engine implements SOCKS5 only; `SOCKS4`/`HTTP` exist so old settings files still decode.
  */
 @Serializable
 enum class ProxyType { NONE, SOCKS4, SOCKS5, HTTP }
@@ -170,7 +113,7 @@ data class ConnectionSettings(
     val useRandomPort: Boolean = false,
     val maxConnections: Int = 500,
     val maxConnectionsPerTorrent: Int = 100,
-    /** Global upload slots (concurrent unchoked peers). */
+    /** Global upload slots: concurrent unchoked peers. */
     val maxUploads: Int = 8,
     val maxUploadsPerTorrent: Int = 4,
     val protocol: ProtocolMode = ProtocolMode.TCP_AND_UDP,
@@ -188,81 +131,40 @@ data class ConnectionSettings(
     val announceToAllTiers: Boolean = true,
     val peerTos: Int = 0,
     /**
-     * Resolve names through the built-in resolver instead of trusting the OS
-     * resolver.
-     *
-     * On a network whose DNS is filtered or hijacked this is the difference
-     * between "trackers and DHT bootstrap resolve" and "nothing resolves", and
-     * it also feeds the address guard that refuses fetches pointed at loopback
-     * or the cloud metadata service. The resolver validates DNSSEC where a
-     * signature chain exists, minimises QNAMEs, and can walk from the root
-     * itself; see [dohProviders] for which upstreams it forwards to.
-     *
-     * Off = the resolver asks no third party anything: it starts at the root
-     * servers and walks down, which is the most private mode and the one that
-     * needs outbound UDP/53 to work. If that is blocked, lookups fall back to
-     * the OS resolver.
+     * Resolve through the built-in resolver (DNSSEC validation, QNAME minimisation, root walk when
+     * no upstream is set) instead of the OS one; it also feeds the guard that refuses loopback and
+     * cloud-metadata fetches. Off needs no third party but requires outbound UDP/53.
      */
     val enableDoh: Boolean = true,
     /**
-     * Forwarder upstreams in priority order, one per line.
-     *
-     * Each line is `scheme://address[/path][#tls-name]` — `https://1.1.1.1/dns-query#cloudflare-dns.com`,
-     * `tls://1.1.1.1#one.one.one.one`, or a bare `223.5.5.5` for plain DNS.
-     * The address must be an IP literal: a resolver cannot resolve its own
-     * name. Well-known provider hostnames are mapped automatically, so
-     * `https://cloudflare-dns.com/dns-query` still works, and anything else is
-     * resolved once at startup.
+     * Forwarders in priority order, one per line: `scheme://address[/path][#tls-name]`, e.g.
+     * `tls://1.1.1.1#one.one.one.one` or a bare `223.5.5.5`. The address must be an IP literal (a
+     * resolver cannot resolve its own name); well-known provider hostnames are mapped automatically.
      */
     val dohProviders: String = DEFAULT_DOH_PROVIDERS,
-    /**
-     * Ask for AAAA records and allow IPv6 peers/trackers.
-     *
-     * Off is the right setting on a v4-only network: an AAAA lookup there is a
-     * wasted round trip per name, and a v6 peer address is unreachable.
-     */
+    /** Off on a v4-only network: an AAAA lookup is a wasted round trip and v6 peers are unreachable. */
     val enableIpv6: Boolean = true,
-    /**
-     * Allow web-seed and tracker fetches that resolve to a private LAN address.
-     *
-     * On by default because seeding from a NAS on the same LAN is normal here.
-     * Off refuses every RFC 1918 / ULA target — the correct setting for a
-     * machine that should never touch its own network on a torrent's behalf.
-     */
+    /** Allow fetches that resolve to a private LAN address; off refuses every RFC 1918 / ULA target. */
     val allowLanWebseeds: Boolean = true,
 )
 
-/**
- * Default forwarder ladder, mirrored from `native/src/dns.rs`.
- *
- * Addressed by IP with the TLS name after `#`: the resolver cannot resolve a
- * resolver's hostname, so the address has to be literal. The three entries are
- * a global anycast path, a mainland-China path, and a third that keeps
- * answering where the first two are throttled.
- */
+/** Mirrors the ladder in `native/src/dns.rs`; IP-literal, TLS name after `#`. */
 const val DEFAULT_DOH_PROVIDERS: String =
     "https://1.1.1.1/dns-query#cloudflare-dns.com\n" +
         "https://223.5.5.5/dns-query#dns.alidns.com\n" +
         "https://1.12.12.12/dns-query#doh.pub"
 
 
-// ---------------------------------------------------------------------------
-// 速度
-// ---------------------------------------------------------------------------
-
-/** Which day set the alternative-limit schedule applies to. */
 @Serializable
 enum class ScheduleDays { EVERY_DAY, WEEKDAYS, WEEKEND, MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY }
 
 @Serializable
 data class SpeedSettings(
-    /** Global download limit in KiB/s (0 = unlimited). */
+    /** Global limits in KiB/s, 0 = unlimited; the alt* pair applies inside the schedule window. */
     val globalDownloadLimitKib: Long = 0,
-    /** Global upload limit in KiB/s (0 = unlimited). */
     val globalUploadLimitKib: Long = 0,
     val altDownloadLimitKib: Long = 10240,
     val altUploadLimitKib: Long = 3072,
-    /** Alternative limits are active when the schedule window is open. */
     val alternativeLimitsEnabled: Boolean = false,
     val scheduleEnabled: Boolean = false,
     val scheduleFromHour: Int = 8,
@@ -274,27 +176,15 @@ data class SpeedSettings(
     val slowTorrentInactiveSec: Int = 60,
 )
 
-// ---------------------------------------------------------------------------
-// BitTorrent
-// ---------------------------------------------------------------------------
-
 @Serializable
 enum class EncryptionMode { ALLOW, PREFER, REQUIRE }
 
-/** How to place multi-file torrents on disk. */
 @Serializable
 enum class ContentLayout { ORIGINAL, SUBFOLDER, NO_SUBFOLDER }
 
 /**
- * Disk file allocation strategy (fragmentation vs. upfront cost).
- *
- * - OFF: files grow as pieces land — least startup I/O, most fragmentation
- *   on HDDs.
- * - SPARSE (recommended): the full extent is reserved at open time so the
- *   OS lays out clusters contiguously, while disk space is only consumed
- *   for data actually written (sparse file on Windows).
- * - FULL: reserved AND physically written out — best contiguous layout on
- *   all filesystems, costs full disk space and an initial write pass.
+ * OFF: files grow as pieces land (most fragmentation). SPARSE: the extent is reserved up front
+ * while space is consumed only as data lands. FULL: reserved and physically written out.
  */
 @Serializable
 enum class PreallocationMode(val label: String, val code: Int) {
@@ -317,67 +207,36 @@ data class BitTorrentSettings(
     val enableUpnp: Boolean = true,
     val enableNatPmp: Boolean = true,
     val maxPeersPerTorrent: Int = 80,
-    /**
-     * Request pipeline depth per peer (16 KiB blocks, mechanism 1). 32
-     * blocks = ≤ 512 KiB in flight per peer — the libtorrent-class default.
-     */
+    /** Blocks in flight per peer (16 KiB blocks each); 32 = up to 512 KiB per peer. */
     val requestPipeline: Int = 32,
-    /**
-     * Per-request timeout in ms (mechanism 2): a block not answered within
-     * this window is released and re-issued to a healthier peer.
-     */
+    /** A block not answered within this window is released and re-issued to a healthier peer. */
     val requestTimeoutMs: Long = 20_000,
-    /**
-     * Consecutive request timeouts on one peer before it is disconnected
-     * and blacklisted (mechanism 2). Deliberately forgiving: the engine's
-     * request timeout is pipeline-aware and the counter resets on ANY
-     * delivered block, so a peer must deliver nothing across 8 full
-     * timeout windows to earn a ban — this stops healthy-but-congested
-     * seeds from collapsing the swarm mid-download.
-     */
+    /** Consecutive timeouts before a peer is banned; the counter resets on ANY delivered block. */
     val maxRequestTimeouts: Int = 8,
     val endgamePieces: Int = 32,
     val smartScheduling: Boolean = true,
     val useDefaultTrackers: Boolean = true,
     val antiLeechEnabled: Boolean = true,
-    /**
-     * qBittorrent-Enhanced-style hard anti-leech: known leech clients
-     * (Xunlei, Thunder, FlashGet, …) are never unchoked, so they cannot
-     * download from us while still being able to upload to us.
-     */
+    /** Hard anti-leech: known leech clients (Xunlei, Thunder, FlashGet, …) are never unchoked. */
     val blockLeechClients: Boolean = true,
-    /** Extra tracker announce URLs, one per line. */
+    /** Announce URLs, one per line. */
     val extraTrackers: String = "",
-    /**
-     * Tracker subscription URLs, one per line.
-     *
-     * Each URL must answer with a trackerslist document (one announce URL per
-     * line) — [parseTrackerList] filters it, and the result is stored in
-     * [subscribedTrackers] and announced for every torrent, existing and new.
-     * This is what keeps a stale tracker list from silently starving a NAS
-     * that runs for months.
-     */
+    /** Must answer a trackerslist document; the result feeds [subscribedTrackers] for every torrent. */
     val trackerUpdateUrl: String = "",
-    /** Subscription refresh interval in hours; 0 disables automatic updates. */
+    /** Hours between refreshes; 0 = manual only. */
     val trackerUpdateHours: Int = 12,
-    /** Epoch millis of the last successful subscription fetch (0 = never). */
+    /** Epoch millis of the last successful fetch; 0 = never. */
     val trackerUpdateLastMs: Long = 0,
-    /** Result of the last subscription fetch, one announce URL per line. */
     val subscribedTrackers: String = "",
-    /** Disk write-back cache budget in bytes. */
+    /** Write-back cache budget in bytes. */
     val cacheBytes: Long = 256L * 1024 * 1024,
-    /**
-     * Disk file allocation strategy (0=off, 1=sparse, 2=full). Applied when
-     * a torrent's files are first opened; only affects torrents added
-     * afterwards. See [PreallocationMode].
-     */
+    /** 0=off, 1=sparse, 2=full; applied when files are first opened, so only new torrents. */
     val preallocation: Int = 1,
     val seedingSlots: Int = 8,
     val leechingSlots: Int = 8,
     val optimisticIntervalMs: Long = 30_000,
     val snubTimeoutMs: Long = 60_000,
     val chokeIntervalMs: Long = 10_000,
-    // utility scheduler weights (typebit-specific)
     val schedulerAlpha: Int = 8,
     val schedulerBeta: Int = 2,
     val schedulerGamma: Int = 1,
@@ -386,14 +245,7 @@ data class BitTorrentSettings(
     val contentLayout: ContentLayout = ContentLayout.ORIGINAL,
     val anonymousMode: Boolean = false,
 ) {
-    /**
-     * Every announce URL the client should use: the hand-written
-     * [extraTrackers] plus whatever the subscription last delivered.
-     *
-     * Kept as one derived value so the engine config, the per-torrent tracker
-     * merge and the WebUI all see the same list — a subscription that only
-     * affected new torrents would be useless on a box that is already seeding.
-     */
+    /** [extraTrackers] plus the last subscription result, so config, tracker merges and WebUI agree. */
     val allTrackers: String
         get() =
             when {
@@ -403,13 +255,9 @@ data class BitTorrentSettings(
             }
 }
 
-// ---------------------------------------------------------------------------
-// WebUI
-// ---------------------------------------------------------------------------
-
 @Serializable
 data class WebUiSettings(
-    /** Serve the built-in WebUI (desktop/NAS builds; the phone app ignores it). */
+    /** Desktop/NAS builds; the phone app ignores it. */
     val enabled: Boolean = true,
     val port: Int = 18881,
     val username: String = "admin",
@@ -417,10 +265,7 @@ data class WebUiSettings(
     val passwordHash: String = "",
     val hostHeaderValidation: Boolean = false,
     val httpsEnabled: Boolean = false,
-    /**
-     * Desktop only: also listen on the LAN instead of loopback.
-     * Headless deployments bind with `--bind=0.0.0.0` explicitly.
-     */
+    /** Desktop only: also listen on the LAN instead of loopback (headless binds `--bind=0.0.0.0`). */
     val remoteAccess: Boolean = false,
     val maxAuthFailCount: Int = 5,
     val banDurationSec: Long = 3600,
@@ -430,10 +275,6 @@ data class WebUiSettings(
     val localHostAuth: Boolean = true,
     val reverseProxyEnabled: Boolean = false,
 )
-
-// ---------------------------------------------------------------------------
-// 高级
-// ---------------------------------------------------------------------------
 
 @Serializable
 enum class UtpMixedMode { PREFER_TCP, PEER_PROPORTIONAL, TCP }
@@ -463,10 +304,6 @@ data class AdvancedSettings(
     val suggestMode: Boolean = false,
     val maxOutstandingRequests: Int = 256,
 )
-
-// ---------------------------------------------------------------------------
-// RSS
-// ---------------------------------------------------------------------------
 
 @Serializable
 data class RssSettings(

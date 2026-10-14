@@ -23,7 +23,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -38,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/** A titled group of settings fields (qBittorrent's option cards). */
 @Composable
 fun SectionCard(
     title: String,
@@ -61,7 +60,6 @@ fun SectionCard(
     }
 }
 
-/** Material 3 switch row with description. */
 @Composable
 fun SettingSwitch(
     label: String,
@@ -88,7 +86,6 @@ fun SettingSwitch(
     }
 }
 
-/** Text field row (single line). */
 @Composable
 fun SettingTextField(
     label: String,
@@ -107,7 +104,6 @@ fun SettingTextField(
     )
 }
 
-/** Numeric field row with an optional suffix (e.g. "KiB/s"). */
 @Composable
 fun SettingNumberField(
     label: String,
@@ -130,7 +126,6 @@ fun SettingNumberField(
     }
 }
 
-/** Read-only explanatory note rendered inside a settings card. */
 @Composable
 fun SettingNote(text: String) {
     Text(
@@ -141,7 +136,6 @@ fun SettingNote(text: String) {
     )
 }
 
-/** Material 3 dropdown row. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun <T> SettingDropdown(
@@ -159,7 +153,7 @@ fun <T> SettingDropdown(
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable).padding(vertical = 2.dp),
+            modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable).padding(vertical = 2.dp),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { opt ->
@@ -175,12 +169,8 @@ fun <T> SettingDropdown(
     }
 }
 
-/**
- * Compact dropdown for tight rows (file lists, add dialog): a fixed-width
- * button + menu that never squeezes its siblings — unlike a full-width
- * ExposedDropdownMenuBox, which collapses neighbours into a sliver and
- * wraps their text into one character per line.
- */
+/** Fixed-width dropdown for tight rows: unlike a full-width ExposedDropdownMenuBox,
+ * it never squeezes its siblings into a sliver that wraps one character per line. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun <T> CompactDropdown(
@@ -223,7 +213,6 @@ fun <T> CompactDropdown(
     }
 }
 
-/** Scrollable settings body. */
 @Composable
 fun SettingsScaffold(
     content: @Composable () -> Unit,

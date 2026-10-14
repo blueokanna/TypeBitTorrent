@@ -23,21 +23,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/**
- * Foreground dataSync service that keeps BitTorrent transfers alive while the
- * app is backgrounded or the screen is locked.
- *
- * Why a foreground service? On Android 8+ a plain background process is
- * frozen within minutes — downloads would stop the moment the user leaves the
- * app. A `dataSync` foreground service pins the process (with a mandatory,
- * user-visible notification) and a partial wake lock keeps the CPU running
- * while the screen is off, so the Rust engine keeps downloading and seeding.
- *
- * The engine itself is in-process (owned by the AppStore singleton); this
- * service only *keeps the process alive* and renders the live status into the
- * notification. It is deliberately thin: no engine logic, no JNI — it just
- * reads the shared [appStore] state on a 1 s tick.
- */
+/** Foreground `dataSync` service: pins the process (and the in-process Rust engine) while the app is
+ *  backgrounded; it only renders status into the mandatory notification. */
 class DownloadService : Service() {
     companion object {
         private const val CHANNEL_ID = "typebit_downloads"
@@ -48,7 +35,6 @@ class DownloadService : Service() {
         private const val WAKELOCK_TAG = "typebit:download"
         private const val TAG = "TypeBitDownloadService"
 
-        /** Starts the foreground service (safe to call repeatedly). */
         fun start(context: Context) {
             val intent = Intent(context, DownloadService::class.java).setAction(ACTION_START)
             try {
@@ -58,13 +44,11 @@ class DownloadService : Service() {
                     context.startService(intent)
                 }
             } catch (_: Exception) {
-                // ForegroundServiceStartNotAllowedException (app not in
-                // foreground) or duplicate start — the service being absent
-                // for one tick is harmless; the store retries.
+                // ForegroundServiceStartNotAllowedException (app not in foreground) or duplicate start:
+                // harmless for one tick, the store retries.
             }
         }
 
-        /** Stops the foreground service (safe to call repeatedly). */
         fun stop(context: Context) {
             context.stopService(Intent(context, DownloadService::class.java).setAction(ACTION_STOP))
         }
@@ -79,19 +63,15 @@ class DownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        // `startForeground` throws on hostile OEM states (notification
-        // permission revoked mid-flight, "startForeground not allowed",
-        // channel deleted by the user). An uncaught throw here kills the
-        // whole process — the download would be lost together with the UI —
-        // so the service degrades to a plain background service instead.
+        // `startForeground` throws on hostile OEM states (permission revoked mid-flight, channel
+        // deleted by the user); an uncaught throw would kill the whole process.
         try {
             startForeground(NOTIFICATION_ID, buildNotification("启动中", "准备下载/做种…"))
         } catch (t: Throwable) {
             android.util.Log.w(TAG, "startForeground failed", t)
         }
-        // Partial wake lock: keeps the CPU alive (screen may be off) so the
-        // engine's timers and sockets keep firing. Never full — the engine
-        // only needs CPU, and full would drain the battery on screen-off.
+        // Partial wake lock only: keeps the CPU alive (screen may be off) so the engine's timers and
+        // sockets keep firing; a full lock would drain the battery.
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock =
                 pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
@@ -99,8 +79,7 @@ class DownloadService : Service() {
                     try {
                         acquire()
                     } catch (_: Exception) {
-                        // Wake lock can fail on some OEM builds; downloads
-                        // continue via the foreground process anyway.
+                        // Some OEM builds refuse the lock; downloads continue regardless.
                     }
                 }
         tickJob =
@@ -117,9 +96,8 @@ class DownloadService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        // START_STICKY: if the OS reclaims us (memory pressure) it restarts
-        // the service with a null intent so downloads resume their process
-        // pin once the user returns. The store re-kicks it on each poll.
+        // START_STICKY: after an OS reclaim the service restarts with a null intent, and the store
+        // re-kicks it on each poll.
         return START_STICKY
     }
 
@@ -131,7 +109,6 @@ class DownloadService : Service() {
                 try {
                     it.release()
                 } catch (_: Exception) {
-                    // Already released.
                 }
             }
         }
@@ -147,9 +124,8 @@ class DownloadService : Service() {
                             it.status == TorrentStatus.SEEDING ||
                             it.status == TorrentStatus.FETCHING_METADATA
                 }
-        // The store owns the lifecycle (start/stop via ensureBackgroundMode);
-        // this service NEVER self-stops — a brief empty window at boot or a
-        // mid-poll snapshot must not drop the foreground pin mid-download.
+        // The store owns start/stop (`ensureBackgroundMode`); this service never self-stops, so a brief
+        // empty snapshot cannot drop the foreground pin mid-download.
         val (title, text) =
                 if (active.isEmpty()) {
                     "TypeBitTorrent" to "后台服务运行中 · 暂无活动任务"
@@ -171,8 +147,6 @@ class DownloadService : Service() {
         try {
             nm.notify(NOTIFICATION_ID, buildNotification(title, text))
         } catch (_: Exception) {
-            // NotificationManager can throw on unusual OEM states; the
-            // foreground service continues regardless.
         }
     }
 

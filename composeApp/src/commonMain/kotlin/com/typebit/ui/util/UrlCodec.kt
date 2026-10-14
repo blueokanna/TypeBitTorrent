@@ -1,9 +1,6 @@
 package com.typebit.ui.util
 
-/**
- * Minimal RFC 3986 percent-encoding (UTF-8), used for building search URLs.
- * Kept dependency-free and unit-testable.
- */
+/** Minimal RFC 3986 percent-encoding (UTF-8) for building search URLs. */
 object UrlCodec {
     private const val HEX = "0123456789ABCDEF"
 

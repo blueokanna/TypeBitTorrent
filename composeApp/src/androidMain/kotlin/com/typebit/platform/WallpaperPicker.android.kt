@@ -23,11 +23,8 @@ actual fun rememberWallpaperPicker(onPicked: (String) -> Unit): () -> Unit {
     }
 }
 
-/**
- * Copies the picked content into app-private storage so the wallpaper path
- * stays valid across launches and across SAF URI expiry. Returns the new
- * absolute path, or null when the source can't be read.
- */
+// Copy into app-private storage: a SAF content URI expires, so the wallpaper path must stay valid
+// across launches.
 private fun copyToAppData(context: Context, uri: Uri): String? {
     return runCatching {
         val dir = File(Platform.appDataDir(), "wallpaper")

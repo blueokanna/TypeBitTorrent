@@ -24,11 +24,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Android 13+ requires a runtime grant for POST_NOTIFICATIONS — without
-     * it the foreground download notification is invisible (and on some OEM
-     * builds the dataSync service misbehaves). Ask once on first launch.
-     */
+    // Android 13+ requires a runtime POST_NOTIFICATIONS grant, otherwise the foreground download
+    // notification stays invisible on some OEM builds.
     private fun requestRuntimePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted =

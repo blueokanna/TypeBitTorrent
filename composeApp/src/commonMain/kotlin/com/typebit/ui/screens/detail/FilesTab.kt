@@ -36,7 +36,6 @@ import com.typebit.ui.components.TreeLeaf
 import com.typebit.ui.components.buildFileTree
 import com.typebit.ui.components.findNodeByKey
 
-/** 文件 tab — qBittorrent 式文件树：折叠目录、每文件优先级 + 重命名 + 边下边播。 */
 @Composable
 fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     if (torrent.files.isEmpty()) {
@@ -51,10 +50,8 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     var previewMsg by remember { mutableStateOf<String?>(null) }
     val renamingFile = renamingIndex?.let { torrent.files.getOrNull(it) }
 
-    // 边下边播: the playable path is the staged `.part` file while the
-    // torrent is downloading (the engine verifies pieces head-first then
-    // strictly in file order, so the head of a video is playable early) and
-    // the final file once complete.
+    // While downloading, preview plays the staged ".part" file — the engine verifies
+    // pieces head-first, so the head of a video is playable early.
     val previewPath: (FileEntry) -> String = { f ->
         val base = torrent.saveDir.trimEnd('/', '\\') + "/" + f.effectivePath
         if (torrent.isComplete) base else "$base.part"
@@ -84,13 +81,9 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
         buildFileTree(torrent.files.mapIndexed { i, f -> TreeLeaf(i, f.path, f.length) })
     }
 
-    // Selection summary: how many files are actually downloaded and the
-    // real target size — skipped (0-priority) files are excluded, so a
-    // 1-file pick never looks like a full-torrent download.
     val selectedFiles =
             torrent.files.indices.count { (torrent.filePriorities.getOrNull(it) ?: 1) != 0 }
 
-    // 边下边播 hint row: shown once a video file exists in the torrent.
     val hasVideo = torrent.files.any { isVideoFile(it.effectivePath) }
 
     Column(modifier.fillMaxSize()) {
@@ -163,9 +156,8 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             onToggleDir = { _, _ -> },
             onPriorityLeaf = { i, p -> store.setFilePriority(torrent.hash, i, p) },
             onPriorityDir = { dirKey, p ->
-                // One bulk commit per directory: the engine releases the
-                // two-phase magnet hold and re-plans the scheduler ONCE
-                // instead of once per file.
+                // One bulk commit per directory: the engine releases the magnet hold and
+                // re-plans the scheduler ONCE instead of once per file.
                 val indices = findNodeByKey(fileTree, dirKey)?.leafIndices ?: emptyList()
                 store.setFilePriorities(
                     torrent.hash,
@@ -177,15 +169,11 @@ fun FilesTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             showSelection = false,
             onPreview = previewFile,
             isVideo = { i -> torrent.files.getOrNull(i)?.let { isMediaFile(it.effectivePath) } == true },
-            // Bounded height: the tree scrolls inside the tab instead of
-            // asking for the pager page's full height.
             modifier = Modifier.weight(1f),
         )
     }
 }
 
-/** Rename dialog: the staged file keeps its original name while downloading,
- *  and is promoted to the new name on completion. */
 @Composable
 private fun RenameFileDialog(
     file: FileEntry,

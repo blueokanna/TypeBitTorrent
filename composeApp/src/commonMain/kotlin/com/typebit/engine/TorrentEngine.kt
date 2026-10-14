@@ -10,17 +10,9 @@ import kotlinx.serialization.json.longOrNull
 private val BRIDGE_JSON = Json { ignoreUnknownKeys = true }
 
 /**
- * Everything the `.torrent` builder needs.
- *
- * @param files `(absolute path, relative path components)` — the rel path is
- *   what lands in the torrent, so a picked folder keeps its structure.
- * @param pieceLength power of two in 16 KiB .. 256 MiB.
- * @param announce tier-0 tracker list; each URL is validated by the builder
- *   (a bad URL is dropped rather than aborting the build).
- * @param announceList BEP-12 tiers, used instead of [announce] when present.
- * @param comment free-form comment (kept verbatim, trimmed).
- * @param source cross-seed tag written into `info`.
- * @param isPrivate BEP-27 `private: 1`.
+ * `rel` components are what lands in the torrent (folders keep their structure) and invalid announce
+ * URLs are dropped, not fatal. `pieceLength` is a power of two, 16 KiB..256 MiB; `announceList`
+ * (BEP-12) wins over `announce`; `isPrivate` is BEP-27.
  */
 data class MakeTorrentOptions(
     val files: List<Pair<String, List<String>>>,
@@ -33,19 +25,17 @@ data class MakeTorrentOptions(
     val isPrivate: Boolean = false,
 )
 
-/** Snapshot of a running (or finished) `.torrent` build. */
 data class MakeTorrentProgress(
     val doneBytes: Long = 0L,
     val totalBytes: Long = 0L,
     val running: Boolean = false,
     val cancelled: Boolean = false,
 ) {
-    /** 0f..1f; 0 while the total size is still unknown. */
+    /** 0f..1f; stays 0 until the total size is known. */
     val fraction: Float
         get() = if (totalBytes <= 0L) 0f else (doneBytes.toDouble() / totalBytes).toFloat().coerceIn(0f, 1f)
 }
 
-/** Snapshot of a running (or finished) disk verification ("重新校验"). */
 data class RecheckProgress(
     val doneBytes: Long = 0L,
     val totalBytes: Long = 0L,
@@ -58,32 +48,20 @@ data class RecheckProgress(
 }
 
 /**
- * The engine facade — the single seam the rest of the app talks to.
- *
- * Kept deliberately narrow so the store never touches JNI or JSON details.
- * All methods are safe to call from any thread (the Rust worker serializes
- * commands internally); queries block briefly on a bounded one-shot reply.
+ * The single seam the app talks to, so the store never touches JNI or JSON. Safe from any thread;
+ * queries block briefly on a bounded one-shot reply.
  */
 interface TorrentEngine {
 
-    /** Creates the engine worker. Returns false when the native lib is absent. */
+    /** False when the native library is absent. */
     fun start(configJson: String, saveDir: String): Boolean
 
-    /** Shuts the worker down and frees the handle. Idempotent. */
     fun stop()
 
     val isRunning: Boolean
 
-    // -- torrents -----------------------------------------------------------
-
-    /** Parses `.torrent` bytes without adding (add-dialog preview). */
     fun parseTorrent(data: ByteArray): TorrentInfoDto?
 
-    /**
-     * Creates a v1 `.torrent` from local files. Each entry is
-     * `(absolute path, relative path components)`; `pieceLength` must be a
-     * supported power of two (16 KiB .. 256 MiB). Returns the raw bytes.
-     */
     fun makeTorrent(
         files: List<Pair<String, List<String>>>,
         pieceLength: Int,
@@ -101,41 +79,23 @@ interface TorrentEngine {
             )
         )
 
-    /**
-     * Full-featured v1 creation: announce tiers (BEP-12), `private` (BEP-27),
-     * cross-seed `source` tag and the created-by/comment fields.
-     */
     fun makeTorrent(options: MakeTorrentOptions): ByteArray?
 
-    /** Live progress of the in-flight [makeTorrent] (idle when nothing runs). */
     fun makeTorrentProgress(): MakeTorrentProgress = MakeTorrentProgress()
 
-    /** Requests cancellation of the in-flight [makeTorrent]. */
     fun cancelMakeTorrent(): Boolean = false
 
     /**
-     * Verifies the data a torrent already has on disk against its piece
-     * hashes, then hands the verified set to the engine.
-     *
-     * This is what makes "做种" work for files that did not come from this
-     * client: the engine starts each session with an empty bitfield, so
-     * without a verification pass it re-downloads data that is already there
-     * and has nothing to upload. Blocking (reads the whole payload) — call it
-     * from a background scope. Returns the verified piece count, negative on
-     * error.
+     * Verifies on-disk data and hands the verified set to the engine, which otherwise starts every
+     * session with an empty bitfield. Blocking; returns the verified piece count, negative on error.
      */
     fun recheckData(hash: String): Int = -1
 
-    /** Live progress of the in-flight [recheckData]. */
     fun recheckProgress(): RecheckProgress = RecheckProgress()
 
-    /** Requests cancellation of the in-flight [recheckData]. */
     fun cancelRecheck(): Boolean = false
 
-    /**
-     * Adds a `.torrent` with per-file priorities (0=Skip, 1=Normal, 2=High)
-     * aligned with the file table. Empty list keeps every file at Normal.
-     */
+    /** `filePriorities`: one byte per file in table order (0=Skip, 1=Normal, 2=High); empty = all Normal. */
     fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int> = emptyList()): String?
 
     fun addMagnet(uri: String, saveDir: String): String?
@@ -148,45 +108,28 @@ interface TorrentEngine {
 
     fun remove(hash: String): Boolean
 
-    /** Renames one file of a torrent; false when the name is invalid. */
+    /** False when the name is invalid. */
     fun renameFile(hash: String, file: Int, name: String): Boolean
 
-    /** Renames the torrent itself (display name); false when the name is invalid. */
     fun renameTorrent(hash: String, name: String): Boolean
 
-    // -- selective download + runtime trackers (typebit 0.1.1) --------------
-
-    /** Sets one file's priority: 0=Skip, 1=Normal, 2=High. */
     fun setFilePriority(hash: String, file: Int, priority: Int): Boolean
 
-    /**
-     * Atomically replaces ALL per-file priorities and releases any two-phase
-     * magnet hold. 0=Skip, 1=Normal, 2=High, aligned with the file table.
-     */
+    /** Replaces ALL priorities atomically and releases any two-phase magnet hold. */
     fun setFilePriorities(hash: String, priorities: List<Int>): Boolean
 
-    /**
-     * Two-phase magnet support: `hold` makes the torrent fetch metadata / run
-     * discovery but request NO data pieces until priorities are committed.
-     */
+    /** Two-phase magnet: `hold` fetches metadata but requests NO pieces until [setFilePriorities] commits. */
     fun setHoldData(hash: String, hold: Boolean): Boolean
 
-    /** Current per-file priorities of a torrent, or null when unknown. */
     fun filePriorities(hash: String): List<Int>?
 
-    /** Adds a tracker URL to a running torrent (no restart needed). */
     fun addTracker(hash: String, url: String): Boolean
 
-    /** Removes a tracker URL from a running torrent. */
     fun removeTracker(hash: String, url: String): Boolean
 
-    /** Current tracker URLs of a torrent, or null when unknown. */
     fun trackers(hash: String): List<String>?
 
-    /** Live peer snapshot of a torrent (empty when none connected). */
     fun peers(hash: String): List<PeerDto>
-
-    // -- queries ------------------------------------------------------------
 
     fun progress(hash: String): Double
 
@@ -196,17 +139,12 @@ interface TorrentEngine {
 
     fun torrentInfo(hash: String): TorrentInfoDto?
 
-    /** Raw bencoded `info` dict (base64) for metadata persistence; null when unknown. */
+    /** Raw bencoded `info` dict, base64-encoded, for metadata persistence. */
     fun torrentInfoRaw(hash: String): String?
 
-    /** All torrents' persisted have/paused state. */
     fun torrentStates(): List<TorrentStateDto>
 
-    /**
-     * One batched snapshot for a whole poll tick — DHT count plus every
-     * torrent's runtime stats (progress/downloaded/complete/paused/have +
-     * meta essentials). One JNI round-trip instead of 4N+3.
-     */
+    /** Batched poll tick: DHT count plus each torrent's runtime stats in one JNI round-trip. */
     fun snapshot(): EngineSnapshotDto
 
     fun torrentCount(): Int
@@ -218,17 +156,11 @@ interface TorrentEngine {
     /** Cumulative wire bytes: (downloaded, uploaded). */
     fun totals(): Pair<Long, Long>
 
-    /** Engine-wide statistics (wire totals, cache, peers, discarded). */
     fun stats(): EngineStatsDto
 
-    // -- proof-of-download receipts ------------------------------------------
-
     /**
-     * Exports a signed proof-of-download receipt for `hash` over an absolute
-     * byte range (inclusive start / exclusive end), attested to a wall-clock
-     * window (unix seconds). Returns the receipt JSON on success, or a
-     * `{"error":"…"}` JSON when the torrent has no verified coverage of the
-     * range (receipts require ≥90%). `null` only when the engine is gone.
+     * Signed receipt for a byte range (inclusive start / exclusive end) over a unix wall-clock
+     * window. Returns receipt JSON, or `{"error":"…"}` when verified coverage is below 90%.
      */
     fun exportReceipt(
         hash: String,
@@ -238,48 +170,34 @@ interface TorrentEngine {
         epochEnd: Long,
     ): String?
 
-    /** Verifies a receipt JSON (Ed25519 signature + structural integrity). */
     fun verifyReceipt(json: String): ReceiptVerifyResultDto
-
-    // -- configuration ------------------------------------------------------
 
     fun setGlobalLimits(downBytesPerSec: Long, upBytesPerSec: Long)
 
     fun setSessionConfig(configJson: String)
 
-    // -- Windows system integration (firewall / ICS) -------------------------
-    // These never need the engine handle; they shell out to `netsh` /
-    // `powershell` on the caller's (IO) thread and return a truthful result.
-    // Android reports "仅 Windows 支持" for every call.
+    // Engine-independent: shells out to `netsh` / `powershell` on the caller's IO thread.
+    // Android reports a Windows-only error for every call.
 
-    /** Adds inbound Windows firewall rules for `port` (TCP+UDP). */
     fun firewallAdd(port: Int): SystemResultDto
 
     /** Retries [firewallAdd] through a single UAC elevation prompt. */
     fun firewallAddElevated(port: Int): SystemResultDto
 
-    /** Removes the inbound firewall rules for `port`. */
     fun firewallRemove(port: Int): SystemResultDto
 
-    /** Whether the firewall rules for `port` currently exist. */
     fun firewallStatus(port: Int): SystemResultDto
 
-    /** Query whether Internet Connection Sharing is enabled. */
     fun icsStatus(): SystemResultDto
 
-    /** Enables Internet Connection Sharing (explicit, admin-gated). */
+    /** Explicit, admin-gated action. */
     fun icsEnable(): SystemResultDto
 
-    /** Disables Internet Connection Sharing on all shared connections. */
     fun icsDisable(): SystemResultDto
-
-    // -- persistence --------------------------------------------------------
 
     fun saveState(): ByteArray?
 
     fun loadState(data: ByteArray)
-
-    // -- polling ------------------------------------------------------------
 
     fun takeEvents(): List<EngineEventDto>
 
@@ -287,27 +205,18 @@ interface TorrentEngine {
 }
 
 /**
- * JNI-backed implementation.
- *
- * Failure contract — the reason this class exists in this shape: a JNI call
- * can fail in ways that are NOT exceptions from our own code (`UnsatisfiedLinkError`
- * when the `.so`/.dll is missing or built for another ABI, a stale/zero handle
- * after teardown, an `IllegalStateException` from the bridge). The UI calls
- * these methods from composition-scoped coroutines (the Peers tab polls every
- * 2 s, the Files tab applies priorities on tap); on Android an uncaught
- * exception in such a coroutine **kills the process instantly** — the "点击
- * Peers/文件 闪退" crash. Every native entry point below therefore degrades to
- * a safe default instead of throwing, and the failure is recorded in
- * [lastBridgeFailure] + stdout (logcat) so it is still diagnosable.
+ * Failure contract: a JNI call can fail outside our code (`UnsatisfiedLinkError` for a missing or
+ * wrong-ABI library, a stale handle, a bridge exception). Callers run in composition-scoped
+ * coroutines whose uncaught exceptions kill the Android process, so every entry point degrades to a
+ * safe default and records the failure in [lastBridgeFailure] plus stdout.
  */
 class NativeTorrentEngine : TorrentEngine {
 
-    /** Opaque engine pointer; `0` = no engine. Volatile: read by the poll
-     *  loop / peers view / UI threads while `stop()` zeroes it elsewhere. */
+    /** Opaque engine pointer; 0 = no engine. Volatile: `stop()` zeroes it while others read. */
     @Volatile
     private var handle: Long = 0L
 
-    /** Most recent non-fatal bridge failure (`null` when healthy). */
+    /** Most recent non-fatal bridge failure; null when healthy. */
     @Volatile
     var lastBridgeFailure: String? = null
         private set
@@ -316,16 +225,12 @@ class NativeTorrentEngine : TorrentEngine {
 
     override fun start(configJson: String, saveDir: String): Boolean {
         if (handle != 0L) return true
-        // `ensureNativeLoaded()` throws IllegalStateException and the JNI
-        // lookup can throw UnsatisfiedLinkError — an `Error`, which a plain
-        // `catch (e: Exception)` would miss. Both must become `false`, never
-        // propagate: the store boots this from a background job.
+        // The JNI lookup throws `UnsatisfiedLinkError` (an `Error`, not an `Exception`) and the
+        // store boots this from a background job: both failures must return false, never throw.
         val created = try {
             ensureNativeLoaded()
-            // Refuse to call into a library whose JNI surface drifted: a
-            // signature mismatch is not a catchable error, it is a native
-            // crash (wrong register/slot layout), so the check must happen
-            // before the first real call.
+            // Check before the first real call: a drifted JNI surface is a native crash (wrong
+            // register/slot layout), not a catchable error.
             val abi = runCatching { nativeBridgeAbi() }.getOrDefault(-1)
             if (abi != EXPECTED_BRIDGE_ABI) {
                 fail(
@@ -369,7 +274,7 @@ class NativeTorrentEngine : TorrentEngine {
         return runCatching { BRIDGE_JSON.decodeFromString<TorrentInfoDto>(json) }.getOrNull()
     }
 
-    /** Records a swallowed bridge failure (logcat on Android, stderr elsewhere). */
+    /** Records a swallowed bridge failure for logcat / stderr. */
     private fun fail(where: String, t: Throwable) {
         val msg = "$where: ${t::class.simpleName}: ${t.message}"
         lastBridgeFailure = msg
@@ -377,12 +282,8 @@ class NativeTorrentEngine : TorrentEngine {
     }
 
     /**
-     * Runs one native call against the live handle.
-     *
-     * A `0` handle is passed through on purpose: the Rust side maps it to
-     * "no engine" and answers with the contract default, so the common
-     * shutdown race (UI query in flight while the store tears the engine
-     * down) can never raise on the Kotlin side.
+     * Runs one native call against the live handle. A `0` handle is passed through on purpose — the
+     * Rust side maps it to "no engine" — so a shutdown race cannot raise here.
      */
     private inline fun <T> bridge(fallback: T, call: (Long) -> T): T =
         try {
@@ -566,12 +467,7 @@ class NativeTorrentEngine : TorrentEngine {
         bridge(Unit) { nativeSetSessionConfig(it, configJson) }
     }
 
-    /**
-     * Windows system helpers (firewall / ICS) are engine-independent, but
-     * they still live in the same cdylib: on a platform where the symbol is
-     * absent the call raises `UnsatisfiedLinkError`, which must surface as a
-     * plain "unsupported" result — never as a crash in the settings screen.
-     */
+    /** `UnsatisfiedLinkError` where the symbol is absent must surface as an "unsupported" result, never a crash. */
     private inline fun system(call: () -> String): SystemResultDto =
         try {
             decodeSystemResult(call())
@@ -616,14 +512,7 @@ class NativeTorrentEngine : TorrentEngine {
     }
 }
 
-/**
- * Encoder for the native `nativeMakeTorrent` options object.
- *
- * Hand-rolled for the same reason the native side hand-rolls its writer:
- * the shape is small, fixed and must stay byte-exact with the Rust decoder
- * (`parse_make_options`). Path components are escaped through [jsonString],
- * which is the only place user input reaches the native parser.
- */
+/** Hand-rolled to stay byte-exact with the Rust decoder (`parse_make_options`); [jsonString] escapes all user input. */
 private object MakeTorrentJson {
     fun options(o: MakeTorrentOptions): String = buildString {
         append('{')
@@ -671,7 +560,6 @@ private fun decodeSystemResult(raw: String): SystemResultDto =
     runCatching { BRIDGE_JSON.decodeFromString<SystemResultDto>(raw) }
         .getOrElse { SystemResultDto(ok = false, message = raw) }
 
-/** JSON string literal with proper escaping (for the make-torrent file list). */
 private fun jsonString(s: String): String {
     val sb = StringBuilder(s.length + 2)
     sb.append('"')

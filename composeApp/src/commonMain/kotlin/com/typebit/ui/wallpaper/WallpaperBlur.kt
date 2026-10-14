@@ -4,28 +4,16 @@ import androidx.compose.ui.graphics.ImageBitmap
 import kotlin.math.roundToInt
 
 /**
- * Cross-platform Gaussian-approximating blur used by the wallpaper pipeline.
- *
- * The previous approach applied `Modifier.blur` to the full-screen wallpaper,
- * which re-runs an expensive GPU blur on EVERY animation frame (route
- * transitions, opening the settings screen, slider drags). That per-frame
- * cost is the source of the jank you feel when adjusting wallpaper settings.
- *
- * Instead the raw (already downscaled) bitmap is blurred ONCE off the UI
- * thread and the result is cached and reused. Three box-blur passes
- * approximate a Gaussian closely enough for a background while staying O(n)
- * and allocation-light.
- *
- * The blurred result is a plain [ImageBitmap] — [WallpaperLayer] just draws
- * it, so drawing it every frame is a cheap static blit.
+ * Gaussian-approximating blur, run ONCE off the UI thread by the caller — blurring during
+ * the draw pass would re-blur the whole screen every frame. Three box passes
+ * approximate a Gaussian at O(n).
  */
 fun blurWallpaper(src: ImageBitmap, radiusPx: Float): ImageBitmap {
     val w = src.width
     val h = src.height
     if (w <= 0 || h <= 0 || radiusPx <= 0.5f) return src
 
-    // 3 box passes ≈ Gaussian; a box radius ≈ half the requested radius keeps
-    // the visual weight close to the old `Modifier.blur` while staying cheap.
+    // 3 box passes ≈ Gaussian; a box radius of half the requested radius matches the old weight.
     val boxRadius = (radiusPx * 0.5f).roundToInt().coerceIn(1, 40)
 
     val pixels = IntArray(w * h)
@@ -35,26 +23,14 @@ fun blurWallpaper(src: ImageBitmap, radiusPx: Float): ImageBitmap {
     return createImageBitmapFromPixels(pixels, w, h)
 }
 
-/**
- * Working edge length for the background draw bitmap. Raised to 1440 so the
- * blurred, dimmed background stays crisp on modern screens (a 640px source
- * looked soft/pixelated on hi-DPI displays). 1440px ≈ 4.7 MiB, blurred once
- * off the UI thread and cached — drawing it each frame is still one static
- * GPU blit, so low-end Android devices stay smooth.
- */
+/** Working edge length of the background bitmap; 1440 stays crisp on hi-DPI screens. */
 private const val MAX_BG_EDGE = 1440
 
-/**
- * Full pipeline for the app background: downscale to a cheap draw size, then
- * blur. Returns the source unchanged when no change is needed (radius ≈ 0
- * and the image already small).
- */
 fun prepareWallpaper(src: ImageBitmap, radiusPx: Float): ImageBitmap {
     val small = downscaleImage(src, MAX_BG_EDGE)
     return blurWallpaper(small, radiusPx)
 }
 
-/** Nearest-neighbour downscale so the longest edge is at most [maxEdge]. */
 fun downscaleImage(src: ImageBitmap, maxEdge: Int): ImageBitmap {
     val w = src.width
     val h = src.height
@@ -81,7 +57,6 @@ fun downscaleImage(src: ImageBitmap, maxEdge: Int): ImageBitmap {
 /** Creates a bitmap from an ARGB [pixels] buffer (same layout as readPixels). */
 expect fun createImageBitmapFromPixels(pixels: IntArray, width: Int, height: Int): ImageBitmap
 
-/** One box-blur pass: horizontal sweep into [tmp], then vertical sweep back. */
 private fun boxBlur(pixels: IntArray, tmp: IntArray, w: Int, h: Int, r: Int) {
     boxBlurH(pixels, tmp, w, h, r)
     boxBlurV(tmp, pixels, w, h, r)

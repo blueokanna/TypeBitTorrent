@@ -8,21 +8,9 @@ import androidx.core.content.FileProvider
 import com.typebit.AppContextHolder
 import java.io.File
 
-/**
- * Android: hand the file to the system media player through a FileProvider
- * content URI (a plain `file://` throws `FileUriExposedException` on API 24+).
- * The URI grant is temporary and scoped to the receiving app.
- *
- * Two details here are load-bearing:
- *
- * 1. The context is the APPLICATION context, so the started intent MUST carry
- *    `FLAG_ACTIVITY_NEW_TASK` — without it `startActivity` throws
- *    `AndroidRuntimeException` and 边下边播 silently never opened. The flag
- *    goes on the chooser as well, because that is the intent actually started.
- * 2. While the torrent is downloading the staged file is `<name>.part`, so
- *    the MIME type is derived from the ORIGINAL name: a `.part` suffix would
- *    fall through to a generic type and open the wrong picker.
- */
+// FileProvider URI, because a plain `file://` throws on API 24+. The APPLICATION context means the
+// intent needs `FLAG_ACTIVITY_NEW_TASK` (also on the chooser, which is what gets started), and the MIME
+// type must come from the original name — a staged `.part` suffix would open the wrong picker.
 actual fun playMediaFile(path: String): Boolean {
     val file = File(path)
     if (!file.isFile || file.length() == 0L) return false
@@ -49,11 +37,9 @@ actual fun playMediaFile(path: String): Boolean {
     }
 }
 
-/** The logical name of a staged file: `<name>.part` → `<name>`. */
 private fun mediaName(path: String): String =
         if (path.endsWith(".part", ignoreCase = true)) path.dropLast(5) else path
 
-/** Coarse MIME guess for the media player intent. */
 private fun guessMime(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {
     "mp4", "m4v" -> "video/mp4"
     "mkv" -> "video/x-matroska"
@@ -67,8 +53,7 @@ private fun guessMime(path: String): String = when (path.substringAfterLast('.',
     "rmvb", "rm" -> "application/vnd.rn-realmedia"
     "3gp" -> "video/3gpp"
     "ogv" -> "video/ogg"
-    // Audio containers: the Files tab opens whatever the user taps, so the
-    // MIME must not force a video-only resolver.
+    // Audio containers: must not force a video-only resolver.
     "mp3" -> "audio/mpeg"
     "flac" -> "audio/flac"
     "m4a" -> "audio/mp4"

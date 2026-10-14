@@ -1,31 +1,13 @@
 package com.typebit.search
 
-/**
- * Generic engine for Chinese magnet-index sites (黑马磁力 / 磁力多 / 搜番 …).
- *
- * These sites share the same shape — a search page whose result rows carry
- * a `magnet:?xt=urn:btih:` link — but each uses a different URL scheme and
- * markup. Rather than hard-coding one brittle selector per site (which
- * breaks the moment the site tweaks a class name), this engine:
- *
- *  1. tries every configured search-path template on every base URL until
- *     one returns parseable rows (many sites have per-keyword paths like
- *     `/s/{q}`, `/search/{q}`, `/?q={q}` …);
- *  2. parses rows generically: split the HTML into result blocks around
- *     each magnet URI, then heuristically pick the title (longest
- *     meaningful anchor text), size, seeders and leechers;
- *  3. never fabricates a result — a challenge page / empty body yields an
- *     honest empty list and the client reports the engine as blocked.
- */
+// Generic engine for Chinese magnet-index sites: each search-path template is tried on every base URL and
+// result blocks are split around magnet URIs, with title/size/seeders picked heuristically; a challenge or
+// empty page yields an honest empty list, never fabricated results.
 class MagnetIndexEngine(
         override val name: String,
         private val http: SearchHttpClient,
-        /** Base origins (no trailing slash), tried in order. */
         private val bases: List<String>,
-        /**
-         * Search path templates containing `{q}` (URL-encoded query), tried
-         * in order on each base until one returns rows.
-         */
+        /** Templates containing `{q}`, tried in order on each base until one returns rows. */
         private val searchPaths: List<String>,
 ) : TorrentSearchEngine {
 
@@ -70,11 +52,8 @@ class MagnetIndexEngine(
         return out
     }
 
-    /**
-     * Split the page into one chunk per result. Prefer `<tr>` rows (table
-     * layout); fall back to windows around each magnet link for non-table
-     * pages.
-     */
+    /** Splits the page into one chunk per result: `<tr>` rows when the layout is a table, otherwise a window
+     *  around each magnet link. */
     private fun resultBlocks(html: String): List<String> {
         val trRe = Regex("""<tr[^>]*>.*?</tr>""", RegexOption.DOT_MATCHES_ALL)
         val trs = trRe.findAll(html).map { it.value }.toList()
@@ -94,7 +73,6 @@ class MagnetIndexEngine(
         return out
     }
 
-    /** Longest meaningful anchor text (action words excluded) or a title attr. */
     private fun bestTitle(block: String): String? {
         val skip =
                 setOf(

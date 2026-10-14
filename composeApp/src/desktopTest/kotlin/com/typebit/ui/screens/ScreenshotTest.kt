@@ -28,19 +28,15 @@ import org.junit.Test
 import java.io.File
 import javax.imageio.ImageIO
 
-/**
- * Renders the desktop screens inside the real MD3E theme and dumps PNGs so
- * the actual visuals can be inspected. Not a behavioral test — a visual
- * verification aid that also guards against blank/render failures.
- */
+// Renders the desktop screens in the real MD3E theme and dumps PNGs for visual inspection; also guards
+// against blank/render failures.
 class ScreenshotTest {
 
     @get:Rule
     val rule = createComposeRule()
 
     private fun AppStore.fake(): AppStore {
-        // Store constructed with a no-op engine; start() is never called, so
-        // no native lib is touched and no real state is loaded.
+        // Store built with a no-op engine; start() is never called, so no native library is loaded here.
         return this
     }
 
@@ -52,11 +48,9 @@ class ScreenshotTest {
                 SettingsScreen(state = store.state.value, store = store, onBack = {})
             }
         }
-        // Behavior is the initial category — its section cards must exist.
         rule.onNodeWithText("行为").assertExists()
         rule.onNodeWithText("界面").assertExists()
         rule.onNodeWithText("语言").assertExists()
-        // Switch to 外观 and confirm its cards render too.
         rule.onNodeWithText("外观").performClick()
         rule.onNodeWithText("主题模式").assertExists()
         rule.onNodeWithText("壁纸").assertExists()
@@ -133,7 +127,6 @@ class ScreenshotTest {
     }
 }
 
-/** No-op engine for visual tests. */
 private class FakeEngine : TorrentEngine {
     override fun start(configJson: String, saveDir: String): Boolean = false
     override fun stop() {}

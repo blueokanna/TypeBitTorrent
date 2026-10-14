@@ -18,10 +18,6 @@ import com.typebit.ui.i18n.TRADITIONAL_CHINESE
 import com.typebit.ui.i18n.LocalStrings
 import com.typebit.ui.i18n.TextKey
 
-// ---------------------------------------------------------------------------
-// 行为
-// ---------------------------------------------------------------------------
-
 @Composable
 fun BehaviorSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val s = settings.behavior
@@ -106,10 +102,6 @@ fun BehaviorSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 下载
-// ---------------------------------------------------------------------------
-
 @Composable
 fun DownloadsSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
     val s = settings.downloads
@@ -169,10 +161,6 @@ fun DownloadsSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         )
     }
 }
-
-// ---------------------------------------------------------------------------
-// 连接
-// ---------------------------------------------------------------------------
 
 @Composable
 fun ConnectionSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
@@ -284,10 +272,6 @@ fun ConnectionSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         SettingNumberField("Peer TOS", s.peerTos.toString(), { update(s.copy(peerTos = it.toIntOrNull() ?: s.peerTos)) })
     }
 }
-
-// ---------------------------------------------------------------------------
-// 速度
-// ---------------------------------------------------------------------------
 
 @Composable
 fun SpeedSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {

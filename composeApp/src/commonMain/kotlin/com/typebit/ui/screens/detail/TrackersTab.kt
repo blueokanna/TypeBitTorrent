@@ -34,7 +34,6 @@ import com.typebit.model.TrackerStatus
 import com.typebit.store.AppStore
 import com.typebit.ui.components.EmptyState
 
-/** Tracker tab — announce URLs with runtime add/remove (typebit 0.1.1). */
 @Composable
 fun TrackersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
     var newUrl by remember { mutableStateOf("") }

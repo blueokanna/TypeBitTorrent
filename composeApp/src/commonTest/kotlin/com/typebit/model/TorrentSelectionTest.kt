@@ -3,7 +3,7 @@ package com.typebit.model
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** Regression tests for selective-download display math (the "为什么还是 9 个 G" bug). */
+/** Regression tests for selective-download display math (the "still 9 GB?" bug). */
 class TorrentSelectionTest {
 
     private fun torrent(files: List<FileEntry>, priorities: List<Int>): Torrent {
@@ -52,8 +52,7 @@ class TorrentSelectionTest {
 
     @Test
     fun selectedBytes_counts_only_nonSkipped_files() {
-        // The exact user scenario: a 9.21 GiB torrent where only one 4.83 GiB
-        // file is checked — the download target must be ~4.83 GiB, not 9.21.
+        // The reported case: a 9.21 GiB torrent with only one 4.83 GiB file checked must target ~4.83 GiB.
         val t = torrent(
                 files = listOf(
                         FileEntry(listOf("f1.mp4"), 4_350_000_000L),

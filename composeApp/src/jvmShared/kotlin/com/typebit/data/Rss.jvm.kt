@@ -62,7 +62,6 @@ private fun parseRss(body: ByteArray, url: String): RssFeed? {
         return ""
     }
 
-    // RSS 2.0: <channel><item>…; Atom: <feed><entry>…
     if (root.nodeName.equals("rss", ignoreCase = true)) {
         val channel = root.childNodes.let { nl ->
             for (i in 0 until nl.length) if (nl.item(i).nodeName.equals("channel", ignoreCase = true)) return@let nl.item(i)

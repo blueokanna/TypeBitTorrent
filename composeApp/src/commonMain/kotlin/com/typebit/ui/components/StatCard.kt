@@ -18,7 +18,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** A labeled value card, used in detail panes and stats rows. */
 @Composable
 fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
     Card(
@@ -40,7 +39,6 @@ fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** A horizontal label:value row (detail tables). */
 @Composable
 fun LabelValueRow(label: String, value: String, modifier: Modifier = Modifier) {
     Row(

@@ -57,7 +57,6 @@ import com.typebit.ui.components.TorrentProgressBar
 import com.typebit.ui.theme.TypeBitThemeColors
 import com.typebit.ui.util.Format
 
-/** Column identity + display metadata (label, width, alignment). */
 private enum class SortKey(val label: String, val width: Dp, val alignEnd: Boolean) {
     NAME("名称", 420.dp, false),
     SIZE("大小", 90.dp, false),
@@ -73,13 +72,8 @@ private enum class SortKey(val label: String, val width: Dp, val alignEnd: Boole
 
 private data class SortState(val key: SortKey, val desc: Boolean = false)
 
-/**
- * MD3-Expressive desktop transfer table: a large-radius surface card with a
- * hover/selection color animation, springy row appearance and click-to-sort
- * headers. The table scrolls HORIZONTALLY when the window is too narrow
- * (columns are never clipped), and RIGHT-CLICKING a column header opens a
- * menu to hide / restore columns.
- */
+/** Desktop transfer table: horizontally scrollable (columns never clipped), click-to-sort
+ * headers, and a right-click column menu to hide/restore columns. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TorrentTable(
@@ -130,8 +124,6 @@ fun TorrentTable(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                // Horizontal scroll via drag on the visible scrollbar below
-                // (and Shift+wheel, built into CMP desktop scrollables).
                 .horizontalScroll(hState),
         ) {
             Column(Modifier.width(totalWidth)) {
@@ -170,7 +162,6 @@ fun TorrentTable(
                 }
             }
         }
-        // A visible horizontal scrollbar on desktop (drag or shift+wheel).
         HorizontalTableScrollbar(
             hState = hState,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -179,7 +170,6 @@ fun TorrentTable(
     }
 }
 
-/** Clickable column header with a sort indicator and a right-click menu. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SortHeader(

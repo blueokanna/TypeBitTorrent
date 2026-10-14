@@ -16,7 +16,6 @@ import com.typebit.ui.i18n.LocalStrings
 import com.typebit.ui.i18n.TextKey
 import com.typebit.ui.theme.TypeBitThemeColors
 
-/** Fully-rounded MD3 status pill: tinted container + colored label. */
 @Composable
 fun StatusBadge(status: TorrentStatus, modifier: Modifier = Modifier) {
     val s = TypeBitThemeColors.status

@@ -5,10 +5,7 @@ import com.typebit.model.Torrent
 import com.typebit.model.TorrentFilter
 import com.typebit.data.AppSettings
 
-/**
- * Immutable UI state. Everything the screens render flows from this single
- * object; mutations only happen through [AppStore.dispatch].
- */
+/** Immutable; every mutation goes through [AppStore.dispatch]. */
 data class AppState(
     val torrents: List<Torrent> = emptyList(),
     val selectedHash: String? = null,
@@ -18,53 +15,37 @@ data class AppState(
     val engineRunning: Boolean = false,
     val peerId: String = "",
     val dhtNodes: Int = 0,
-    /** Trackers currently active (not failed) across all torrents (live). */
+    /** Active (not failed) trackers across all torrents. */
     val trackerCount: Int = 0,
-    /** NAT-detected external UDP IP (BEP-42), empty until confirmed. */
+    /** NAT-detected external UDP endpoint (BEP-42); empty / 0 until confirmed. */
     val extIp: String = "",
-    /** NAT-detected external UDP port (BEP-42), 0 until confirmed. */
     val extPort: Int = 0,
-    /**
-     * UPnP/NAT-PMP port-mapping phase (6 = mapped, 9 = failed). Live from
-     * both the batched snapshot and the t=12 engine events.
-     */
+    /** UPnP/NAT-PMP mapping phase as reported by the engine (6 = mapped, 9 = failed). */
     val portMapPhase: Int = 0,
-    /** External port granted by the gateway, 0 until mapped. */
     val portMapPort: Int = 0,
-    /** Actual bound TCP listen port (0 = not listening yet). */
+    /** TCP listen port actually bound to the socket, not the mapped one. */
     val listenPort: Int = 0,
-    /** LSD (BEP-14): LAN announces multicast out (live). */
+    /** LSD (BEP-14): multicast announces sent, BT-SEARCH datagrams received, peers found. */
     val lsdSent: Long = 0,
-    /** LSD (BEP-14): BT-SEARCH datagrams received (live). */
     val lsdRecv: Long = 0,
-    /** LSD (BEP-14): peers discovered via LAN multicast (live). */
     val lsdPeers: Long = 0,
-    /** Anti-leech: count of known leeching clients detected so far. */
+    /** Anti-leech: detections so far, and the most recent client names (deduped, capped). */
     val antiLeechCount: Int = 0,
-    /** Anti-leech: most recent detected client names (deduped, capped). */
     val antiLeechClients: List<String> = emptyList(),
-    /** Wire-level global rates (bytes/sec), from the native host. */
+    /** Global wire rates from the native host, bytes/sec. */
     val globalDownRate: Long = 0,
     val globalUpRate: Long = 0,
-    /** Cumulative wire bytes, for the "session totals" status row. */
     val totalDownloaded: Long = 0,
     val totalUploaded: Long = 0,
-    /** Torrent currently being verified on disk (`重新校验`), empty when idle. */
     val recheckHash: String = "",
-    /** True while a verification pass is running. */
     val recheckRunning: Boolean = false,
     val recheckDone: Long = 0,
     val recheckTotal: Long = 0,
-    /** Human-readable result of the last verification ("" = nothing yet). */
     val recheckMessage: String = "",
     val logs: List<LogEntryDto> = emptyList(),
     val categories: List<String> = listOf("未分类"),
     val tags: List<String> = emptyList(),
     val lastError: String? = null,
-    /**
-     * Result of the last Windows firewall/ICS action (desktop only):
-     * `null` = nothing attempted yet. `true`/`false` = ok/failed.
-     */
     val systemOk: Boolean? = null,
     val systemMessage: String = "",
 ) {
