@@ -1,5 +1,5 @@
 appname=typebittorrent
-version=0.1.9
+version=0.1.10
 display_name=TypeBitTorrent
 desc=基于 TypeBit Rust 引擎的 BitTorrent 客户端：无界面运行，内置 WebUI 管理全部功能（添加磁力/种子、暂停继续、文件优先级与重命名、Tracker 编辑、实时 Peers、引擎统计、搜索、RSS 与制作种子），下载直接落盘。
 source=thirdparty
@@ -14,4 +14,5 @@ desktop_applaunchname=typebittorrent.main
 service_port=18881
 ctl_stop=true
 checkport=false
-changelog=首个版本：无头模式 + 内置 WebUI（传输、文件优先级、Tracker、Peers、统计、搜索、RSS、制作种子）。
+disable_authorization_path=false
+changelog=0.1.10：应用中心“设置”现在可以修改下载保存目录与 WebUI 密码（保存后自动重启）；下载目录会用上“授权目录”；新增升级向导，升级后按原状态自动恢复；日志自动轮转。

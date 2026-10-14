@@ -9,13 +9,26 @@
 # WebUI without the install answer overriding it at every boot.
 set -u
 
-VAR="${TRIM_PKGVAR:-$(cd "$(dirname "$0")/.." && pwd)/var}"
-mkdir -p "$VAR" 2>/dev/null || true
+APPDIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+VAR="${TRIM_PKGVAR:-${APPDIR}/var}"
+ETC="${TRIM_PKGETC:-${APPDIR}/etc}"
+CONF="${ETC}/typebit.conf"
+mkdir -p "$VAR" "$ETC" 2>/dev/null || true
 
 if [ -n "${wizard_webui_password:-}" ]; then
     umask 077
     printf '%s' "$wizard_webui_password" >"${VAR}/initial-password.txt"
     echo "$(date '+%F %T') install: WebUI password taken from the install wizard" \
         >>"${VAR}/typebit.log" 2>/dev/null || true
+fi
+
+# Create the app's own settings file once, so `cmd/main` treats it as the
+# authoritative (if empty) answer instead of guessing, and so the App Center
+# settings form (wizard/config) has a file to write.
+if [ ! -f "$CONF" ]; then
+    {
+        printf '# TypeBitTorrent — written by the fnOS App Center settings form.\n'
+        printf '# download_dir=   # 下载保存目录；留空 = 授权目录 → 共享文件夹 → 应用数据目录\n'
+    } >"$CONF" 2>/dev/null || true
 fi
 exit 0

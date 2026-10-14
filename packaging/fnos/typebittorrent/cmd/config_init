@@ -1,8 +1,37 @@
 #!/bin/bash
 # fnOS config init — runs before a configuration change is applied.
 #
-# The package ships no `wizard/config`: everything user-facing (save path,
-# ports, DHT/LSD, rate limits, the WebUI password) is edited in the WebUI, which
-# needs no framework round-trip. Kept so the lifecycle set is complete.
+# `wizard/config` collects two optional values and the framework asks lifecycle
+# scripts to re-validate wizard input; this is the last point where a bad value
+# can still be rejected with a message the user sees (`TRIM_TEMP_LOGFILE`)
+# instead of becoming a client that refuses to start minutes later.
 set -u
+
+fail() {
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        printf '%s\n' "$1" >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+    fi
+    echo "$1" >&2
+    exit 1
+}
+
+dir="${wizard_download_dir:-}"
+if [ -n "$dir" ]; then
+    case "$dir" in
+        /*) ;;
+        *) fail "下载保存目录必须是以 / 开头的绝对路径：$dir" ;;
+    esac
+    case "$dir" in
+        *..*) fail "下载保存目录不能包含 .. ：$dir" ;;
+    esac
+    mkdir -p "$dir" 2>/dev/null ||
+        fail "无法创建下载保存目录：$dir（请先在“文件”里创建它，或直接填写共享文件夹 / 授权目录中的路径）"
+    [ -w "$dir" ] ||
+        fail "下载保存目录不可写：$dir（请在“应用设置 → 授权目录”中添加该目录，或改选其他位置）"
+fi
+
+pw="${wizard_webui_password:-}"
+if [ -n "$pw" ] && [ "${#pw}" -lt 8 ]; then
+    fail "WebUI 密码至少 8 位（留空表示不修改）"
+fi
 exit 0

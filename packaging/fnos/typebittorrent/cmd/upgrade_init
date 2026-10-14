@@ -2,7 +2,21 @@
 # fnOS upgrade init — runs before the payload is replaced.
 #
 # No migration needed: settings, task records and resume data live in
-# TRIM_PKGVAR, outside the payload. fnOS stops the app around an upgrade; a
-# simultaneous start is harmless because `cmd/main start` is idempotent.
+# TRIM_PKGVAR, outside the payload. What this does have to do is stop the
+# client — it would otherwise keep running from the files being replaced — and
+# record whether it *was* running, which is what `upgrade_callback` uses to
+# decide on starting it again.
 set -u
+
+APPDIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+VAR="${TRIM_PKGVAR:-${APPDIR}/var}"
+MAIN="$(cd "$(dirname "$0")" && pwd)/main"
+
+mkdir -p "$VAR" 2>/dev/null || true
+if "$MAIN" status >/dev/null 2>&1; then
+    : >"${VAR}/.was-running"
+else
+    rm -f "${VAR}/.was-running"
+fi
+"$MAIN" stop >/dev/null 2>&1 || true
 exit 0

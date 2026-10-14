@@ -13,8 +13,11 @@ bin/TypeBitTorrent --headless --bind=0.0.0.0 --port=18881 \
 Flags beyond the credentials (`--bind`, `--port`, `--data`, `--downloads`,
 `--username`, `--password`) are `--frame-ancestors=<sources>`, which relaxes the
 WebUI's `X-Frame-Options`/CSP default so a NAS dashboard may embed it (`*` for
-"any ancestor" — the fnOS package passes that), and the matching environment
-variables `TYPEBIT_*` for containers.
+"any ancestor" — the fnOS package passes that), and `--downloads-force=<path>`,
+which sets the default save path even when one is already stored (the fnOS
+package uses it when the folder was changed in the App Center, so the App Center
+wins there without overriding a path chosen later in the WebUI). The matching
+environment variables are `TYPEBIT_*` for containers.
 
 Nothing is reimplemented for the NAS: the headless mode boots the same
 `AppStore`, the same Rust engine worker, the same `NativeHost` (sockets, disk
@@ -116,12 +119,14 @@ fnOS packages are directories wrapped by `fnpack`:
 packaging/fnos/typebittorrent/
 ├── manifest                    # INI, no extension — appname/version/platform/…
 ├── config/privilege            # {"defaults":{"run-as":"package"}}
-├── config/resource             # shared folders (the download folder)
-├── cmd/main                    # start | stop | status  (exit 0 / 3 / 1)
+├── config/resource             # shared folders (the default download folder)
+├── cmd/main                    # start | stop | status | restart  (exit 0 / 3 / 1)
 ├── cmd/install_callback        # first-run WebUI password from the wizard
+├── cmd/config_init|callback    # validate + apply the App Center settings form
+├── cmd/upgrade_init|callback   # stop cleanly, remember the state, restore it
 ├── cmd/uninstall_init|callback # stop the client, honour the keep/delete answer
-├── cmd/install_init|upgrade_*|config_*   # required lifecycle slots, no-ops here
-├── wizard/install|uninstall    # App Center forms (password / keep data)
+├── cmd/install_init            # required lifecycle slot, no-op here
+├── wizard/install|config|upgrade|uninstall   # App Center forms
 ├── app/ui/config               # App-Center entry (iframe → the WebUI port)
 ├── app/ui/images/icon_*.png    # card icons
 ├── app/bin|lib|runtime         # payload: the self-contained app image
@@ -162,8 +167,8 @@ expects one `.fpk` per architecture.
 Install on the NAS (per the fnOS CLI docs):
 
 ```bash
-appcenter-cli install-fpk packaging/fnos/dist/typebittorrent_0.1.9_x86.fpk   # x86_64 设备
-appcenter-cli install-fpk packaging/fnos/dist/typebittorrent_0.1.9_arm.fpk   # arm64 设备
+appcenter-cli install-fpk packaging/fnos/dist/typebittorrent_0.1.10_x86.fpk   # x86_64 设备
+appcenter-cli install-fpk packaging/fnos/dist/typebittorrent_0.1.10_arm.fpk   # arm64 设备
 appcenter-cli start typebittorrent
 ```
 
@@ -177,7 +182,37 @@ Notes and honest caveats:
   no form, so the first start generates one and keeps it in
   `<app data>/initial-password.txt` — on a default install that is
   `/vol1/@appdata/typebittorrent/initial-password.txt`. Change it later in the
-  WebUI under *设置 → WebUI*.
+  WebUI under *设置 → WebUI*, or from the App Center settings form (below) if you
+  have forgotten it.
+* **The App Center settings form** (`wizard/config` → *应用设置*) collects two
+  things and nothing else: the download folder and — optionally — a new WebUI
+  password. Saving it makes `cmd/config_init` validate the input (absolute path,
+  creatable, writable; password ≥ 8 characters) and reports a rejection to the
+  App Center verbatim, then `cmd/config_callback` writes
+  `$TRIM_PKGETC/typebit.conf` and restarts the service so the change takes effect
+  immediately (a stopped service simply picks it up on the next start). Everything
+  else — ports, limits, DHT/LSD, RSS, per-torrent defaults — stays in the WebUI,
+  which owns those settings live.
+* **Where downloads go** is resolved at every start, first match wins:
+  1. `download_dir` in `typebit.conf` (the App Center settings form);
+  2. the first **authorised directory** (`TRIM_DATA_ACCESSIBLE_PATHS` — the folder
+     added under *应用设置 → 授权目录*), which is why the manifest declares
+     `disable_authorization_path=false`;
+  3. the share `config/resource` declares (`typebittorrent/downloads`);
+  4. a private folder under `TRIM_PKGVAR`.
+  The client is handed that path with `--downloads-force`, so the answer given in
+  the App Center is the one in effect. A save path chosen later in the WebUI
+  (设置 → 下载) survives restarts: the flag is only passed again when the App
+  Center value actually changes.
+* **Upgrades are gentle.** `cmd/upgrade_init` stops the client (so resume data is
+  flushed before the payload is replaced) and remembers whether it *was* running;
+  `wizard/upgrade` asks whether to start it again (`升级完成后`, default
+  *自动恢复运行*) and `cmd/upgrade_callback` restores exactly that state.
+  Settings, task records and resume data live in `TRIM_PKGVAR`, so they survive an
+  upgrade untouched.
+* **The log is capped by the package.** `cmd/main` rotates `<app data>/typebit.log`
+  at 5 MB (`TYPEBIT_LOG_MAX_BYTES`) and keeps one previous file as `typebit.log.1`,
+  so a long-running install cannot slowly fill the system volume.
 * `manifest.service_port=18881` + `"port": "18881"` in `app/ui/config` make the
   App Center card open the WebUI in an iframe. That is why `cmd/main` starts the
   server with `--frame-ancestors=*`: the WebUI's default `X-Frame-Options: DENY`
@@ -185,7 +220,9 @@ Notes and honest caveats:
   default because 8080 is usually taken on a NAS; if 18881 is taken too, change
   the port in both files *and* in the iframe URL, then reinstall — `cmd/main`
   refuses to start while the port is occupied and says so in the App Center.
-* The download folder is the `typebittorrent/downloads` share (`TRIM_DATA_SHARE_PATHS`);
+* The download folder is the `typebittorrent/downloads` share
+  (`TRIM_DATA_SHARE_PATHS`) unless the App Center settings form or an authorised
+  directory says otherwise (see above);
   settings, task records and resume data live in `TRIM_PKGVAR`
   (`/vol1/@appdata/typebittorrent`), so they survive upgrades. Uninstall asks
   whether to delete that runtime data — downloaded files are never touched.
@@ -211,6 +248,12 @@ Notes and honest caveats:
   `app/ui/images/icon_{64,256}.png` for the card, all rendered from
   `assets/typebittorrent.png`. They are committed, so `python3-pil` is only
   needed when you regenerate them.
+* **The lifecycle scripts have their own regression test**:
+  `scripts/test-fnos-lifecycle.sh` (bash + gcc + python3, no NAS required). It
+  stages the package into a temp tree, swaps the payload launcher for a stub that
+  behaves like the real one, and drives install → config → start/stop/status/
+  restart → upgrade → uninstall, covering the download-folder resolution, the
+  password/marker semantics, orphan reaping and the log rotation.
 * Publishing to the fnOS App Center currently goes through their developer
   group (there is no self-serve portal yet) — see
   <https://developer.fnnas.com/docs/quick-started/publish-application/>.
@@ -313,6 +356,7 @@ thread (bounded), and only then does the process exit.
 | `--port=`, `TYPEBIT_PORT` | WebUI port (overrides the settings value) |
 | `--data=`, `--config=`, `TYPEBIT_DATA`, `-Dtypebit.data.dir=` | state directory: settings, torrent records, resume data, receipts |
 | `--downloads=`, `TYPEBIT_DOWNLOADS` | default save path used when no path is set in settings |
+| `--downloads-force=`, `TYPEBIT_DOWNLOADS_FORCE` | default save path applied even when settings already name one (the fnOS package uses it for an App Center change) |
 | `--username=`, `TYPEBIT_USERNAME` | WebUI user (default `admin`) |
 | `--password=`, `TYPEBIT_PASSWORD` | WebUI password; hashed with PBKDF2-HMAC-SHA256 (120 000 iterations) and stored in settings. If neither a CLI nor env password exists **and** no hash is stored, a random one is generated and printed once at startup |
 

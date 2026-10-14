@@ -1,0 +1,22 @@
+[
+  {
+    "stepTitle": "升级 TypeBitTorrent",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "设置、任务记录与续传数据都会保留；下载文件位于共享文件夹 <code>typebittorrent/downloads</code> 或你在应用中心设置的目录，升级不会动它们。"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_upgrade_start",
+        "label": "升级完成后",
+        "initValue": "true",
+        "options": [
+          { "label": "自动恢复运行（推荐，仅当升级前正在运行时）", "value": "true" },
+          { "label": "保持停止，由我手动启动", "value": "false" }
+        ],
+        "helpText": "升级前若是已停止状态，升级后保持停止。"
+      }
+    ]
+  }
+]

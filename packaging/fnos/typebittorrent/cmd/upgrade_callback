@@ -1,11 +1,32 @@
 #!/bin/bash
 # fnOS upgrade callback — runs after the payload was replaced.
 #
-# The data directories are untouched by an upgrade, so this only records which
-# version replaced which, which is the first thing to look at when a NAS misbehaves
-# after an update.
+# Records which version replaced which (the first thing to look at when a NAS
+# misbehaves after an update) and brings the client back up when it was running
+# before the upgrade, unless the upgrade wizard asked it not to. `wizard/upgrade`
+# is optional: `appcenter-cli` upgrades pass no answer, and the default is to
+# restore whatever the state was.
 set -u
-VAR="${TRIM_PKGVAR:-$(cd "$(dirname "$0")/.." && pwd)/var}"
-echo "$(date '+%F %T') upgrade: ${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?}" \
-    >>"${VAR}/typebit.log" 2>/dev/null || true
+
+APPDIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+VAR="${TRIM_PKGVAR:-${APPDIR}/var}"
+MAIN="$(cd "$(dirname "$0")" && pwd)/main"
+
+log() { echo "$(date '+%F %T') upgrade: $*" >>"${VAR}/typebit.log" 2>/dev/null || true; }
+log "${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?}"
+
+start_wanted=1
+case "${wizard_upgrade_start:-true}" in
+    false|False|FALSE|0|no|No|NO) start_wanted=0 ;;
+esac
+
+if [ -f "${VAR}/.was-running" ]; then
+    rm -f "${VAR}/.was-running"
+    if [ "$start_wanted" -eq 1 ]; then
+        log "service was running before the upgrade; starting it again"
+        "$MAIN" start || log "restart failed — start it from the App Center and check this log"
+    else
+        log "service was running before the upgrade; left stopped as requested"
+    fi
+fi
 exit 0

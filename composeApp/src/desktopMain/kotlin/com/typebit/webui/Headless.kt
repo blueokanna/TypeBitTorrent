@@ -31,6 +31,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 3. the PBKDF2 hash already stored in settings,
  * 4. otherwise a random one is generated and printed once at startup —
  *    an unauthenticated WebUI is never started.
+ *
+ * Download folder: `--downloads` only fills an empty default save path (a
+ * container mount must not override what the user picked in the WebUI), while
+ * `--downloads-force` applies the path unconditionally. The fnOS package passes
+ * the force flag exactly when the folder changed in the App Center settings.
  */
 object Headless {
 
@@ -77,7 +82,8 @@ object Headless {
             return 2
         }
 
-        println("  保存目录 : ${settings.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }}")
+        val fromAppCenter = opts.forcedDownloadsDir?.let { "（来自应用中心设置）" }.orEmpty()
+        println("  保存目录 : ${settings.downloads.defaultSavePath.ifBlank { Platform.defaultDownloadDir() }}$fromAppCenter")
         println("  用户名   : ${webUi.username}")
         opts.frameAncestors?.let { println("  允许嵌套 : frame-ancestors $it（NAS 应用中心内嵌 WebUI）") }
         opts.generatedPassword?.let {
@@ -128,6 +134,19 @@ object Headless {
                 )
             }
         }
+        // The NAS package decides this path and re-passes the flag whenever it
+        // changed there, so applying it now (and not only when blank) is what
+        // makes an App Center change visible without touching the WebUI.
+        opts.forcedDownloadsDir?.let { dir ->
+            val path = File(dir).absoluteFile.path
+            File(path).mkdirs()
+            val current = store.state.value.settings
+            if (current.downloads.defaultSavePath != path) {
+                store.updateSettings(
+                    current.copy(downloads = current.downloads.copy(defaultSavePath = path))
+                )
+            }
+        }
     }
 
     /** Applies CLI/env overrides on top of the persisted WebUI settings. */
@@ -168,6 +187,7 @@ object Headless {
         var password: String? = null
         var dataDir: String? = null
         var downloadsDir: String? = null
+        var forcedDownloadsDir: String? = null
         var frameAncestors: String? = null
         var generatedPassword: String? = null
     }
@@ -188,6 +208,8 @@ object Headless {
                 "--password" -> if (value.isNotEmpty()) o.password = value
                 "--data", "--data-dir", "--config" -> if (value.isNotBlank()) o.dataDir = value
                 "--downloads", "--save" -> if (value.isNotBlank()) o.downloadsDir = value
+                "--downloads-force", "--force-downloads" ->
+                    if (value.isNotBlank()) o.forcedDownloadsDir = value
                 "--frame-ancestors" -> normalizeFrameAncestors(value)?.let { o.frameAncestors = it }
             }
         }
@@ -198,6 +220,9 @@ object Headless {
         System.getenv("TYPEBIT_DATA")?.takeIf { it.isNotBlank() }?.let { if (o.dataDir == null) o.dataDir = it }
         System.getenv("TYPEBIT_DOWNLOADS")?.takeIf { it.isNotBlank() }?.let {
             if (o.downloadsDir == null) o.downloadsDir = it
+        }
+        System.getenv("TYPEBIT_DOWNLOADS_FORCE")?.takeIf { it.isNotBlank() }?.let {
+            if (o.forcedDownloadsDir == null) o.forcedDownloadsDir = it
         }
         System.getenv("TYPEBIT_FRAME_ANCESTORS")?.takeIf { it.isNotBlank() }?.let {
             if (o.frameAncestors == null) normalizeFrameAncestors(it)?.let { v -> o.frameAncestors = v }

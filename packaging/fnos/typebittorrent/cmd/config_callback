@@ -1,7 +1,60 @@
 #!/bin/bash
 # fnOS config callback — runs after a configuration change was applied.
 #
-# See `config_init`: there is no framework-side configuration to apply, the
-# WebUI writes everything itself.
+# Persists what `wizard/config` collected into `${TRIM_PKGETC}/typebit.conf`
+# (the only file `cmd/main` reads) and restarts the service so the change takes
+# effect now instead of at the next boot. The WebUI password is staged exactly
+# like a first-run password — written to the file `cmd/main` already reads, with
+# the "applied" marker removed — so the install path and the settings path share
+# one code path.
 set -u
+
+APPDIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
+VAR="${TRIM_PKGVAR:-${APPDIR}/var}"
+ETC="${TRIM_PKGETC:-${APPDIR}/etc}"
+CONF="${ETC}/typebit.conf"
+MAIN="$(cd "$(dirname "$0")" && pwd)/main"
+
+log() { echo "$(date '+%F %T') config: $*" >>"${VAR}/typebit.log" 2>/dev/null || true; }
+
+fail() {
+    log "ERROR: $1"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        printf '%s\n' "$1" >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+    fi
+    echo "$1" >&2
+    exit 1
+}
+
+mkdir -p "$ETC" "$VAR" 2>/dev/null || true
+tmp="${CONF}.tmp"
+{
+    printf '# TypeBitTorrent — written by the fnOS App Center settings form.\n'
+    printf '# Read by cmd/main. An empty/absent download_dir means: authorised\n'
+    printf '# directory first, then the share, then the app data folder.\n'
+    if [ -n "${wizard_download_dir:-}" ]; then
+        printf 'download_dir=%s\n' "${wizard_download_dir}"
+    fi
+} >"$tmp" 2>/dev/null || fail "无法写入配置 $CONF：请检查该存储空间是否可写。"
+mv -f "$tmp" "$CONF" 2>/dev/null || { rm -f "$tmp"; fail "无法更新配置 $CONF。"; }
+chmod 0644 "$CONF" 2>/dev/null || true
+log "saved download_dir=${wizard_download_dir:-（自动）}"
+
+if [ -n "${wizard_webui_password:-}" ]; then
+    umask 077
+    printf '%s' "${wizard_webui_password}" >"${VAR}/initial-password.txt" 2>/dev/null ||
+        fail "无法保存新的 WebUI 密码。"
+    rm -f "${VAR}/.pw-applied"
+    log "new WebUI password staged; it is applied by the restart below"
+fi
+
+# Apply now. A stopped service needs nothing: the next start reads the file.
+if "$MAIN" status >/dev/null 2>&1; then
+    log "restarting to apply the changed settings"
+    "$MAIN" stop >/dev/null 2>&1 || true
+    "$MAIN" start || fail "设置已保存，但服务重启失败；请在应用中心手动启动，并查看 ${VAR}/typebit.log。"
+    log "restarted with the new settings"
+else
+    log "service is not running; the settings apply at the next start"
+fi
 exit 0

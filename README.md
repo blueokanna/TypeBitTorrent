@@ -271,9 +271,9 @@ typebittorrent --headless --bind=0.0.0.0 --port=18881 \
 ```
 
 `--headless` (or `TYPEBIT_HEADLESS=1`) starts the engine and serves the
-built-in WebUI; `--port` / `--data` / `--downloads` / `--username` /
-`--password` override stored settings on boot. `TYPEBIT_PASSWORD` is the
-container-friendly alternative. If no password is set anywhere, one is
+built-in WebUI; `--port` / `--data` / `--downloads` / `--downloads-force` /
+`--username` / `--password` override stored settings on boot. `TYPEBIT_PASSWORD`
+is the container-friendly alternative. If no password is set anywhere, one is
 generated and printed once — an unauthenticated client is never served.
 
 The browser UI is a full client, not a status page: transfers, add (magnet /
@@ -288,7 +288,7 @@ Ready-made packaging lives in [`packaging/`](./packaging):
 |--------|------|-------|
 | Docker (amd64/arm64) | `packaging/docker` | multi-stage, distroless-ish JRE, non-root, `/config` + `/downloads` volumes |
 | Unraid | `packaging/unraid/typebittorrent.xml` | Container v2 template; `/mnt/user/appdata/typebittorrent` + your downloads share |
-| 飞牛 fnOS | `packaging/fnos` | `build-fpk.sh` produces both the x86_64 and the arm64 `.fpk`; `cmd/main` implements start/stop/status and the install wizard sets the WebUI password |
+| 飞牛 fnOS | `packaging/fnos` | `build-fpk.sh` produces both the x86_64 and the arm64 `.fpk`; `cmd/main` implements start/stop/status/restart, the install wizard sets the WebUI password, and the App Center settings form changes the download folder and password |
 | any Linux | `scripts/build-linux.sh` | produces the app image the two above consume |
 
 Full instructions, including the reverse-proxy/TLS story and what the
@@ -782,7 +782,7 @@ Files worth knowing if you are extending this:
 | `native/src/jni_glue.rs` | the JNI surface; keep it thin — parsing and defaults only |
 | `composeApp/src/commonMain/kotlin/com/typebit/engine/TorrentEngine.kt` | the crash-proof facade: a failing call degrades to a default instead of throwing into a coroutine |
 | `composeApp/src/desktopMain/kotlin/com/typebit/webui/WebUiServer.kt` | the NAS product surface (same store, HTTP instead of pixels) |
-| `packaging/` | Docker / Unraid / fnOS packaging, built on `scripts/build-linux.sh` output (the fnOS arm64 payload is cross-assembled by `packaging/fnos/build-fpk.sh`) |
+| `packaging/` | Docker / Unraid / fnOS packaging, built on `scripts/build-linux.sh` output (the fnOS arm64 payload is cross-assembled by `packaging/fnos/build-fpk.sh`; `scripts/test-fnos-lifecycle.sh` covers the fnOS lifecycle scripts) |
 
 ## docs & license
 

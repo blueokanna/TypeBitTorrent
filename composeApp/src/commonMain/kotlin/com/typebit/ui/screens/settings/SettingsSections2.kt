@@ -497,7 +497,8 @@ fun WebUiSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
         Text(
                 "内置 WebUI 服务已随桌面/服务端一同发布：桌面版勾选“启用 WebUI”后重启即可在浏览器打开 " +
                         "http://<主机>:${s.port}；服务器（NAS）版本使用 --headless 启动，" +
-                        "参数 --port / --data / --downloads / --password 可直接覆盖此处设置。",
+                        "参数 --port / --data / --downloads / --downloads-force / --password 可直接覆盖此处设置" +
+                        "（--downloads-force 会覆盖已保存的默认保存路径，NAS 上由应用中心设置的下载目录使用）。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

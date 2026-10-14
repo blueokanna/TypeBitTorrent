@@ -21,6 +21,10 @@
 #   TRIM_TEMP_LOGFILE      file whose content fnOS shows to the user on failure
 #   TRIM_SERVICE_PORT      the port declared in `manifest` (18881)
 #   TRIM_DATA_SHARE_PATHS  ':'-separated paths of the shares in `config/resource`
+#   TRIM_PKGETC            app configuration dir; holds `typebit.conf`, the file
+#                          the App Center settings form (wizard/config) writes
+#   TRIM_DATA_ACCESSIBLE_PATHS  ':'-separated paths the user authorised under
+#                          应用设置 → 授权目录
 set -u
 
 APPNAME="typebittorrent"
@@ -46,14 +50,20 @@ LOGFILE="${VAR}/typebit.log"
 # password change made later in the WebUI is not overwritten at every boot.
 INITIAL_PW_FILE="${VAR}/initial-password.txt"
 PW_APPLIED="${VAR}/.pw-applied"
+# Written by `cmd/config_callback` (the App Center settings form) and re-applied
+# by `start`. The marker remembers which folder the last start applied, so a
+# save path chosen afterwards in the WebUI survives a restart.
+ETC="${TRIM_PKGETC:-${APPDIR}/etc}"
+CONF="${ETC}/typebit.conf"
+DOWNLOADS_APPLIED="${VAR}/.downloads-applied"
 PORT="${TRIM_SERVICE_PORT:-18881}"
 START_TIMEOUT="${TYPEBIT_START_TIMEOUT:-60}"
 STOP_TIMEOUT="${TYPEBIT_STOP_TIMEOUT:-20}"
 
-# The first share declared in `config/resource` is the download folder: fnOS
-# creates it at install time and hands its path over in TRIM_DATA_SHARE_PATHS.
-DOWNLOAD_DIR="$(printf '%s' "${TRIM_DATA_SHARE_PATHS:-}" | cut -d: -f1)"
-[ -n "$DOWNLOAD_DIR" ] || DOWNLOAD_DIR="${VAR}/downloads"
+# Resolved by `resolve_download_dir` on every start: the App Center settings
+# form wins, then the directories the user authorised, then the share declared
+# in `config/resource`, then a private folder under the app data root.
+DOWNLOAD_DIR=""
 
 log() { echo "$(date '+%F %T') $*" >>"$LOGFILE" 2>/dev/null || true; }
 
@@ -67,6 +77,65 @@ user_error() {
         printf -- '--- %s ---\n' "$LOGFILE"
         tail -n 20 "$LOGFILE" 2>/dev/null
     } >"$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------- configuration
+
+# The App Center settings form (wizard/config) writes `$CONF` through
+# `cmd/config_callback`; `main` is the only reader — the WebUI owns everything
+# else, so this file stays deliberately tiny.
+conf_value() {
+    local key="$1"
+    [ -f "$CONF" ] || return 0
+    sed -n "s/^${key}=//p" "$CONF" 2>/dev/null | head -n 1 | tr -d '\r'
+}
+
+# First path of a ':'-separated list that exists and is writable.
+first_usable_path() {
+    local dir
+    # `printf '%s\n'`: without the trailing newline the last (and for a single
+    # path, only) line makes `read` hit EOF and return non-zero, so the loop
+    # body would never run for it.
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            printf '%s' "$dir"
+            return 0
+        fi
+    done < <(printf '%s\n' "${1:-}" | tr ':' '\n')
+    return 1
+}
+
+# Where new downloads land, most specific answer first:
+#   1. the folder typed in the App Center settings form (`typebit.conf`);
+#   2. the first directory the user authorised for this app (TRIM_DATA_ACCESSIBLE_PATHS);
+#   3. the share declared in `config/resource` (TRIM_DATA_SHARE_PATHS);
+#   4. a private folder inside the app data directory.
+# `start` hands the result to the client with `--downloads-force`, so changing
+# it in the App Center is enough — nobody has to edit the WebUI as well.
+resolve_download_dir() {
+    local dir=""
+    if [ -f "$CONF" ]; then
+        dir="$(conf_value download_dir)"
+    else
+        dir="${wizard_download_dir:-}"
+    fi
+    [ -n "$dir" ] || dir="$(first_usable_path "${TRIM_DATA_ACCESSIBLE_PATHS:-}" || true)"
+    [ -n "$dir" ] || dir="$(first_usable_path "${TRIM_DATA_SHARE_PATHS:-}" || true)"
+    [ -n "$dir" ] || dir="${VAR}/downloads"
+    printf '%s' "$dir"
+}
+
+# Nothing else caps the log, so a long-running install would fill the system
+# volume; keep the current file plus one previous.
+rotate_log() {
+    local max="${TYPEBIT_LOG_MAX_BYTES:-5242880}" size
+    [ -f "$LOGFILE" ] || return 0
+    size="$(wc -c <"$LOGFILE" 2>/dev/null | tr -d '[:space:]')"
+    case "$size" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$size" -gt "$max" ] || return 0
+    mv -f "$LOGFILE" "${LOGFILE}.1" 2>/dev/null || return 0
+    log "log rotated (previous file kept as ${LOGFILE}.1)"
 }
 
 # True when the command line of $1 belongs to this application. The launcher is
@@ -150,7 +219,14 @@ start() {
         log "previous instance${stale:+ (pid $stale)} is gone; check $LOGFILE for a crash before it stopped"
         rm -f "$PIDFILE"
     fi
-    mkdir -p "$VAR" "$TMP" "$DOWNLOAD_DIR"
+    rotate_log
+    DOWNLOAD_DIR="$(resolve_download_dir)"
+    mkdir -p "$VAR" "$TMP" "$ETC" "$DOWNLOAD_DIR" 2>/dev/null || true
+    if [ ! -d "$DOWNLOAD_DIR" ] || [ ! -w "$DOWNLOAD_DIR" ]; then
+        user_error "下载目录不可写：$DOWNLOAD_DIR。请在应用中心的“设置”里改选一个目录（或先在“文件”中创建它），再重新启动。"
+        return 1
+    fi
+    log "start: ${APPNAME} ${TRIM_APPVER:-?} (${TRIM_APP_STATUS:-START}); downloads -> $DOWNLOAD_DIR"
     if [ ! -x "$BIN" ]; then
         user_error "找不到可执行文件 $BIN：安装似乎不完整，请重新安装应用。"
         return 1
@@ -196,6 +272,17 @@ start() {
         --frame-ancestors='*'
     )
 
+    # `--downloads` only fills an empty save path; when the App Center settings
+    # name a different folder than the last start applied, force it, so the
+    # answer given in the App Center is what the client actually uses.
+    local -a force_downloads=()
+    local applied=""
+    [ -f "$DOWNLOADS_APPLIED" ] && applied="$(cat "$DOWNLOADS_APPLIED" 2>/dev/null || true)"
+    if [ "$DOWNLOAD_DIR" != "$applied" ]; then
+        force_downloads=(--downloads-force="$DOWNLOAD_DIR")
+        args+=("${force_downloads[@]}")
+    fi
+
     # Apply the first-run password once (`appcenter-cli install-fpk` installs
     # without a form, hence the generate-and-keep fallback).
     local first_pw="" pw_arg=""
@@ -215,6 +302,9 @@ start() {
     fi
 
     log "starting: $BIN --headless --port=$PORT --data=$VAR --downloads=$DOWNLOAD_DIR$pw_arg"
+    if [ "${#force_downloads[@]}" -gt 0 ]; then
+        log "applying the download folder from the App Center settings ($DOWNLOAD_DIR)"
+    fi
     # The working directory is the data dir: an engine/JVM crash then writes
     # `hs_err_pid*.log` (and ${TRIM_PKGVAR}/core dumps) somewhere the user can
     # actually read, instead of inside a root-owned directory or "/".
@@ -237,6 +327,10 @@ start() {
             if [ -n "$first_pw" ]; then
                 : >"$PW_APPLIED"
                 log "initial WebUI password applied (stored in $INITIAL_PW_FILE; change it in 设置 → WebUI)"
+            fi
+            if [ "${#force_downloads[@]}" -gt 0 ]; then
+                printf '%s' "$DOWNLOAD_DIR" >"$DOWNLOADS_APPLIED" 2>/dev/null || true
+                log "download folder applied; next start keeps a save path that the WebUI changes"
             fi
             return 0
         fi
@@ -292,11 +386,17 @@ stop() {
 case "${1:-}" in
     start) start ;;
     stop) stop ;;
+    # Not part of the fnOS contract; `cmd/config_callback` uses it to make a
+    # settings change take effect without waiting for the next boot.
+    restart)
+        stop
+        start
+        ;;
     status)
         if service_up; then exit 0; else exit 3; fi
         ;;
     *)
-        user_error "未知命令：${1:-}（支持 start / stop / status）"
+        user_error "未知命令：${1:-}（支持 start / stop / status / restart）"
         exit 1
         ;;
 esac

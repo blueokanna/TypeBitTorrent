@@ -1,0 +1,23 @@
+[
+  {
+    "stepTitle": "TypeBitTorrent 设置",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_download_dir",
+        "label": "下载保存目录",
+        "helpText": "留空 = 自动：优先使用你在“应用设置 → 授权目录”里授权的第一个目录，其次是共享文件夹 typebittorrent/downloads。填写绝对路径（例如 /vol1/Download）后，新任务默认保存到那里。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_webui_password",
+        "label": "修改 WebUI 密码",
+        "helpText": "留空 = 保持当前密码不变；用户名固定为 admin。忘记密码时在这里设置一个新密码（至少 8 位）即可，无需卸载重装。"
+      },
+      {
+        "type": "tips",
+        "helpText": "保存后 TypeBitTorrent 会自动重启以应用以上设置（若它当时正在运行）。限速、DHT、端口、RSS 等其余选项仍在 WebUI 的“设置”里调整。"
+      }
+    ]
+  }
+]
