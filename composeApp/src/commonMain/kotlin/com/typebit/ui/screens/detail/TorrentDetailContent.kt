@@ -50,7 +50,7 @@ fun TorrentDetailContent(
             tabs.forEachIndexed { i, t ->
                 Tab(
                     selected = pagerState.currentPage == i,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(i) } },
+                    onClick = { scope.launch { pagerState.animateScrollToPage(i, animationSpec = com.typebit.ui.theme.TypeBitMotion.expressive) } },
                     text = { Text(t.label) },
                 )
             }

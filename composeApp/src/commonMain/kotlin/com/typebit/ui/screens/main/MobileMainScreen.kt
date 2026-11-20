@@ -4,6 +4,11 @@
 package com.typebit.ui.screens.main
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -31,7 +36,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Download
@@ -48,7 +52,20 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.ui.platform.LocalLayoutDirection
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
+import com.typebit.ui.components.GlassNavigationBar
+import com.typebit.ui.components.AddTorrentFab
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -83,7 +100,6 @@ import com.typebit.ui.components.StatusBadge
 import com.typebit.ui.components.TorrentActions
 import com.typebit.ui.components.TorrentActionsSheet
 import com.typebit.ui.components.TorrentProgressBar
-import com.typebit.ui.screens.add.AddTorrentScreen
 import com.typebit.ui.screens.rss.RssScreen
 import com.typebit.ui.screens.search.SearchScreen
 import com.typebit.ui.screens.settings.SettingsScreen
@@ -108,11 +124,9 @@ private enum class MobileSort(val label: String) {
     }
 }
 
-/** ADD / SEARCH / RSS / SETTINGS are IN-PLACE sections (NavigationBar stays, no back arrow);
- * only the detail page and the create-torrent screen are pushed routes. */
+/** Destinations in the persistent mobile navigation bar. */
 enum class MobileSection(val label: String) {
     TORRENTS("种子"),
-    ADD("添加"),
     SEARCH("搜索"),
     RSS("RSS"),
     SETTINGS("设置"),
@@ -148,7 +162,8 @@ fun MobileMainScreen(
         ) { hash ->
             val page = this
             val bounds: @Composable (String) -> Modifier = { id ->
-                Modifier.sharedBounds(rememberSharedContentState(id), page)
+                Modifier.sharedBounds(rememberSharedContentState(id), page,
+                    boundsTransform = { _, _ -> TypeBitMotion.scheme.defaultSpatialSpec() })
             }
             if (hash == null) {
                 savedState.SaveableStateProvider("home") {
@@ -175,8 +190,8 @@ private fun MobileSections(
     bounds: @Composable (String) -> Modifier,
 ) {
     var gridMode by rememberSaveable { mutableStateOf(false) }
+    val backdrop = rememberHazeState()
     var showStats by remember { mutableStateOf(false) }
-    var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
 
     var sortKey by rememberSaveable { mutableStateOf(MobileSort.NAME) }
     var sortDesc by rememberSaveable { mutableStateOf(false) }
@@ -190,16 +205,16 @@ private fun MobileSections(
         if (sortDesc) list.reversed() else list
     }
 
-    LaunchedEffect(showStats) {
-        if (showStats) {
-            while (true) {
-                stats = store.fetchStats()
-                kotlinx.coroutines.delay(1000)
-            }
-        }
-    }
-
     Scaffold(
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = section == MobileSection.TORRENTS,
+                enter = fadeIn(TypeBitMotion.emphasized) + scaleIn(TypeBitMotion.expressive),
+                exit = fadeOut(TypeBitMotion.emphasized) + scaleOut(TypeBitMotion.expressive),
+            ) {
+                AddTorrentFab(onClick = { onRoute(Route.ADD) })
+            }
+        },
         topBar = {
             // Only Torrents owns the global toolbar; other sections render their own top bar.
             if (section == MobileSection.TORRENTS) {
@@ -274,7 +289,7 @@ private fun MobileSections(
             }
         },
         bottomBar = {
-            NavigationBar {
+            GlassNavigationBar(backdrop, state.settings.appearance) {
                 MobileSection.entries.forEach { s ->
                     NavigationBarItem(
                         selected = section == s,
@@ -283,12 +298,11 @@ private fun MobileSections(
                             Icon(
                                 when (s) {
                                     MobileSection.TORRENTS -> Icons.Default.Download
-                                    MobileSection.ADD -> Icons.Default.Add
                                     MobileSection.SEARCH -> Icons.Default.Search
                                     MobileSection.RSS -> Icons.Default.RssFeed
                                     MobileSection.SETTINGS -> Icons.Default.Settings
                                 },
-                                contentDescription = s.label,
+                                contentDescription = null,
                             )
                         },
                         label = { Text(s.label) },
@@ -297,20 +311,18 @@ private fun MobileSections(
             }
         },
     ) { padding ->
-        AnimatedContent(section, Modifier.fillMaxSize().padding(padding),
+        val direction = LocalLayoutDirection.current
+        val outer = PaddingValues(start = padding.calculateStartPadding(direction), top = padding.calculateTopPadding(),
+            end = padding.calculateEndPadding(direction))
+        AnimatedContent(section, Modifier.fillMaxSize().hazeSource(backdrop).padding(outer)
+            .consumeWindowInsets(outer).consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)),
             transitionSpec = { TypeBitMotion.containerTransition(targetState.ordinal > initialState.ordinal) },
             label = "mobileSection",
         ) { active ->
             when (active) {
-                MobileSection.ADD ->
-                    AddTorrentScreen(
-                        state = state,
-                        store = store,
-                        onBack = { onSection(MobileSection.TORRENTS) },
-                        showBack = false,
-                    )
                 MobileSection.SEARCH ->
                     SearchScreen(
+                        listBottomPadding = padding.calculateBottomPadding(),
                         state = state,
                         store = store,
                         onBack = { onSection(MobileSection.TORRENTS) },
@@ -318,6 +330,7 @@ private fun MobileSections(
                     )
                 MobileSection.RSS ->
                     RssScreen(
+                        listBottomPadding = padding.calculateBottomPadding(),
                         state = state,
                         store = store,
                         onBack = { onSection(MobileSection.TORRENTS) },
@@ -325,6 +338,7 @@ private fun MobileSections(
                     )
                 MobileSection.SETTINGS ->
                     SettingsScreen(
+                        listBottomPadding = padding.calculateBottomPadding(),
                         state = state,
                         store = store,
                         onBack = { onSection(MobileSection.TORRENTS) },
@@ -334,18 +348,22 @@ private fun MobileSections(
                     if (state.torrents.isEmpty()) {
                         EmptyState(
                             title = "暂无种子",
-                            subtitle = "点击底部「添加」导入 .torrent 或磁力链接",
+                            subtitle = "通过「添加种子」导入 .torrent 或磁力链接",
+                            modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
                         )
                     } else {
                         LazyVerticalGrid(
                             columns = if (gridMode) GridCells.Adaptive(176.dp) else GridCells.Fixed(1),
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(if (gridMode) 12.dp else 0.dp),
+                            contentPadding = PaddingValues(start = if (gridMode) 12.dp else 0.dp,
+                                end = if (gridMode) 12.dp else 0.dp, top = if (gridMode) 12.dp else 0.dp,
+                                bottom = padding.calculateBottomPadding() + 88.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(if (gridMode) 12.dp else 0.dp),
                         ) {
                             items(sorted, key = { it.hash }) { t ->
-                                val item = Modifier.animateItem().then(bounds(t.hash))
+                                val item = Modifier.animateItem(TypeBitMotion.emphasized,
+                                    TypeBitMotion.scheme.defaultSpatialSpec(), TypeBitMotion.emphasized).then(bounds(t.hash))
                                 val open = { onDetail(t.hash) }
                                 val actions = { actionsFor = t }
                                 if (gridMode) GridTorrentCard(t, item, open, actions)
@@ -408,20 +426,7 @@ private fun MobileSections(
     }
 
     if (showStats) {
-        stats?.let { s ->
-            StatsDialog(
-                stats = s,
-                logs = state.logs,
-                onDismiss = { showStats = false },
-                dhtNodes = state.dhtNodes,
-                trackerCount = state.trackerCount,
-                extIp = state.extIp,
-                extPort = state.extPort,
-                lsdSent = state.lsdSent,
-                lsdRecv = state.lsdRecv,
-                lsdPeers = state.lsdPeers,
-            )
-        }
+        StatsDialog(state, store) { showStats = false }
     }
 }
 
@@ -584,7 +589,8 @@ private fun TorrentDetailPage(
         },
         bottomBar = {
             Row(
-                Modifier.fillMaxWidth().padding(12.dp),
+                Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(
+                    WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)).padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 androidx.compose.material3.Button(onClick = {

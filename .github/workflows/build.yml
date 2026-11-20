@@ -44,7 +44,7 @@ jobs:
       - name: Install NDK and Android build tools
         shell: pwsh
         run: |
-          sdkmanager --install 'ndk;28.2.13676358' 'platforms;android-37.0' 'build-tools;37.0.0'
+          sdkmanager --install 'ndk;28.2.13676358' 'platforms;android-37.1' 'build-tools;37.0.0'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "ANDROID_NDK_HOME=$env:ANDROID_HOME/ndk/28.2.13676358" >> $env:GITHUB_ENV
 

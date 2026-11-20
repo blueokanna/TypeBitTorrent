@@ -2,6 +2,7 @@ package com.typebit.ui.theme
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -11,7 +12,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import com.typebit.data.FontChoice
-import com.typebit.ui.monet.DynamicScheme
+import com.typebit.data.PaletteMode
+import com.materialkolor.PaletteStyle
+import com.materialkolor.rememberDynamicColorScheme
+import com.materialkolor.dynamiccolor.ColorSpec
 import com.typebit.ui.wallpaper.WallpaperLayer
 
 /** Semantic status colors: deliberately independent of the dynamic palette so they
@@ -52,6 +56,7 @@ fun TypeBitTheme(
     darkTheme: Boolean,
     amoled: Boolean = false,
     fontChoice: FontChoice = FontChoice.DEFAULT,
+    paletteMode: PaletteMode = PaletteMode.MONET,
     /** Pre-blurred wallpaper bitmap. */
     wallpaper: ImageBitmap? = null,
     wallpaperEnabled: Boolean = false,
@@ -62,12 +67,21 @@ fun TypeBitTheme(
     wallpaperBrightness: Float = 0.5f,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = remember(seedArgb, darkTheme, amoled, wallpaperEnabled) {
-        val base = when {
-            darkTheme && amoled -> DynamicScheme.darkAmoled(seedArgb)
-            darkTheme -> DynamicScheme.dark(seedArgb)
-            else -> DynamicScheme.light(seedArgb)
-        }
+    ApplySystemBarAppearance(darkTheme)
+    val system = if (paletteMode == PaletteMode.SYSTEM) systemColorScheme(darkTheme) else null
+    val palette = system ?: rememberDynamicColorScheme(
+        seedColor = Color(seedArgb), isDark = darkTheme, isAmoled = amoled,
+        style = when (paletteMode) {
+            PaletteMode.EXPRESSIVE_2021, PaletteMode.EXPRESSIVE_2025 -> PaletteStyle.Expressive
+            else -> PaletteStyle.TonalSpot
+        },
+        specVersion = if (paletteMode == PaletteMode.EXPRESSIVE_2025) ColorSpec.SpecVersion.SPEC_2025
+            else ColorSpec.SpecVersion.SPEC_2021,
+    )
+    val colorScheme = remember(palette, darkTheme, amoled, wallpaperEnabled) {
+        val base = if (system != null && amoled && darkTheme) palette.copy(
+            background = Color.Black, surface = Color.Black, surfaceContainerLowest = Color.Black,
+        ) else palette
         if (wallpaperEnabled) base.withTranslucentSurfaces() else base
     }
 
@@ -99,10 +113,10 @@ fun TypeBitTheme(
     }
 
     CompositionLocalProvider(LocalStatusColors provides status) {
-        MaterialTheme(
+        MaterialExpressiveTheme(
             colorScheme = colorScheme,
+            motionScheme = TypeBitMotion.scheme,
             typography = typebitTypography(fontChoice),
-            shapes = TypeBitShapes,
         ) {
             WallpaperLayer(
                 bitmap = if (wallpaperEnabled) wallpaper else null,

@@ -1,7 +1,8 @@
 [versions]
 kotlin = "2.4.21"
-composeMultiplatform = "1.12.2"
+composeMultiplatform = "1.13.0-rc01"
 agp = "9.5.1"
+haze = "2.1.0"
 androidx-activity = "1.13.0"
 androidx-core = "1.19.1"
 kotlinx-coroutines = "1.11.0"
@@ -12,6 +13,10 @@ android-minSdk = "26"
 android-targetSdk = "37"
 
 [libraries]
+material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.13.0-rc01" }
+material-kolor = { module = "com.materialkolor:material-kolor", version = "5.0.1" }
+haze-blur = { module = "dev.chrisbanes.haze:haze-blur", version.ref = "haze" }
+haze-glass = { module = "dev.chrisbanes.haze:haze-glass", version.ref = "haze" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }

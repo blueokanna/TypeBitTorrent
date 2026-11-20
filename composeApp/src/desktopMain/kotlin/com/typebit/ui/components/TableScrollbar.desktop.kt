@@ -5,7 +5,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollbarAdapter
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -24,7 +24,7 @@ actual fun HorizontalTableScrollbar(
             ScrollbarStyle(
                 minimalHeight = 20.dp,
                 thickness = 12.dp,
-                shape = RoundedCornerShape(6.dp),
+                shape = CircleShape,
                 hoverDurationMillis = 300,
                 unhoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 hoverColor = MaterialTheme.colorScheme.onSurfaceVariant,

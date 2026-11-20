@@ -125,13 +125,13 @@ flowchart TD
 ### the main screen
 
 **Desktop** — permanent sidebar with 13 filters + a search box, a toolbar
-(search / stats / list-grid toggle / settings / **create torrent** / **add**),
-and the torrent table. The detail panel slides in at the bottom when you
-select a torrent.
+(search / stats / list-grid toggle / settings / **create torrent**),
+and the torrent table. Use the **添加种子** floating button to import a torrent.
+Selecting a torrent opens its detail panel.
 
-**Android** — bottom navigation: **种子 / 添加 / 搜索 / RSS / 设置**. The
-torrent list shows cards (switch to grid with the view toggle); long-press a
-card for the action sheet.
+**Android** has a four-destination navigation bar (**种子 / 搜索 / RSS / 设置**).
+Use **添加种子** on **种子** to add a task. The view toggle switches between list
+and grid. Long-press a card for its action sheet.
 
 **Filters** (sidebar / chips): 全部 · 下载中 · 做种中 · 已完成 · 正在执行 ·
 已暂停 · 活跃 · 不活跃 · 已停止 · 停止上传 · 停止下载 · 正在检查 · 出错.
@@ -152,7 +152,7 @@ ratio (desktop and mobile both have a sort menu).
 | **信息** | size, progress, piece stats, created-by/at, comment, save dir, ratio, speeds. Unfinished files honestly say "暂存为 .part，校验通过后自动重命名" |
 | **文件** | full file tree; per-file priority; **rename** a file while downloading (`.part` is promoted to the new name at completion); **▶ play** on any video file |
 | **Tracker** | every announce URL with tier, live status (工作/更新/异常), seeds & leechers; add / remove trackers at runtime |
-| **Peers** | **real** connected peers — address, client fingerprint, country flag, progress, ↑↓ rates, in-flight requests; refreshes every 2 s |
+| **Peers** | Address, client, country, phase, in-flight requests and payload rates per connection. The UI refreshes every 2 seconds. The engine averages rates over the choke interval (10 seconds by default). |
 | **分块** | piece bitfield rendered live — see exactly which pieces are verified |
 
 ### watch while you download
@@ -222,13 +222,12 @@ re-downloaded.
 
 ### stats dialog
 
-The **bar-chart button** opens a live stats dialog (1 s refresh):
+The **bar-chart button** opens the stats dialog. It refreshes once per second.
 
-- **用户统计** — global ↓↑ totals, share ratio, cache read-hit rate
-- **缓存统计** — used / budget, clean + dirty entries, discarded bytes
-- **性能统计** — write/read overload indicators
-- **网络统计** — DHT nodes, active trackers, **external IP:port** (BEP-42),
-  and the **LSD counters**: `lsd_sent` / `lsd_recv` / `lsd_peers`
+- **本次引擎会话** shows TCP bytes sent and received (including protocol traffic), their ratio, discarded bytes and connected peers.
+- **缓存统计** shows bytes served from cache, bytes read from disk, disk read operations and buffered bytes. The byte hit rate displays `—` until the first read.
+- **性能统计** shows write and read cache utilization, pending writes, disk writes, coalescing and evictions.
+- **网络统计** shows DHT nodes, active trackers, the external endpoint (BEP-42) and the LSD discovery counters.
 
 > **Reading the LSD counters** (BEP-14 LAN discovery):
 > - `sent` grows → you're announcing.

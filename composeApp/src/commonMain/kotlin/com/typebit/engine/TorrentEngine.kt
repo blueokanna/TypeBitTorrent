@@ -145,7 +145,7 @@ interface TorrentEngine {
     fun torrentStates(): List<TorrentStateDto>
 
     /** Batched poll tick: DHT count plus each torrent's runtime stats in one JNI round-trip. */
-    fun snapshot(): EngineSnapshotDto
+    fun snapshot(): EngineSnapshotDto?
 
     fun torrentCount(): Int
 
@@ -156,7 +156,7 @@ interface TorrentEngine {
     /** Cumulative wire bytes: (downloaded, uploaded). */
     fun totals(): Pair<Long, Long>
 
-    fun stats(): EngineStatsDto
+    fun stats(): EngineStatsDto?
 
     /**
      * Signed receipt for a byte range (inclusive start / exclusive end) over a unix wall-clock
@@ -413,11 +413,11 @@ class NativeTorrentEngine : TorrentEngine {
         }.getOrDefault(emptyList())
     }
 
-    override fun snapshot(): EngineSnapshotDto {
+    override fun snapshot(): EngineSnapshotDto? {
         val json = bridge("{}") { nativeSnapshot(it) }
         return runCatching {
             BRIDGE_JSON.decodeFromString<EngineSnapshotDto>(json)
-        }.getOrDefault(EngineSnapshotDto())
+        }.getOrNull()
     }
 
     override fun torrentCount(): Int = bridge(0) { nativeTorrentCount(it) }
@@ -434,11 +434,11 @@ class NativeTorrentEngine : TorrentEngine {
         }.getOrDefault(0L to 0L)
     }
 
-    override fun stats(): EngineStatsDto {
+    override fun stats(): EngineStatsDto? {
         val json = bridge("{}") { nativeStats(it) }
         return runCatching {
             BRIDGE_JSON.decodeFromString<EngineStatsDto>(json)
-        }.getOrDefault(EngineStatsDto())
+        }.getOrNull()
     }
 
     override fun exportReceipt(

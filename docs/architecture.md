@@ -171,6 +171,10 @@ A complete `typebit::Host` in `std`:
   `default_gateway`/`http_post` are best-effort (the mapper degrades
   gracefully when the platform cannot discover them).
 
+## Motion and glass rendering
+
+The Compose theme shares one Material 3 Expressive `MotionScheme`. `TypeBitMotion` supplies the same spring specifications to route transitions, shared torrent bounds and progress indicators. Compose advances these animations on its frame clock. The compact navigation bar samples the scrolling content through one Haze source. The empty-state shape animates on entry and reuses its drawing path.
+
 ## The Kotlin store
 
 `AppStore` owns one `MutableStateFlow<AppState>`. UI dispatches actions;
@@ -201,6 +205,8 @@ polling.
 | UI feature | Status | Why |
 | --- | --- | --- |
 | Peer table and task counts | live | `Engine::peer_snapshot` includes connecting, handshaking and ready peers. The seed count is the subset identified as seeds in that snapshot. |
+| Peer download and upload rates | live | The engine averages payload bytes per connection in its choke scheduling window (10 seconds by default). A new or idle peer can report 0 B/s. |
+| Session traffic and cache | live | TCP receive/send totals include protocol bytes. Read hit rate is cache hit bytes divided by hit bytes plus bytes read from disk. An empty read sample displays `—`. The WebUI returns HTTP 503 when engine statistics are unavailable. |
 | Swarm report, batch add and per-session speed limits | engine APIs | TypeBit 0.1.10 exposes these APIs. The client adds tasks individually, applies global limits and displays the current peer snapshot. |
 | Per-torrent uploaded bytes | live | `Engine::uploaded` reports payload bytes for this torrent. |
 | Magnet file list | live after metadata resolution | `MetadataComplete` triggers a read of `Engine::metainfo`. The store persists the raw info dictionary for restart. |

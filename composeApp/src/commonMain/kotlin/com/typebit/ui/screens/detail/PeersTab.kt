@@ -62,10 +62,9 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
             "当前连接：${peers.size} · ↓ ${Format.speed(swarmDown)} · ↑ ${Format.speed(swarmUp)}",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
-        Spacer(Modifier.width(0.dp))
+        Text("每个连接按引擎采样周期更新速率（默认 10 秒）",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         if (peers.isEmpty()) {
             EmptyState(
@@ -85,7 +84,7 @@ fun PeersTab(torrent: Torrent, store: AppStore, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PeerRow(peer: PeerDto) {
+internal fun PeerRow(peer: PeerDto) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -119,7 +118,6 @@ private fun PeerRow(peer: PeerDto) {
                 buildString {
                     append(peer.client.ifBlank { "未知客户端" })
                     if (peer.seed) append(" · 做种")
-                    append(" · ${Format.speed(peer.down)} ↓ / ${Format.speed(peer.up)} ↑")
                     if (peer.inflight > 0) append(" · 在途 ${peer.inflight} 块")
                 },
                 style = MaterialTheme.typography.labelSmall,
@@ -127,6 +125,8 @@ private fun PeerRow(peer: PeerDto) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Text("下载 ${Format.speed(peer.down)} · 上传 ${Format.speed(peer.up)}",
+                style = MaterialTheme.typography.labelMedium)
         }
         Text(
             peer.phaseLabel,

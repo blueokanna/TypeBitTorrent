@@ -1,4 +1,4 @@
-"""Download a generated BEP 3 torrent from a loopback peer using the packaged client."""
+"""Verify download, seeding, peer rates, session counters and restart using the packaged client."""
 
 import base64
 import hashlib
@@ -67,7 +67,7 @@ def serve_metadata(port, info):
                 return
 
 
-def transfer(port, info_hash, payload, check_peer):
+def transfer(port, info_hash, payload, check_peer, check_rate):
     with connection(port, info_hash) as (peer, stream):
         peer.sendall(b'\x00\x00\x00\x02\x05\x80' + b'\x00\x00\x00\x01\x01')  # bitfield, unchoke
         check_peer()
@@ -81,6 +81,26 @@ def transfer(port, info_hash, payload, check_peer):
             block = b'\x07' + message[1:9] + payload[begin:begin + length]
             send_message(peer, block)
             served.add(begin)
+        check_rate('down')
+
+
+def receive_upload(port, info_hash, payload, check_rate):
+    with connection(port, info_hash) as (peer, stream):
+        send_message(peer, b'\x02')  # interested
+        while read_message(stream) != b'\x01':  # unchoke
+            pass
+        received = bytearray()
+        for offset in range(0, len(payload), 16384):
+            request = struct.pack('!III', 0, offset, 16384)
+            send_message(peer, b'\x06' + request)
+            while True:
+                message = read_message(stream)
+                if message[:1] == b'\x07':
+                    assert message[1:9] == request[:8] and len(message[9:]) == 16384
+                    received.extend(message[9:])
+                    break
+        assert received == payload
+        check_rate('up')
 
 
 @contextmanager
@@ -153,6 +173,17 @@ def check(launcher, root):
         peers = api('detail?hash=' + info_hash.hex())['peers']
         assert any(p['seed'] and p['phase'] == 2 for p in peers)
 
+    def check_rate(direction):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            peers = api('detail?hash=' + info_hash.hex())['peers']
+            for peer in peers:
+                if peer['phase'] == 2 and peer[direction] > 0:
+                    print(f"Peer {direction}: {peer[direction]} B/s", flush=True)
+                    return
+            time.sleep(0.2)
+        raise AssertionError(f'no positive {direction} rate for the connected peer')
+
     with running_client(command) as app:
         state = wait_state(lambda s: s['engineRunning'] and s['listenPort'] > 0 and
                            any(t['hash'] == cached_hash and t['metadataReady'] for t in s['torrents']))
@@ -172,12 +203,20 @@ def check(launcher, root):
         assert detail['files'][0]['length'] == len(payload)
         resume = root / 'resume.bin'
         old_resume = resume.read_bytes() if resume.exists() else b''
-        transfer(state['listenPort'], info_hash, payload, check_peer)
+        stats_before = api('stats')
+        transfer(state['listenPort'], info_hash, payload, check_peer, check_rate)
         state = wait_state(lambda s: task(s).get('status') == 'SEEDING' and
                            resume.exists() and resume.read_bytes() != old_resume)
         row = task(state)
         assert row['progress'] == 1 and row['havePieces'] == 1 and row['isComplete']
         assert (files / 'smoke.bin').read_bytes() == payload
+        receive_upload(state['listenPort'], info_hash, payload, check_rate)
+        stats = api('stats')
+        assert stats['d_total'] - stats_before['d_total'] >= len(payload)
+        assert stats['u_total'] - stats_before['u_total'] >= len(payload)
+        assert stats['c_write_bytes'] - stats_before['c_write_bytes'] >= len(payload)
+        read_bytes = sum(stats[k] - stats_before[k] for k in ('c_read_hits', 'c_read_bytes'))
+        assert read_bytes >= len(payload), 'uploaded data must be accounted for by cache or disk reads'
         logs = api('logs?after=0')
         assert logs
         cursor = logs[-1]['seq'] + 1
@@ -187,7 +226,7 @@ def check(launcher, root):
         state = wait_state(lambda s: task(s).get('status') == 'SEEDING')
         assert task(state)['havePieces'] == 1 and (files / 'smoke.bin').read_bytes() == payload
         assert task(state, fresh_hash)['metadataReady'] and api('detail?hash=' + fresh_hash)['files'][0]['path'] == 'fresh.bin'
-        print(f"Packaged download and restart verified: {row['name']}, {len(payload)} bytes, {row['status']}")
+        print(f"Verified {len(payload)} bytes downloaded and uploaded, {read_bytes} read bytes, restart {row['status']}")
 
 
 if __name__ == '__main__':

@@ -57,6 +57,7 @@ fun RssScreen(
     store: AppStore,
     onBack: () -> Unit,
     showBack: Boolean = true,
+    listBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val scope = rememberCoroutineScope()
     val repo = remember { RssRepository() }
@@ -141,7 +142,7 @@ fun RssScreen(
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
             }
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = listBottomPadding)) {
                 items(feeds, key = { it.url }) { feed ->
                     FeedCard(feed = feed, onRemove = { removeFeed(feed.url) })
                 }

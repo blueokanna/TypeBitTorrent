@@ -206,6 +206,9 @@ class AppStore(
             _state.update { it.copy(lastError = "引擎启动失败：$detail") }
             return
         }
+        lastTotals = null
+        lastSeen.clear()
+        lastUpSeen.clear()
         var effectiveSettings = settings
         try {
             records = torrentRepo.loadRecords()
@@ -1193,8 +1196,8 @@ class AppStore(
 
     /** One batched snapshot per tick; metainfo (and full state) is refetched only for new metadata. */
     private fun refreshStats() {
-        val now = System.currentTimeMillis()
-        val snap = engine.snapshot()
+        val snap = engine.snapshot() ?: return
+        val now = System.nanoTime() / 1_000_000L
         val byHash = snap.torrents.associateBy { it.h }
         val totals = snap.totalsPair
         val dt = (now - lastGlobalPoll).coerceAtLeast(1L)
@@ -1414,13 +1417,13 @@ class AppStore(
                         .getOrDefault(emptyList())
             }
 
-    suspend fun fetchStats(): com.typebit.engine.EngineStatsDto =
+    suspend fun fetchStats(): com.typebit.engine.EngineStatsDto? =
             withContext(peersScope.coroutineContext) {
                 runCatching {
                             if (engine.isRunning) engine.stats()
-                            else com.typebit.engine.EngineStatsDto()
+                            else null
                         }
-                        .getOrDefault(com.typebit.engine.EngineStatsDto())
+                        .getOrNull()
             }
 
     fun renameFile(hash: String, file: Int, name: String) = onEngine {

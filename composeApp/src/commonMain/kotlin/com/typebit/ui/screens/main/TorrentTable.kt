@@ -148,6 +148,7 @@ fun TorrentTable(
                 Spacer(Modifier.height(4.dp))
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 80.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(sorted, key = { it.hash }) { t ->

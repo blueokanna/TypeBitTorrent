@@ -36,6 +36,12 @@ enum class FontChoice {
 }
 
 @Serializable
+enum class PaletteMode { SYSTEM, MONET, EXPRESSIVE_2021, EXPRESSIVE_2025 }
+
+@Serializable
+enum class NavigationGlass { AERO, LIQUID, GAUSSIAN }
+
+@Serializable
 data class AppearanceSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val fontChoice: FontChoice = FontChoice.DEFAULT,
@@ -52,6 +58,9 @@ data class AppearanceSettings(
     val wallpaperOffsetY: Float = 0f,
     /** Explicit ARGB seed colour; wins over the colour extracted from the wallpaper. */
     val seedOverride: Int? = null,
+    val paletteMode: PaletteMode = PaletteMode.MONET,
+    val navigationGlass: NavigationGlass = NavigationGlass.AERO,
+    val navigationBlurDp: Float = 16f,
 )
 
 @Serializable

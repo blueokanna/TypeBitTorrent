@@ -24,11 +24,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
 import com.typebit.data.AppSettings
 import com.typebit.data.AppearanceSettings
+import com.typebit.data.NavigationGlass
+import com.typebit.data.PaletteMode
 import com.typebit.data.FontChoice
 import com.typebit.data.ThemeMode
 import com.typebit.platform.rememberWallpaperPicker
@@ -73,11 +75,31 @@ fun AppearanceSection(settings: AppSettings, onChange: (AppSettings) -> Unit) {
                 ThemeMode.AMOLED -> "AMOLED（纯黑）"
             } },
         )
-        Text(
-            "Monet 动态色彩由壁纸（或手动种子色）经 HCT 色彩空间实时生成整套 MD3 配色。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        SettingDropdown(
+            label = "配色方案", options = PaletteMode.entries, selected = s.paletteMode,
+            onSelect = { update(s.copy(paletteMode = it)) },
+            labelOf = { when (it) {
+                PaletteMode.SYSTEM -> "系统动态配色（Android 12+）"
+                PaletteMode.MONET -> "Monet · Tonal Spot"
+                PaletteMode.EXPRESSIVE_2021 -> "Expressive · 2021"
+                PaletteMode.EXPRESSIVE_2025 -> "Expressive · 2025"
+            } },
         )
+    }
+
+    SectionCard("移动导航栏") {
+        SettingDropdown(
+            label = "玻璃效果", options = NavigationGlass.entries, selected = s.navigationGlass,
+            onSelect = { update(s.copy(navigationGlass = it)) },
+            labelOf = { when (it) {
+                NavigationGlass.AERO -> "AeroGlass"
+                NavigationGlass.LIQUID -> "LiquidGlass"
+                NavigationGlass.GAUSSIAN -> "高斯模糊"
+            } },
+        )
+        CommitSlider("导航模糊半径", s.navigationBlurDp, 0f..32f, { "${it.toInt()} dp" }) {
+            update(s.copy(navigationBlurDp = it))
+        }
     }
 
     SectionCard("字体") {
@@ -203,21 +225,20 @@ private fun CommitSlider(
     suffix: (Float) -> String,
     onCommit: (Float) -> Unit,
 ) {
-    var local by remember(value) { mutableFloatStateOf(value) }
+    val slider = remember(value, valueRange) { SliderState(value.coerceIn(valueRange), trackRange = valueRange) }
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             Text(
-                suffix(local),
+                suffix(slider.value),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Slider(
-            value = local.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = { local = it },
-            onValueChangeFinished = { onCommit(local) },
-            valueRange = valueRange,
+            state = slider,
+            onValueChange = { slider.value = it },
+            onValueChangeFinished = { onCommit(slider.value) },
         )
     }
 }
@@ -272,7 +293,8 @@ private fun SeedOverrideRow(
         value = hex,
         onValueChange = { input ->
             hex = input
-            parseArgb(input)?.let { update(s.copy(seedOverride = it)) }
+            if (input.isBlank()) update(s.copy(seedOverride = null))
+            else parseArgb(input)?.let { update(s.copy(seedOverride = it)) }
         },
         placeholder = "#RRGGBB 或留空自动",
     )

@@ -128,7 +128,7 @@ data class EngineSnapshotDto(
         val lsd_sent: Long = 0,
         val lsd_recv: Long = 0,
         val lsd_peers: Long = 0,
-        val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
+        @kotlinx.serialization.Required val totals: SnapshotTotalsDto = SnapshotTotalsDto(),
         val torrents: List<TorrentSnapshotDto> = emptyList(),
 ) {
     val totalsPair: Pair<Long, Long>
@@ -220,7 +220,7 @@ data class GlobalStats(
 /** Field names mirror `Cmd::Stats` JSON (native/src/engine.rs::stats_to_json). */
 @Serializable
 data class EngineStatsDto(
-        val d_total: Long = 0L,
+        @kotlinx.serialization.Required val d_total: Long = 0L,
         val u_total: Long = 0L,
         val d_discarded: Long = 0L,
         val d_peers: Long = 0L,
@@ -265,13 +265,16 @@ data class EngineStatsDto(
     val ratio: Double
         get() = if (d_total > 0) u_total.toDouble() / d_total else 0.0
 
-    val readHitRate: Double
-        get() = if (c_read_ops > 0) c_read_hits.toDouble() / c_read_ops else 0.0
+    val readHitRate: Double?
+        get() {
+            val bytes = c_read_hits.toDouble() + c_read_bytes
+            return if (bytes > 0) c_read_hits / bytes else null
+        }
 
-    val writeOverload: Double
+    val writeCacheUsage: Double
         get() = if (c_budget > 0) (c_buf - c_clean).coerceAtLeast(0L).toDouble() / c_budget else 0.0
 
-    val readOverload: Double
+    val readCacheUsage: Double
         get() = if (c_clean_budget > 0) c_clean.toDouble() / c_clean_budget else 0.0
 
     val dnsSummary: String?

@@ -113,6 +113,7 @@ fun App() {
                         darkTheme = darkTheme,
                         amoled = appearance.themeMode == ThemeMode.AMOLED,
                         fontChoice = appearance.fontChoice,
+                        paletteMode = appearance.paletteMode,
                         wallpaper = blurredWallpaper,
                         wallpaperEnabled = appearance.wallpaperEnabled,
                         wallpaperDim = appearance.dimAlpha,

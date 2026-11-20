@@ -21,10 +21,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.toPath
+import androidx.graphics.shapes.Morph
+import com.typebit.ui.theme.TypeBitMotion
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.typebit.ui.theme.TypeBitThemeColors
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun EmptyState(
     title: String,
@@ -37,22 +46,30 @@ fun EmptyState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        val scale = remember { Animatable(0.7f) }
+        val progress = remember { Animatable(0f) }
+        val morph = remember { Morph(MaterialShapes.Circle, MaterialShapes.Cookie6Sided) }
+        val container = MaterialTheme.colorScheme.primaryContainer
         LaunchedEffect(Unit) {
-            scale.animateTo(
+            progress.animateTo(
                 targetValue = 1f,
-                animationSpec = com.typebit.ui.theme.TypeBitMotion.expressive,
+                animationSpec = TypeBitMotion.expressive,
             )
         }
         Box(
             Modifier
                 .size(96.dp)
                 .graphicsLayer {
-                    scaleX = scale.value
-                    scaleY = scale.value
+                    scaleX = 0.7f + 0.3f * progress.value
+                    scaleY = scaleX
                 }
-                .clip(MaterialTheme.shapes.extraLarge)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .drawWithCache {
+                    val path = Path()
+                    onDrawBehind {
+                        scale(size.width, size.height, pivot = androidx.compose.ui.geometry.Offset.Zero) {
+                            drawPath(morph.toPath(progress.value.coerceIn(0f, 1f), path), container)
+                        }
+                    }
+                },
             contentAlignment = Alignment.Center,
         ) {
             Icon(

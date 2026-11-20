@@ -315,7 +315,9 @@ private fun handleGet(exchange: HttpExchange, path: String) {
             "/api/state" -> if (requireAuth(exchange)) sendJson(exchange, 200, jsonOf(stateDto()))
             "/api/stats" ->
                 if (requireAuth(exchange)) {
-                    sendJson(exchange, 200, jsonOf(runBlocking { store.fetchStats() }))
+                    val stats = runBlocking { store.fetchStats() }
+                    if (stats == null) fail(exchange, 503, "Engine statistics unavailable")
+                    else sendJson(exchange, 200, jsonOf(stats))
                 }
             "/api/settings" ->
                 if (requireAuth(exchange)) sendJson(exchange, 200, jsonOf(store.state.value.settings))

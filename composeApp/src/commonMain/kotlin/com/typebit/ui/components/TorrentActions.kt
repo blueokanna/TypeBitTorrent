@@ -1,6 +1,5 @@
 package com.typebit.ui.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,17 +51,17 @@ fun TorrentActionsList(
 ) {
     val strings = LocalStrings.current
     ListItem(
-        headlineContent = { Text(strings[TextKey.ACTION_RENAME]) },
+        content = { Text(strings[TextKey.ACTION_RENAME]) },
         leadingContent = { Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null) },
-        modifier = Modifier.clickable(onClick = actions.onRename),
+        onClick = actions.onRename,
     )
     ListItem(
-        headlineContent = { Text(strings[TextKey.ACTION_SHARE_MAGNET]) },
+        content = { Text(strings[TextKey.ACTION_SHARE_MAGNET]) },
         leadingContent = { Icon(Icons.Default.Share, contentDescription = null) },
-        modifier = Modifier.clickable(onClick = actions.onShare),
+        onClick = actions.onShare,
     )
     ListItem(
-        headlineContent = {
+        content = {
             Text(
                 if (torrent.status == TorrentStatus.PAUSED) {
                     strings[TextKey.ACTION_RESUME]
@@ -77,14 +76,14 @@ fun TorrentActionsList(
                 contentDescription = null,
             )
         },
-        modifier = Modifier.clickable(onClick = actions.onTogglePause),
+        onClick = actions.onTogglePause,
     )
     ListItem(
-        headlineContent = { Text(strings[TextKey.ACTION_DELETE], color = MaterialTheme.colorScheme.error) },
+        content = { Text(strings[TextKey.ACTION_DELETE], color = MaterialTheme.colorScheme.error) },
         leadingContent = {
             Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
         },
-        modifier = Modifier.clickable(onClick = actions.onDelete),
+        onClick = actions.onDelete,
     )
 }
 

@@ -22,7 +22,8 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | 主题模式（跟随系统 / 亮色 / 暗色 / AMOLED） | **live** (drives the MD3 scheme; AMOLED = pure-black dark surfaces) |
 | 启用壁纸 + 选择/清除壁纸 | **live** (wallpaper fills the window behind a blurred + DIM'd scrim; Android copies the pick to app-private storage) |
 | 模糊半径 / DIM 强度 | **live** (recompose the wallpaper layer; readability scrim guarantees text contrast) |
-| 种子色 (hex) / 自动提取 | **live** (seed → HCT → full Monet palette via the in-repo CAM16 engine) |
+| 配色方案 | **live**. Android 12+ can use the system dynamic palette. Monet uses the selected seed or wallpaper. Expressive 2021 and 2025 use the corresponding Material Color Utilities specification via MaterialKolor. Platforms without a system palette use the seed. |
+| 导航玻璃 / 模糊半径 | **live** on the compact layout. AeroGlass adds a gradient over background blur, LiquidGlass uses Haze refraction where supported, and Gaussian applies background blur. The radius ranges from 0 to 32 dp. |
 | 壁纸预览 | **live** (renders the exact wallpaper layer + sample surfaces in a dialog) |
 
 ## 下载 (Downloads)

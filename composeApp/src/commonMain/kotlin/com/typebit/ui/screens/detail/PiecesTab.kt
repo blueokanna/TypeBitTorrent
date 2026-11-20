@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -84,7 +83,7 @@ private fun PieceCell(has: Boolean) {
     Box(
         Modifier
             .size(14.dp)
-            .clip(RoundedCornerShape(2.dp))
+            .clip(MaterialTheme.shapes.extraSmall)
             .background(if (has) s.seed else s.download.copy(alpha = 0.25f)),
     )
 }
@@ -94,7 +93,7 @@ private fun LegendDot(color: Color) {
     Box(
         Modifier
             .size(10.dp)
-            .clip(RoundedCornerShape(2.dp))
+            .clip(MaterialTheme.shapes.extraSmall)
             .background(color),
     )
 }

@@ -3,6 +3,7 @@ package com.typebit.ui.screens
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toAwtImage
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
@@ -11,9 +12,20 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import com.typebit.ui.screens.detail.PeerRow
+import com.typebit.ui.util.Format
 import com.typebit.data.SettingsRepository
+import com.typebit.data.NavigationGlass
+import com.typebit.app.Route
 import com.typebit.data.TorrentRepository
 import com.typebit.engine.EngineEventDto
 import com.typebit.engine.EngineSnapshotDto
@@ -76,6 +88,51 @@ class ScreenshotTest {
             trackers = emptyList(), files = emptyList(), seeds = 1, peers = 1, downSpeed = 0, upSpeed = 0,
             completedAt = null, category = "", tags = emptyList(),
         )
+
+    @Test
+    fun mobileGlassModesRenderAndAddOpensFromTorrents() {
+        val store = makeStore()
+        val mode = mutableStateOf(NavigationGlass.AERO)
+        val tasks = List(24) { index -> item.copy(hash = "task-$index", name = "sample-$index.bin") }
+        var route: Route? = null
+        rule.setContent {
+            val initial = store.state.value
+            val settings = initial.settings.copy(appearance = initial.settings.appearance.copy(navigationGlass = mode.value))
+            TypeBitTheme(seedArgb = 0xFF0061A4.toInt(), darkTheme = false) {
+                Box(Modifier.width(390.dp).testTag("compact")) {
+                    MobileMainScreen(initial.copy(settings = settings, torrents = tasks), store) { route = it }
+                }
+            }
+        }
+        for (glass in NavigationGlass.entries) {
+            rule.runOnIdle { mode.value = glass }
+            rule.onNode(hasScrollToIndexAction()).performScrollToIndex(8)
+            save(rule.onNodeWithTag("compact").captureToImage(), "compact-${glass.name.lowercase()}.png")
+            rule.onNodeWithContentDescription("添加种子").performClick()
+            rule.runOnIdle {
+                check(route == Route.ADD)
+                route = null
+            }
+            rule.onNodeWithText("RSS").performClick()
+            rule.onNodeWithText("RSS 阅读器").assertExists()
+            rule.onNodeWithContentDescription("添加种子").assertDoesNotExist()
+            rule.onNodeWithText("种子").performClick()
+        }
+    }
+
+    @Test
+    fun longClientNameLeavesBothPeerRatesVisible() {
+        val peer = PeerDto(client = "long-client-name".repeat(12), down = 12345678, up = 98765432, phase = 2)
+        rule.setContent {
+            TypeBitTheme(seedArgb = 0xFF0061A4.toInt(), darkTheme = false) {
+                Box(Modifier.width(205.dp)) { PeerRow(peer) }
+            }
+        }
+        val label = "下载 ${Format.speed(peer.down)} · 上传 ${Format.speed(peer.up)}"
+        val layouts = mutableListOf<TextLayoutResult>()
+        rule.onNodeWithText(label).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        check(layouts.single().let { it.lineCount > 1 && !it.hasVisualOverflow })
+    }
 
     @Test
     fun mobileGridOpensDetailAndReturnsToSameView() {
@@ -160,7 +217,7 @@ class ScreenshotTest {
         }
         rule.onNodeWithText("TypeBitTorrent").assertExists()
         rule.onNodeWithText("暂无种子").assertExists()
-        rule.onNodeWithText("添加种子").assertExists()
+        rule.onNodeWithContentDescription("添加种子").assertExists()
         save(rule.onRoot().captureToImage(), "main-light.png")
     }
 

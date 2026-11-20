@@ -29,6 +29,8 @@ upstream engine and the bridge share the same terms.
 - **nextjson** — Apache-2.0 — JSON parsing in the bridge.
 - **Kotlin / Compose Multiplatform / Material 3 / kotlinx-\*** — Apache-2.0 (JetBrains).
 - **AndroidX** — Apache-2.0.
+- **Haze 2.1.0** provides background blur and glass refraction under Apache-2.0. <https://github.com/chrisbanes/haze>
+- **MaterialKolor 5.0.1** generates seed-based Material palettes under the MIT license. <https://github.com/jordond/materialkolor>
 
 ## Required Notice
 

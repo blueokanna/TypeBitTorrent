@@ -72,6 +72,7 @@ fun SearchScreen(
     store: AppStore,
     onBack: () -> Unit,
     showBack: Boolean = true,
+    listBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
@@ -197,7 +198,7 @@ fun SearchScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(4.dp))
-                    LazyColumn(Modifier.fillMaxSize()) {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = listBottomPadding)) {
                         items(results, key = { it.magnet }) { r ->
                             SearchResultCard(
                                 result = r,
@@ -220,7 +221,7 @@ fun SearchScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(4.dp))
-                    LazyColumn(Modifier.fillMaxSize()) {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = listBottomPadding)) {
                         items(localResults, key = { it.hash }) { t ->
                             Card(
                                 Modifier.fillMaxWidth().padding(vertical = 4.dp),

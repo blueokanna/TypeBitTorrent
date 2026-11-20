@@ -51,7 +51,10 @@ kotlin {
         commonMain.dependencies {
             implementation(compose.runtime)
             implementation(compose.foundation)
-            implementation(compose.material3)
+            implementation(libs.material3)
+            implementation(libs.material.kolor)
+            implementation(libs.haze.blur)
+            implementation(libs.haze.glass)
             implementation(compose.materialIconsExtended)
             implementation(compose.ui)
             implementation(compose.components.resources)
@@ -83,6 +86,7 @@ kotlin {
 android {
     namespace = "com.typebit.app"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    compileSdkMinor = 1
 
     defaultConfig {
         applicationId = "com.typebit.app"

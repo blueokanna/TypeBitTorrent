@@ -78,6 +78,7 @@ fun SettingsScreen(
     store: AppStore,
     onBack: () -> Unit,
     showBack: Boolean = true,
+    listBottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val strings = LocalStrings.current
     var category by remember { mutableIntStateOf(0) }
@@ -166,6 +167,7 @@ fun SettingsScreen(
                         }
                     }
                     Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(listBottomPadding))
                 }
             }
         } else {
@@ -181,6 +183,7 @@ fun SettingsScreen(
                             CategoryContent(cat, settings, onChange, state, store)
                         }
                     }
+                    Spacer(Modifier.height(listBottomPadding))
                 }
             }
         }

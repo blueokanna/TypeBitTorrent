@@ -713,13 +713,14 @@ function dnsLines(stats) {
 
 async function refreshStats() {
   const { data } = await api('/api/state');
-  const { data: stats } = await api('/api/stats');
+  const reply = await api('/api/stats');
+  const stats = reply.status === 200 ? reply.data : null;
   const cards = $('stat-cards');
   cards.textContent = '';
   if (data) {
     const items = [
       ['下载速率', fmtSpeed(data.downRate)], ['上传速率', fmtSpeed(data.upRate)],
-      ['本次下载', fmtBytes(data.totalDownloaded)], ['本次上传', fmtBytes(data.totalUploaded)],
+      ['本次 TCP 接收（含协议）', fmtBytes(data.totalDownloaded)], ['本次 TCP 发送（含协议）', fmtBytes(data.totalUploaded)],
       ['任务数', String(data.torrents.length)], ['DHT 节点', String(data.dhtNodes)],
       ['活动 Tracker', String(data.activeTrackers || 0)],
       ['LSD 收发', data.lsdSent + ' / ' + data.lsdRecv], ['LSD 发现', String(data.lsdPeers)],
@@ -751,10 +752,20 @@ async function refreshStats() {
   const box = $('engine-stats');
   box.textContent = '';
   if (stats) {
+    const readBytes = stats.c_read_hits + stats.c_read_bytes;
+    const cacheRows = [
+      ['读缓存命中率（按字节）', readBytes > 0 ? fmtPercent(stats.c_read_hits / readBytes) : '—'],
+      ['缓存读取量', fmtBytes(stats.c_read_hits)], ['磁盘读取量', fmtBytes(stats.c_read_bytes)],
+      ['磁盘读取次数', String(stats.c_read_ops)],
+    ];
+    for (const [k, v] of cacheRows) {
+      box.appendChild(el('div', { class: 'item' }, [el('span', { class: 'k', text: k }), el('span', { class: 'v', text: v })]));
+    }
     for (const [k, v] of Object.entries(stats)) {
+      if (['c_read_hits', 'c_read_bytes', 'c_read_ops'].includes(k)) continue;
       box.appendChild(el('div', { class: 'item' }, [el('span', { class: 'k', text: k }), el('span', { class: 'v', text: String(v) })]));
     }
-  }
+  } else box.textContent = '等待引擎统计数据…';
 }
 
 /* --------------------------------------------------------------- settings */

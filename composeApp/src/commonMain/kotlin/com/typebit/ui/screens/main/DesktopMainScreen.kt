@@ -26,7 +26,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AllInbox
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -52,11 +51,10 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
+import com.typebit.ui.components.AddTorrentFab
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -83,7 +81,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.typebit.app.Route
 import com.typebit.model.TorrentFilter
 import com.typebit.model.TorrentStatus
@@ -103,20 +100,10 @@ fun DesktopMainScreen(
 ) {
     var gridMode by remember { mutableStateOf(false) }
     var showStats by remember { mutableStateOf(false) }
-    var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
 
     var actionsFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
     var renameFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
     var deleteFor by remember { mutableStateOf<com.typebit.model.Torrent?>(null) }
-
-    LaunchedEffect(showStats) {
-        if (showStats) {
-            while (true) {
-                stats = store.fetchStats()
-                kotlinx.coroutines.delay(1000)
-            }
-        }
-    }
 
     PermanentNavigationDrawer(
         drawerContent = {
@@ -134,40 +121,35 @@ fun DesktopMainScreen(
                 onStats = { showStats = true },
             )
 
-            AnimatedContent(
-                targetState = state.torrents.isEmpty() to gridMode,
-                transitionSpec = { TypeBitMotion.containerTransition(targetState.second) },
-                label = "mainContent",
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) { (empty, grid) ->
-                if (empty) {
-                    EmptyState(
-                        title = "暂无种子",
-                        subtitle = "点击上方 + 添加 .torrent 文件或磁力链接",
-                        action = {
-                            Button(onClick = { onRoute(Route.ADD) }) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text("添加种子")
-                            }
-                        },
-                    )
-                } else if (grid) {
-                    TorrentGrid(
-                        torrents = state.filteredTorrents,
-                        onSelect = store::select,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                    TorrentTable(
-                        torrents = state.filteredTorrents,
-                        selectedHash = state.selectedHash,
-                        onSelect = store::select,
-                        onActions = { actionsFor = it },
-                    )
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                AnimatedContent(
+                    targetState = state.torrents.isEmpty() to gridMode,
+                    transitionSpec = { TypeBitMotion.containerTransition(targetState.second) },
+                    label = "mainContent",
+                    modifier = Modifier.fillMaxSize(),
+                ) { (empty, grid) ->
+                    if (empty) {
+                        EmptyState(
+                            title = "暂无种子",
+                            subtitle = "通过「添加种子」导入 .torrent 文件或磁力链接",
+                        )
+                    } else if (grid) {
+                        TorrentGrid(
+                            torrents = state.filteredTorrents,
+                            onSelect = store::select,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        TorrentTable(
+                            torrents = state.filteredTorrents,
+                            selectedHash = state.selectedHash,
+                            onSelect = store::select,
+                            onActions = { actionsFor = it },
+                        )
+                    }
                 }
+                AddTorrentFab({ onRoute(Route.ADD) }, Modifier.align(Alignment.BottomEnd).padding(24.dp))
             }
-
             AnimatedContent(
                 targetState = state.selectedTorrent,
                 contentKey = { it?.hash },
@@ -193,20 +175,7 @@ fun DesktopMainScreen(
     }
 
     if (showStats) {
-        stats?.let { s ->
-            StatsDialog(
-                stats = s,
-                logs = state.logs,
-                onDismiss = { showStats = false },
-                dhtNodes = state.dhtNodes,
-                trackerCount = state.trackerCount,
-                extIp = state.extIp,
-                extPort = state.extPort,
-                lsdSent = state.lsdSent,
-                lsdRecv = state.lsdRecv,
-                lsdPeers = state.lsdPeers,
-            )
-        }
+        StatsDialog(state, store) { showStats = false }
     }
 
     actionsFor?.let { t ->
@@ -296,7 +265,7 @@ private fun Sidebar(state: AppState, store: AppStore) {
             Column {
                 Text(
                     "TypeBitTorrent",
-                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                    style = MaterialTheme.typography.titleMediumEmphasized,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
@@ -524,9 +493,6 @@ private fun AppTopBar(
             Spacer(Modifier.width(4.dp))
             FilledTonalIconButton(onClick = { onRoute(Route.CREATE) }) {
                 Icon(Icons.Default.Build, contentDescription = "制作种子")
-            }
-            FilledIconButton(onClick = { onRoute(Route.ADD) }) {
-                Icon(Icons.Default.Add, contentDescription = "添加种子")
             }
             }
         }
