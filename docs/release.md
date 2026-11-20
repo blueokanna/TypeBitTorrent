@@ -38,4 +38,14 @@ On Android 13, the home screen displayed all four destinations and the add butto
 
 In a separate run, Android instrumentation supplied the same file as the picker result and activated the Activity’s add button. The app persisted the task and received 65,536 bytes from a loopback peer. The stats dialog reported 64.13 KiB of TCP input, 161 B of TCP output, one disk write of 64.00 KiB and no discarded bytes. The home screen showed `Seeding` at 100%. After a process restart the app sent all 65,536 bytes back. Both the saved file in the app’s external Download directory and the bytes returned to the peer matched the original payload (SHA-256 `7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2`).
 
-The emulator used Skia/OpenGL on Google SwiftShader. The app now sets system bar icon appearance from the active theme. The installed debug APK had SHA-256 `08dcb75472d96f2096ee9320d8933a4e3b6960c8ef842f486a96a46b23de92df`. Physical-device frame timings and power consumption remain unmeasured.
+A sustained transfer of `peer-window.bin` (80 pieces of 16 KiB) kept the connection active across the engine’s sampling windows. The Android Peers row and header showed 22.17 KiB/s down during download and 19.10 KiB/s up on a subsequent seeding connection. The saved file and uploaded bytes both matched the 1,310,720-byte fixture, with SHA-256 `1cba3644233319cd410b4b2cca97e1cbcbb64eca4459a33e9c0eb05766a901f9`. The statistics dialog showed 80 disk writes and 80 disk reads of 1.25 MiB in each direction, zero cache-served bytes, a 0.0% read-cache hit rate and zero discarded bytes.
+
+With both tasks seeding, opening a detail page from the grid and swiping back from the left edge restored the two-column grid, the add button and the four navigation destinations. The light-theme screenshots show dark status icons and a dark gesture bar. The emulator used Skia/OpenGL on Google SwiftShader. The installed debug APK had SHA-256 `08dcb75472d96f2096ee9320d8933a4e3b6960c8ef842f486a96a46b23de92df`. Physical-device frame timings and power consumption remain unmeasured.
+
+For the glass measurements, the emulator had two virtual CPUs, software CPU emulation, 2 GiB of RAM and background downloads disabled in the app. Each run used the same completed torrent, switched glass mode in Appearance, warmed up once, and reset `adb shell dumpsys gfxinfo com.typebit.app reset`. Two measured repetitions opened Settings, swiped down and up, returned to Torrents, opened RSS and returned to Torrents. The figures below come from the process summary in `adb shell dumpsys gfxinfo com.typebit.app framestats`. The histogram’s highest bucket was 4,950 ms. The times include layout, screen transitions and rendering of the entire Activity.
+
+| Glass mode | Rendered frames | Missed frame deadline | P50 | P95 histogram bucket |
+| --- | ---: | ---: | ---: | ---: |
+| AeroGlass | 45 | 45 | 1,150 ms | 4,950 ms |
+| LiquidGlass | 42 | 42 | 1,250 ms | 4,950 ms |
+| Gaussian blur | 46 | 46 | 1,000 ms | 4,950 ms |
