@@ -11,7 +11,11 @@ Configure the Android signing identity in the repository's Actions secrets befor
 | `ANDROID_KEY_ALIAS` | Signing key alias |
 | `ANDROID_KEY_PASSWORD` | Signing key password |
 
-Commit the release sources, tag that commit `v<typebit.version>` and push the tag to GitHub. For example, the tag for `typebit.version=0.1.11` is `v0.1.11`. The Windows runner builds the APK, EXE, MSI and portable ZIP. The Linux runner builds the x86-64 application archive. The workflow checks JNI exports and runs the Rust and Compose tests. Both desktop launchers download a file from a loopback peer, verify its contents and restore the completed task after a restart. The tag build signs the APK and verifies its signature and ZIP alignment.
+Push a change to `typebit.version` on `main` to publish that version. For example, changing `0.1.11` to `0.1.12` schedules `v0.1.12`. Ordinary pushes and pull requests put their downloads in the run’s **Artifacts** section. The **Determine release version** summary shows which path was selected.
+
+To publish an already committed version, open **Actions → Build TypeBitTorrent → Run workflow**, select `main` and check **Publish the version in gradle.properties from main**. Pushing a matching `v<typebit.version>` tag also triggers publication. A public version keeps its original commit.
+
+The Windows runner builds the signed APK, EXE, MSI and portable ZIP. The Linux runner builds the x86-64 application archive. The workflow checks JNI exports and runs the Rust and Compose tests. Both desktop launchers download and seed a file to a loopback peer, verify its contents and restore the completed task after a restart. The release APK undergoes signature and ZIP alignment checks.
 
 After both jobs succeed, the release job uploads the five packages and `SHA256SUMS` to a draft, then publishes it. A failed upload leaves the draft available for a rerun. To check downloaded assets on Linux, run `sha256sum -c SHA256SUMS` in their directory. On Windows, use `Get-FileHash -Algorithm SHA256` and compare the result with the corresponding entry.
 
