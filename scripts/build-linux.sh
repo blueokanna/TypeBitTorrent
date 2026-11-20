@@ -24,7 +24,7 @@ RES="$ROOT/composeApp/src/desktopMain/resources/native"
 OUT="$ROOT/composeApp/build/compose/binaries/main/app/TypeBitTorrent"
 
 echo "==> building native engine (release)"
-(cd "$NATIVE" && cargo build --release)
+(cd "$NATIVE" && cargo build --release --locked)
 
 LIB="$NATIVE/target/release/libtypebit_native.so"
 [ -f "$LIB" ] || { echo "missing $LIB" >&2; exit 1; }

@@ -29,7 +29,7 @@ if (Test-Path (Join-Path $cargoBin "rustc.exe")) {
 Push-Location $native
 try {
     Write-Host "==> building release DLL ..."
-    & $cargo build --release
+    & $cargo build --release --locked
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     $dll = Join-Path $native "target\release\typebit_native.dll"
     if (-not (Test-Path $dll)) { throw "missing $dll" }

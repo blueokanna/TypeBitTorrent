@@ -1,0 +1,10 @@
+.git
+.gradle
+.kotlin
+**/build
+native/target
+composeApp/screenshots
+composeApp/src/androidMain/jniLibs
+composeApp/src/desktopMain/resources/native
+build-TypeBitTorrent-linux-*.tar.gz
+local.properties

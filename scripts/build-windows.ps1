@@ -20,7 +20,7 @@ if (-not (Test-Path $cargo)) { $cargo = "cargo.exe" }
 Push-Location $native
 try {
     Write-Host "==> building release DLL ..."
-    & $cargo build --release
+    & $cargo build --release --locked
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     $dll = Join-Path $native "target\release\typebit_native.dll"
     New-Item -ItemType Directory -Force -Path $desktopRes | Out-Null

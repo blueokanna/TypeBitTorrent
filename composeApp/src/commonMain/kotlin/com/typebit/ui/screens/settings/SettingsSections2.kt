@@ -24,7 +24,6 @@ import com.typebit.data.AdvancedSettings
 import com.typebit.data.AppSettings
 import com.typebit.data.BitTorrentSettings
 import com.typebit.data.ContentLayout
-import com.typebit.data.EncryptionMode
 import com.typebit.data.RssSettings
 import com.typebit.data.UtpMixedMode
 import com.typebit.data.WebUiSettings
@@ -109,7 +108,7 @@ fun BitTorrentSection(
 
     SectionCard("对等网络") {
         SettingSwitch("启用 DHT", "分布式哈希表（重启引擎后生效）", s.enableDht, { update(s.copy(enableDht = it)) })
-        SettingSwitch("启用 PEX", "Peer 交换（BEP-11）——引擎暂不支持此开关，仅保存", s.enablePex, { update(s.copy(enablePex = it)) })
+        Text("Peer 交换 (PEX) 由引擎管理", style = MaterialTheme.typography.bodyMedium)
         SettingSwitch(
                 "启用本地对等发现 (LSD)",
                 "在局域网内广播当前种子并发现同网段的对等节点（BEP-14，重启引擎后生效）",
@@ -132,7 +131,7 @@ fun BitTorrentSection(
                     modifier = Modifier.padding(top = 2.dp),
             )
         }
-        SettingSwitch("匿名模式", "尽量隐藏客户端特征", s.anonymousMode, { update(s.copy(anonymousMode = it)) })
+        Text("匿名模式：当前引擎未提供此设置", style = MaterialTheme.typography.bodyMedium)
         SettingSwitch(
                 "反吸血检测",
                 "识别迅雷/闪电/FlashGet 等吸血客户端并上报统计",
@@ -148,22 +147,9 @@ fun BitTorrentSection(
     }
 
     SectionCard("加密") {
-        SettingDropdown(
-                label = "加密模式",
-                options = EncryptionMode.entries,
-                selected = s.encryptionMode,
-                onSelect = { update(s.copy(encryptionMode = it)) },
-                labelOf = {
-                    when (it) {
-                        EncryptionMode.ALLOW -> "允许加密"
-                        EncryptionMode.PREFER -> "优先加密"
-                        EncryptionMode.REQUIRE -> "强制加密"
-                    }
-                },
-        )
         Text(
-                "注意：typebit 0.1.0 的 wire 协议为明文实现，此选项为兼容 qBittorrent 的设置项（存储项）。",
-                style = MaterialTheme.typography.labelSmall,
+                "Peer 连接使用明文 BitTorrent 协议。当前引擎不支持 MSE/PE 加密。",
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

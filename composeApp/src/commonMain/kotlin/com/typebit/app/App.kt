@@ -6,12 +6,9 @@ package com.typebit.app
 // cleanly (`:composeApp:compileKotlinDesktop`, `:composeApp:compileDebugKotlinAndroid`).
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import com.typebit.ui.theme.TypeBitMotion
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,8 +61,9 @@ fun App() {
                 onDispose { store.stop() }
         }
 
-        val state by store.state.collectAsState()
-        val appearance = state.settings.appearance
+        val settings by remember(store) { store.state.map { it.settings }.distinctUntilChanged() }
+                .collectAsState(store.state.value.settings)
+        val appearance = settings.appearance
 
         val darkTheme =
                 when (appearance.themeMode) {
@@ -109,7 +107,7 @@ fun App() {
                                 ?: wallpaper?.let { extractSeedColor(it) } ?: DEFAULT_SEED
                 }
 
-        LocalizedContent(state.settings.behavior.language) {
+        LocalizedContent(settings.behavior.language) {
                 TypeBitTheme(
                         seedArgb = seedArgb,
                         darkTheme = darkTheme,
@@ -148,11 +146,7 @@ internal fun AppRoot(store: AppStore) {
 
         AnimatedContent(
                 targetState = route,
-                transitionSpec = {
-                        (fadeIn(tween(220)) + slideInHorizontally { it / 24 }).togetherWith(
-                                fadeOut(tween(160)) + slideOutHorizontally { -it / 32 }
-                        )
-                },
+                transitionSpec = { TypeBitMotion.containerTransition(targetState != Route.MAIN) },
                 label = "route",
         ) { r ->
                 when (r) {

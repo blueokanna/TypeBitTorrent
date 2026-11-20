@@ -567,6 +567,7 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddMagnet(
     handle: jlong,
     uri: JString,
     save_dir: JString,
+    cached_info: JByteArray,
 ) -> jstring {
     with_env(unowned, |env| {
         let h = match handle_from(handle) {
@@ -580,6 +581,7 @@ pub extern "system" fn Java_com_typebit_engine_NativeBridgeKt_nativeAddMagnet(
             Cmd::AddMagnet {
                 uri,
                 save_dir: dir,
+                cached_info: env.convert_byte_array(&cached_info)?,
                 tx,
             },
             rx,

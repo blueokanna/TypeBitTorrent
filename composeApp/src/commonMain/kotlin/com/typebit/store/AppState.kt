@@ -43,6 +43,7 @@ data class AppState(
     val recheckTotal: Long = 0,
     val recheckMessage: String = "",
     val logs: List<LogEntryDto> = emptyList(),
+    val logCount: Long = 0,
     val categories: List<String> = listOf("未分类"),
     val tags: List<String> = emptyList(),
     val lastError: String? = null,

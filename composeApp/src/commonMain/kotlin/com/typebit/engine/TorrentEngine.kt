@@ -98,7 +98,7 @@ interface TorrentEngine {
     /** `filePriorities`: one byte per file in table order (0=Skip, 1=Normal, 2=High); empty = all Normal. */
     fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int> = emptyList()): String?
 
-    fun addMagnet(uri: String, saveDir: String): String?
+    fun addMagnet(uri: String, saveDir: String, cachedInfo: ByteArray = byteArrayOf()): String?
 
     fun start(hash: String): Boolean
 
@@ -333,8 +333,8 @@ class NativeTorrentEngine : TorrentEngine {
         return bridge(null) { nativeAddTorrent(it, data, saveDir, prioJson) }
     }
 
-    override fun addMagnet(uri: String, saveDir: String): String? =
-        bridge(null) { nativeAddMagnet(it, uri, saveDir) }
+    override fun addMagnet(uri: String, saveDir: String, cachedInfo: ByteArray): String? =
+        bridge(null) { nativeAddMagnet(it, uri, saveDir, cachedInfo) }
 
     override fun start(hash: String): Boolean = bridge(false) { nativeStart(it, hash) == 0 }
 

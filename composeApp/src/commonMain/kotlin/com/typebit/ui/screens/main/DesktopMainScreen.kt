@@ -1,12 +1,7 @@
 package com.typebit.ui.screens.main
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
+import com.typebit.ui.theme.TypeBitMotion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -140,11 +135,11 @@ fun DesktopMainScreen(
             )
 
             AnimatedContent(
-                targetState = state.torrents.isEmpty(),
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                targetState = state.torrents.isEmpty() to gridMode,
+                transitionSpec = { TypeBitMotion.containerTransition(targetState.second) },
                 label = "mainContent",
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) { empty ->
+            ) { (empty, grid) ->
                 if (empty) {
                     EmptyState(
                         title = "暂无种子",
@@ -157,7 +152,7 @@ fun DesktopMainScreen(
                             }
                         },
                     )
-                } else if (gridMode) {
+                } else if (grid) {
                     TorrentGrid(
                         torrents = state.filteredTorrents,
                         onSelect = store::select,
@@ -173,13 +168,14 @@ fun DesktopMainScreen(
                 }
             }
 
-            AnimatedVisibility(
-                visible = state.selectedTorrent != null,
-                enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(),
+            AnimatedContent(
+                targetState = state.selectedTorrent,
+                contentKey = { it?.hash },
+                transitionSpec = { TypeBitMotion.containerTransition(targetState != null) },
+                label = "selectedTorrent",
                 modifier = Modifier.fillMaxWidth(),
-            ) {
-                state.selectedTorrent?.let { t ->
+            ) { torrent ->
+                torrent?.let { t ->
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                         shape = MaterialTheme.shapes.large,
@@ -200,6 +196,7 @@ fun DesktopMainScreen(
         stats?.let { s ->
             StatsDialog(
                 stats = s,
+                logs = state.logs,
                 onDismiss = { showStats = false },
                 dhtNodes = state.dhtNodes,
                 trackerCount = state.trackerCount,

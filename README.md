@@ -1,9 +1,8 @@
 # TypeBitTorrent
 
-> A BitTorrent client where the UI is a thin Kotlin/Compose shell and the
-> brain is a `no_std + alloc` Rust engine. Windows desktop + Android from one
-> codebase. The UI thread has never touched a socket; the engine thread has
-> never touched a composable.
+TypeBitTorrent uses Kotlin and Compose Multiplatform on Windows, Linux and Android. A Rust worker drives the TypeBit engine. The desktop distribution also includes a headless WebUI for NAS deployments.
+
+The release workflow builds Windows installers and a portable ZIP, an Android APK, a Linux archive and SHA-256 checksums. [GitHub Releases](https://github.com/blueokanna/TypeBitTorrent/releases) · [Release procedure](docs/release.md)
 
 ```mermaid
 flowchart LR
@@ -18,7 +17,7 @@ flowchart LR
         H[Event channel]
         I[Snapshot JSON · one per tick]
     end
-    subgraph ENGINE["typebit 0.1.8 engine"]
+    subgraph ENGINE["TypeBit engine"]
         J[tick loop]
         K[TorrentSession · Swarm]
         L[DHT · LSD · PEX]
@@ -517,8 +516,7 @@ headless build always serves it.
 
 ## engine deep-dive
 
-This is where it gets interesting. Everything below is what `typebit` 0.1.8
-actually does — no dashboard numbers, real behaviour.
+The following sections describe the engine's scheduling, rate limits and storage behavior.
 
 ### rate limiting is a hard ceiling, not a suggestion
 

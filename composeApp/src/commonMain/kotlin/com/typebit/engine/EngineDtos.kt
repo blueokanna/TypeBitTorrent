@@ -71,6 +71,9 @@ data class TorrentSnapshotDto(
         val size: Long = 0L,
         val pieces: Long = 0L,
         val meta: Boolean = false,
+        val peers: Int = 0,
+        val seeds: Int = 0,
+        val trackers: List<String> = emptyList(),
 )
 
 @Serializable
@@ -196,7 +199,16 @@ val portMappingPhaseName: (Int) -> String = { phase ->
 data class LogEntryDto(
         val l: Int = 0,
         val m: String = "",
-)
+) {
+    val levelName: String get() = when (l) {
+        0 -> "trace"
+        1 -> "debug"
+        2 -> "info"
+        3 -> "warn"
+        4 -> "error"
+        else -> "unknown"
+    }
+}
 
 data class GlobalStats(
         val downloadedTotal: Long = 0L,

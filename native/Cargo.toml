@@ -1,6 +1,6 @@
 [package]
 name = "typebit_native"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 license-file = "../LICENSE"
 description = "JNI bridge embedding the TypeBit BitTorrent engine for Android and JVM desktop."
@@ -11,12 +11,12 @@ name = "typebit_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-typebit = { version = "0.1.9", features = ["std"] }
+typebit = { version = "0.1.10", features = ["std"] }
 jni = { version = "0.22.4" }
-getrandom = "0.4"
-nextjson = { version = "0.1", default-features = false }
-courierust = { version = "1.0.9", default-features = false, features = ["std"] }
-recurse-x = { version = "0.2.3", default-features = false, features = [
+getrandom = "0.4.3"
+nextjson = { version = "0.1.5", default-features = false }
+courierust = { version = "1.1.3", default-features = false, features = ["std"] }
+recurse-x = { version = "0.2.6", default-features = false, features = [
     "std",
     "dot",
     "doh",

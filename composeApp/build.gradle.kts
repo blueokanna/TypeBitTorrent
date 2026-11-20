@@ -8,6 +8,29 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
+val appVersion = providers.gradleProperty("typebit.version").get()
+val versionParts = appVersion.split('.').map(String::toInt)
+require(versionParts.size == 3 && versionParts.all { it in 0..999 })
+val appVersionCode = versionParts[0] * 1_000_000 + versionParts[1] * 1_000 + versionParts[2]
+val versionSource = layout.buildDirectory.dir("generated/typebitVersion")
+val cargoLock = rootProject.layout.projectDirectory.file("native/Cargo.lock")
+val generateVersion by tasks.registering {
+    inputs.property("appVersion", appVersion)
+    inputs.file(cargoLock)
+    outputs.dir(versionSource)
+    doLast {
+        val engineVersion = Regex("(?m)^name = \"typebit\"\\s+version = \"([^\"]+)\"")
+            .find(cargoLock.asFile.readText())?.groupValues?.get(1) ?: error("Missing typebit in Cargo.lock")
+        val output = versionSource.get().file("com/typebit/app/BuildVersion.kt").asFile
+        output.parentFile.mkdirs()
+        output.writeText("""
+            package com.typebit.app
+            internal const val APP_VERSION = "$appVersion"
+            internal const val ENGINE_VERSION = "$engineVersion"
+        """.trimIndent())
+    }
+}
+
 kotlin {
     androidTarget {
         compilerOptions {
@@ -19,7 +42,7 @@ kotlin {
 
     sourceSets {
         // `by getting` / `by creating` are deprecated since Gradle 9.6.
-        val commonMain = getByName("commonMain")
+        val commonMain = getByName("commonMain") { kotlin.srcDir(generateVersion) }
         val androidMain = getByName("androidMain")
         val desktopMain = getByName("desktopMain")
         val jvmShared = create("jvmShared") { dependsOn(commonMain) }
@@ -51,8 +74,8 @@ kotlin {
 
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
-            implementation(compose.desktop.uiTestJUnit4)
         }
+        getByName("desktopTest").dependencies { implementation(compose.desktop.uiTestJUnit4) }
         desktopMain.dependsOn(jvmShared)
     }
 }
@@ -65,8 +88,8 @@ android {
         applicationId = "com.typebit.app"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersion
     }
 
     packaging {
@@ -94,7 +117,7 @@ compose.desktop {
             modules("jdk.httpserver")
             targetFormats(TargetFormat.Msi, TargetFormat.Exe, TargetFormat.Deb)
             packageName = "TypeBitTorrent"
-            packageVersion = "0.1.0"
+            packageVersion = appVersion
             description = "TypeBitTorrent - a cross-platform BitTorrent client on the TypeBit Rust engine"
             vendor = "blueokanna"
 

@@ -1,10 +1,7 @@
 package com.typebit.ui.screens.settings
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
+import com.typebit.ui.theme.TypeBitMotion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -161,7 +158,7 @@ fun SettingsScreen(
                 ) {
                     AnimatedContent(
                         targetState = categories[category],
-                        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                        transitionSpec = { TypeBitMotion.containerTransition(targetState.ordinal > initialState.ordinal) },
                         label = "settingsCategory",
                     ) { cat ->
                         Column {
@@ -177,7 +174,7 @@ fun SettingsScreen(
                 SettingsScaffold {
                     AnimatedContent(
                         targetState = categories[category],
-                        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                        transitionSpec = { TypeBitMotion.containerTransition(targetState.ordinal > initialState.ordinal) },
                         label = "settingsCategoryMobile",
                     ) { cat ->
                         Column {

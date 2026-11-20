@@ -2,7 +2,7 @@
 
 The settings dialog mirrors qBittorrent's category layout. This page states,
 per option, whether it is **live** (actually drives the engine/bridge),
-**stored** (persisted and shown, but not wired to the 0.1.8 engine), or
+**stored** (persisted in the application configuration), or
 **restart** (takes effect at the next engine start).
 
 ## 行为 (Behavior)
@@ -47,7 +47,7 @@ per option, whether it is **live** (actually drives the engine/bridge),
 | 网络接口 | stored |
 | 代理 | **live — SOCKS5 only** (outbound-only; SOCKS4/HTTP values decode but never enable) |
 | IP 过滤器 | stored |
-| 匿名模式 | stored |
+| 匿名模式 | read-only in Compose. The engine has no anonymous-mode setting. |
 | 向所有 Tracker/层级通告 | **live** (engine walks BEP-12 tiers in order) |
 | Peer TOS | stored |
 
@@ -81,10 +81,10 @@ a guess.
 | Option | Status |
 | --- | --- |
 | DHT | **live at engine start** |
-| PEX | **live** (engine enables PEX by default; the toggle is stored) |
+| PEX | read-only in Compose. The engine manages peer exchange. |
 | LSD | **live at engine start** (BEP-14 multicast; Android holds a MulticastLock while active) |
 | UPnP / NAT-PMP | **live at engine start** (dual-protocol mapping) |
-| 加密模式 | stored (plaintext wire in 0.1.8) |
+| 加密模式 | read-only in Compose. The engine uses the plaintext peer protocol. |
 | 每种子最大 Peers | **live for new torrents** |
 | 请求流水线 / 请求超时 / 最大连续超时 / Endgame | **live for new torrents** |
 | 智能分块调度 + 调度器权重 | **live for new torrents** (视频=顺序下载，边下边播) |
@@ -116,7 +116,7 @@ every one of these on the command line; see [nas.md](./nas.md).
 `diskCacheBytes` and `saveResumeDataIntervalSec` are **live at engine
 start** / for the poll loop respectively. The remaining options (uTP mode,
 socket backlog, tracker retry policy, peer resolution, …) are **stored**
-for qBittorrent familiarity; typebit 0.1.9 does not expose setters for
+for qBittorrent familiarity. The engine does not expose setters for
 them.
 
 ## RSS
@@ -128,5 +128,5 @@ XML parser. `smartEpisodeFilter` and the auto-download reporter are stored.
 
 "live for new torrents" means the value is pushed to the engine's
 `SessionConfig` and applies to torrents added afterwards. Tracker URLs and
-per-file priorities ARE runtime-settable in typebit 0.1.9 (add/remove
+per-file priorities are runtime-settable (add/remove
 without restart, selective download), so the detail tabs apply them live.

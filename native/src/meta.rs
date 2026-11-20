@@ -1,11 +1,7 @@
 //! Torrent metadata mirror.
 //!
-//! `typebit 0.1.0` exposes no getter for a session's parsed metainfo, so the
-//! bridge keeps its own registry built at add-time from the public
-//! `metainfo::Torrent` API. `.torrent` bytes yield the full mirror; magnet
-//! links start from the `dn` display name and gain the `metadata_ready` flag
-//! when the engine reports `MetadataComplete` (the file table itself is not
-//! reachable through the 0.1.0 engine surface — documented in the README).
+//! Mirrors the engine's parsed metainfo alongside local display and staging paths.
+//! Magnet entries are populated when authenticated metadata becomes available.
 
 use std::collections::HashMap;
 
@@ -143,12 +139,19 @@ impl TorrentMeta {
         let mut w = JsonWriter::new();
         w.begin_object();
         w.kv_string("hash", &self.hash);
+        w.comma();
         w.kv_string("name", &self.name);
+        w.comma();
         w.kv_string("kind", &self.kind);
+        w.comma();
         w.kv_u64("size", self.size);
+        w.comma();
         w.kv_u64("piece_length", self.piece_length as u64);
+        w.comma();
         w.kv_u64("piece_count", self.piece_count as u64);
+        w.comma();
         w.kv_bool("private", self.private);
+        w.comma();
         w.kv_bool("metadata_ready", self.metadata_ready);
         w.comma();
         w.key("comment");

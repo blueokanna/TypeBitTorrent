@@ -388,12 +388,8 @@ fn resolver_config(forwarders: Vec<Forwarder>) -> ResolverConfig {
             forwarders,
             timeout_ms: RESOLVER_TIMEOUT_MS,
             query_budget_ms: QUERY_BUDGET_MS,
-            // DNSSEC is requested and validated wherever a signature chain
-            // exists. It is *not* anchored: RecurseX ships no root trust anchor,
-            // and claiming `ChainAnchored` without one is exactly the
-            // over-claim that flag is designed to prevent.
+            // RecurseX verifies the chain using its bundled IANA root anchors.
             dnssec: true,
-            dnssec_anchored: false,
             ..Default::default()
         },
         rate_limit: RateLimitConfig {
@@ -1066,11 +1062,7 @@ impl DnsService {
     /// that a fresh lookup should go straight to the system resolver.
     fn breaker_open(&self) -> bool {
         self.inner.forwarded
-            && self
-                .inner
-                .consecutive_failures
-                .load(Ordering::Relaxed)
-                >= BREAKER_TRIP_AFTER
+            && self.inner.consecutive_failures.load(Ordering::Relaxed) >= BREAKER_TRIP_AFTER
     }
 
     fn resolve_uncached(&self, key: &str, port: u16) -> Resolved {
@@ -1666,7 +1658,7 @@ mod tests {
         assert_eq!(cfg.cache.max_ttl_cap, 7_200);
         assert!(cfg.rate_limit.client_capacity >= 128.0);
         assert!(cfg.engine.dnssec);
-        assert!(!cfg.engine.dnssec_anchored, "no root anchor is shipped");
+        assert!(!cfg.engine.dnssec_trust_anchors.is_empty());
         assert!(cfg.engine.qname_minimization);
         assert!(cfg.engine.use_0x20);
         assert!(cfg.engine.query_budget_ms >= 2 * cfg.engine.timeout_ms);
@@ -1969,10 +1961,31 @@ mod tests {
     /// sub-second budget.
     fn stub_config(forwarders: Vec<Forwarder>) -> ResolverConfig {
         let mut config = resolver_config(forwarders);
+        // The transport fixture serves A records only. Its unsigned answers
+        // cannot establish a chain to the production root trust anchors.
+        config.engine.dnssec = false;
         config.engine.timeout_ms = 500;
         config.engine.query_budget_ms = 1_500;
         config.maintenance_interval_ms = 60_000;
         config
+    }
+
+    #[test]
+    fn production_validation_rejects_an_unproven_answer() {
+        let stub = FakeUpstream::start(Some(FAKE_IP));
+        let mut config = stub_config(vec![Forwarder::plain(Endpoint::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            stub.port,
+            Proto::Udp,
+        ))]);
+        config.engine.dnssec = true;
+        let svc = DnsService::from_config_for_test(config, IpFamily::V4Only);
+        let resolved = svc.resolve("peer.test", 6881, Instant::now());
+        assert_eq!(resolved.source, Source::Negative);
+        assert!(resolved.addrs.is_empty());
+        assert_eq!(svc.stats().dnssec_failures, 1);
+        assert_eq!(svc.stats().os_fallbacks, 0);
+        svc.shutdown();
     }
 
     #[test]

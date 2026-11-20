@@ -1,6 +1,9 @@
 package com.typebit.platform
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
 actual object FileIO {
     actual fun child(parent: String, name: String): String = File(parent, name).absolutePath
@@ -17,26 +20,17 @@ actual object FileIO {
     actual fun readBytes(path: String): ByteArray? =
         runCatching { File(path).readBytes() }.getOrNull()
 
-    actual fun writeTextAtomic(path: String, text: String) {
-        val target = File(path)
-        target.parentFile?.mkdirs()
-        val tmp = File(target.parentFile, target.name + ".tmp")
-        tmp.writeText(text)
-        // Atomic on the same volume; on failure the previous file survives.
-        if (!tmp.renameTo(target)) {
-            tmp.delete()
-            target.writeText(text)
-        }
-    }
+    actual fun writeTextAtomic(path: String, text: String) = writeBytesAtomic(path, text.encodeToByteArray())
 
     actual fun writeBytesAtomic(path: String, bytes: ByteArray) {
-        val target = File(path)
-        target.parentFile?.mkdirs()
-        val tmp = File(target.parentFile, target.name + ".tmp")
-        tmp.writeBytes(bytes)
-        if (!tmp.renameTo(target)) {
-            tmp.delete()
-            target.writeBytes(bytes)
+        val target = File(path).absoluteFile.toPath()
+        Files.createDirectories(target.parent)
+        val tmp = Files.createTempFile(target.parent, ".${target.fileName}-", ".tmp")
+        try {
+            Files.write(tmp, bytes)
+            Files.move(tmp, target, ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(tmp)
         }
     }
 

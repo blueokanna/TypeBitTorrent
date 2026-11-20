@@ -1,8 +1,8 @@
 # TypeBitTorrent
 
-> 壳是 Kotlin/Compose，脑子是 `no_std + alloc` 的 Rust 引擎。Windows 桌面 +
-> Android，一套代码，两个前端。UI 线程一辈子没见过 socket，引擎线程也从不
-> 碰 Compose。
+TypeBitTorrent 的 Windows、Linux 和 Android 客户端共用 Kotlin / Compose Multiplatform 界面，由独立的 Rust 工作线程驱动 TypeBit 引擎。桌面发行包支持无界面运行，可通过 WebUI 管理 NAS 上的任务。
+
+发布工作流会生成 Windows 安装程序和便携 ZIP、Android APK、Linux 压缩包及 SHA-256 校验清单。[GitHub Releases](https://github.com/blueokanna/TypeBitTorrent/releases) · [发布说明](docs/release.md)
 
 ```mermaid
 flowchart LR
@@ -17,7 +17,7 @@ flowchart LR
         H[事件通道]
         I[快照 JSON · 每 tick 一次]
     end
-    subgraph ENGINE["typebit 0.1.8 引擎"]
+    subgraph ENGINE["TypeBit 引擎"]
         J[tick 主循环]
         K[TorrentSession · Swarm]
         L[DHT · LSD · PEX]
@@ -457,8 +457,7 @@ UPnP SOAP 的 `http_post`，自动端口映射在两类路由器上都开始工�
 
 ## 引擎深潜
 
-下面是真正有意思的部分。以下全部是 `typebit` 0.1.8 真的在做的事——没有
-PPT 数字，只有实际行为。
+本节介绍引擎的调度、限速和存储行为。
 
 ### 限速是硬顶，不是建议
 

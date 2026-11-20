@@ -63,7 +63,7 @@ private enum class SortKey(val label: String, val width: Dp, val alignEnd: Boole
     PROGRESS("进度", 160.dp, false),
     STATUS("状态", 92.dp, false),
     SEEDS("种子", 54.dp, true),
-    PEERS("Tracker 下载者", 72.dp, true),
+    PEERS("Peer 总数", 72.dp, true),
     DOWN("↓ 速度", 96.dp, true),
     UP("↑ 速度", 96.dp, true),
     ETA("剩余", 76.dp, true),

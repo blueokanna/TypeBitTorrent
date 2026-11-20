@@ -56,7 +56,9 @@ use jni::sys::{jint, JNI_VERSION_1_6};
 /// * 4 — disk verification: `nativeRecheckData`, `nativeRecheckProgress`,
 ///   `nativeRecheckCancel`. Without them a client that already holds the data
 ///   can neither seed nor upload, so the pair must ship together.
-pub const JNI_ABI: jint = 4;
+/// * 5 — batched per-torrent peer counts and tracker lists.
+/// * 6 — nativeAddMagnet accepts cached info bytes for checked restoration.
+pub const JNI_ABI: jint = 6;
 
 /// Reports the ABI revision above; called once per engine start.
 #[no_mangle]

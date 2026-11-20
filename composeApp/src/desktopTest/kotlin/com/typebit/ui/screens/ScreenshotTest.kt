@@ -2,9 +2,15 @@ package com.typebit.ui.screens
 
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toAwtImage
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import com.typebit.data.SettingsRepository
@@ -21,6 +27,10 @@ import com.typebit.engine.TorrentInfoDto
 import com.typebit.engine.TorrentStateDto
 import com.typebit.store.AppStore
 import com.typebit.ui.screens.main.MainScreen
+import com.typebit.ui.screens.main.DesktopMainScreen
+import com.typebit.ui.screens.main.MobileMainScreen
+import com.typebit.model.Torrent
+import com.typebit.model.TorrentStatus
 import com.typebit.ui.screens.settings.SettingsScreen
 import com.typebit.ui.theme.TypeBitTheme
 import org.junit.Rule
@@ -56,6 +66,62 @@ class ScreenshotTest {
         rule.onNodeWithText("壁纸").assertExists()
         rule.onNodeWithText("动态色彩 (Monet)").assertExists()
         save(rule.onRoot().captureToImage(), "settings-dark.png")
+    }
+
+    private val item = Torrent(
+            hash = "test", name = "sample.bin", saveDir = "downloads", status = TorrentStatus.DOWNLOADING,
+            sizeBytes = 65536, downloadedBytes = 32768, uploadedBytes = 0, progress = 0.5,
+            pieceCount = 2, havePieces = 1, pieceLength = 32768, isPrivate = false, metadataReady = true,
+            addedAt = 0, createdAt = null, createdBy = null, comment = null, kind = "FILE",
+            trackers = emptyList(), files = emptyList(), seeds = 1, peers = 1, downSpeed = 0, upSpeed = 0,
+            completedAt = null, category = "", tags = emptyList(),
+        )
+
+    @Test
+    fun mobileGridOpensDetailAndReturnsToSameView() {
+        val store = makeStore()
+        val state = store.state.value.copy(torrents = listOf(item), engineRunning = true)
+        rule.setContent {
+            TypeBitTheme(seedArgb = 0xFF0061A4.toInt(), darkTheme = false) {
+                Box(Modifier.width(390.dp)) { MobileMainScreen(state, store, onRoute = {}) }
+            }
+        }
+        rule.onNodeWithContentDescription("网格视图").performClick()
+        val before = rule.onRoot().captureToImage().toAwtImage()
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithText(item.name).performClick()
+        rule.mainClock.advanceTimeBy(64)
+        val during = rule.onRoot().captureToImage().toAwtImage()
+        rule.mainClock.autoAdvance = true
+        rule.onNodeWithText("文件").assertExists()
+        val after = rule.onRoot().captureToImage().toAwtImage()
+        fun pixels(image: java.awt.image.BufferedImage) =
+            image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
+        val middlePixels = pixels(during)
+        check(!middlePixels.contentEquals(pixels(before)) && !middlePixels.contentEquals(pixels(after))) {
+            "The transition must render an intermediate frame between the grid and detail page"
+        }
+        rule.onNodeWithContentDescription("返回").performClick()
+        rule.onNodeWithContentDescription("列表视图").assertExists()
+        rule.onNodeWithText(item.name).assertExists()
+    }
+
+    @Test
+    fun desktopViewSwitchRetainsTaskAndOpensDetails() {
+        val store = makeStore()
+        rule.setContent {
+            val state = store.state.collectAsState().value.copy(torrents = listOf(item), engineRunning = true)
+            TypeBitTheme(seedArgb = 0xFF0061A4.toInt(), darkTheme = false) {
+                DesktopMainScreen(state, store, onRoute = {})
+            }
+        }
+        rule.onNodeWithText(item.name).assertExists()
+        rule.onNodeWithContentDescription("网格视图").performClick()
+        rule.onNodeWithText(item.name).performClick()
+        rule.onNodeWithText("文件").assertExists()
+        rule.onNodeWithContentDescription("列表视图").performClick()
+        rule.onNodeWithText("文件").assertExists()
+        rule.onNodeWithContentDescription("网格视图").assertExists()
     }
 
     @Test
@@ -134,7 +200,7 @@ private class FakeEngine : TorrentEngine {
     override fun parseTorrent(data: ByteArray): TorrentInfoDto? = null
     override fun makeTorrent(options: com.typebit.engine.MakeTorrentOptions): ByteArray? = null
     override fun addTorrent(data: ByteArray, saveDir: String, filePriorities: List<Int>): String? = null
-    override fun addMagnet(uri: String, saveDir: String): String? = null
+    override fun addMagnet(uri: String, saveDir: String, cachedInfo: ByteArray): String? = null
     override fun start(hash: String): Boolean = false
     override fun pause(hash: String) {}
     override fun resume(hash: String) {}

@@ -87,14 +87,14 @@ function Test-Exports {
     $isPe = $Binary.EndsWith(".dll", [System.StringComparison]::OrdinalIgnoreCase)
     if ($isPe) {
         if (-not (Test-Path $script:readobj)) {
-            Write-Warning "${Label}: $($script:readobj) not found - symbol check skipped"
+            $script:failures.Add("${Label}: missing $($script:readobj)")
             return
         }
         # PE export table (a release DLL has no COFF symbol table, so nm is blind here).
         $symbols = (& $script:readobj --coff-exports $Binary 2>$null) -join "`n"
     } else {
         if (-not (Test-Path $script:nm)) {
-            Write-Warning "${Label}: $($script:nm) not found - symbol check skipped"
+            $script:failures.Add("${Label}: missing $($script:nm)")
             return
         }
         $symbols = (& $script:nm -D --defined-only $Binary 2>$null) -join "`n"
@@ -103,7 +103,7 @@ function Test-Exports {
         $script:failures.Add("$Label could not be inspected (no symbols read) - is the file truncated?")
         return
     }
-    $missing = @($script:declared | Where-Object { $symbols -notmatch [regex]::Escape($_) })
+    $missing = @($script:declared | Where-Object { $symbols -cnotmatch ('\b' + [regex]::Escape($_) + '\b') })
     if ($missing.Count -gt 0) {
         $example = $missing | Select-Object -First 5
         $script:failures.Add("$Label is missing $($missing.Count) entry point(s), e.g. $($example -join ', ')")
@@ -117,7 +117,8 @@ function Test-Exports {
 # `llvm-readobj --coff-exports` reads the PE export table (a release DLL has no
 # COFF symbol table, so nm reports "no dynamic symbol table" there).
 $ndk = $env:ANDROID_NDK_HOME
-if (-not $ndk) { $ndk = "C:\Users\blueo\AppData\Local\Android\Sdk\ndk\30.0.15729638" }
+if (-not $env:ANDROID_HOME) { $env:ANDROID_HOME = Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
+if (-not $ndk) { $ndk = Join-Path $env:ANDROID_HOME 'ndk\28.2.13676358' }
 $llvmBin = Join-Path ($ndk.TrimEnd('\', '/')) "toolchains\llvm\prebuilt\windows-x86_64\bin"
 $nm = Join-Path $llvmBin "llvm-nm.exe"
 $readobj = Join-Path $llvmBin "llvm-readobj.exe"

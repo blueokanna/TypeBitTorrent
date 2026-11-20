@@ -42,8 +42,6 @@ GRADLE="$ROOT/gradlew"
 
 # skiko ships the platform part of Compose's renderer. The x64 copy comes from
 # the local build; the arm64 one is fetched from Maven Central.
-SKIKO_VERSION=0.9.4.2
-SKIKO_ARM_URL="https://repo.maven.apache.org/maven2/org/jetbrains/skiko/skiko-awt-runtime-linux-arm64/$SKIKO_VERSION/skiko-awt-runtime-linux-arm64-$SKIKO_VERSION.jar"
 
 log() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31m!!\033[0m %s\n' "$*" >&2; exit 1; }
@@ -53,7 +51,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; 
 
 build_native_x86() {
     log "native engine (x86_64-unknown-linux-gnu)"
-    ( cd "$ROOT/native" && cargo build --release )
+    ( cd "$ROOT/native" && cargo build --locked --release )
     cp "$ROOT/native/target/release/libtypebit_native.so" \
        "$ROOT/composeApp/src/desktopMain/resources/native/libtypebit_native.so"
 }
@@ -62,7 +60,7 @@ build_native_arm() {
     log "native engine (aarch64-unknown-linux-gnu, cross)"
     ( cd "$ROOT/native" && \
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER:-aarch64-linux-gnu-gcc}" \
-      cargo build --release --target aarch64-unknown-linux-gnu )
+      cargo build --locked --release --target aarch64-unknown-linux-gnu )
     cp "$ROOT/native/target/aarch64-unknown-linux-gnu/release/libtypebit_native.so" \
        "$ROOT/composeApp/src/desktopMain/resources/native/libtypebit_native.so"
 }
@@ -74,7 +72,7 @@ build_native_arm() {
 build_image_x86() {
     build_native_x86
     log "jpackage app image (host = x86_64)"
-    ( cd "$ROOT" && "$GRADLE" --console=plain :composeApp:createDistributable )
+    ( cd "$ROOT" && bash "$GRADLE" --console=plain :composeApp:createDistributable )
     [ -x "$IMAGE/bin/TypeBitTorrent" ] || die "missing $IMAGE/bin/TypeBitTorrent"
 }
 
@@ -136,7 +134,7 @@ build_arm_app_dir() {
     local out="$1"
     build_native_arm
     log "re-jarring the app classes with the aarch64 engine"
-    ( cd "$ROOT" && "$GRADLE" --console=plain :composeApp:desktopJar )
+    ( cd "$ROOT" && bash "$GRADLE" --console=plain :composeApp:desktopJar )
     local jar
     jar="$(ls -t "$ROOT"/composeApp/build/libs/composeApp-desktop*.jar | head -1)"
     [ -n "$jar" ] || die ":composeApp:desktopJar produced no jar"
@@ -155,6 +153,10 @@ build_arm_app_dir() {
     log "swapping skiko's x64 native for the arm64 build"
     rm -f "$out"/libskiko-linux-x64.so "$out"/libskiko-linux-x64.so.sha256
     old_skiko="$(ls "$out"/skiko-awt-runtime-linux-x64-*.jar)"
+    local skiko_version=${old_skiko##*/skiko-awt-runtime-linux-x64-}
+    skiko_version=${skiko_version%.jar}
+    if [[ $skiko_version =~ ^(.+)-[0-9a-f]{16,32}$ ]]; then skiko_version=${BASH_REMATCH[1]}; fi
+    local SKIKO_ARM_URL="https://repo.maven.apache.org/maven2/org/jetbrains/skiko/skiko-awt-runtime-linux-arm64/$skiko_version/skiko-awt-runtime-linux-arm64-$skiko_version.jar"
     python3 - "$SKIKO_ARM_URL" "$out" <<'PY'
 import os, shutil, sys, urllib.request, zipfile
 url, out = sys.argv[1], sys.argv[2]
@@ -241,6 +243,10 @@ build_fpk() {
     cp -a "$image/bin" "$stage/pkg/app/bin"
     cp -a "$image/lib" "$stage/pkg/app/lib"
     sed -i "s/^platform=.*/platform=$platform/" "$stage/pkg/manifest"
+    local version out
+    version=$(sed -n 's/^typebit\.version=//p' "$ROOT/gradle.properties" | tr -d '\r')
+    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid typebit.version"
+    sed -i "s/^version=.*/version=$version/" "$stage/pkg/manifest"
 
     # fnOS runs cmd/* through /bin/bash and parses manifest/config as text, so a
     # checkout that carried CRLF (Windows + core.autocrlf) has to be normalised
@@ -256,8 +262,6 @@ build_fpk() {
     ( cd "$stage/pkg" && fnpack build )
     [ -f "$stage/pkg/typebittorrent.fpk" ] || die "fnpack produced no .fpk"
     mkdir -p "$DIST"
-    local version out
-    version="$(sed -n 's/^version=//p' "$stage/pkg/manifest" | head -1)"
     out="$DIST/typebittorrent_${version}_${platform}.fpk"
     mv "$stage/pkg/typebittorrent.fpk" "$out"
     log "wrote $out ($(du -h "$out" | cut -f1))"

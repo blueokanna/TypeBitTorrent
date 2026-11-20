@@ -31,6 +31,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.typebit.platform.Platform
+import com.typebit.app.APP_VERSION
+import com.typebit.app.ENGINE_VERSION
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.typebit.platform.openInBrowser
 import com.typebit.ui.components.LabelValueRow
 
@@ -51,7 +55,7 @@ fun AboutScreen(onBack: () -> Unit) {
         },
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(20.dp),
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
@@ -68,9 +72,9 @@ fun AboutScreen(onBack: () -> Unit) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    LabelValueRow("版本", "0.1.0")
+                    LabelValueRow("版本", APP_VERSION)
                     LabelValueRow("平台", Platform.name)
-                    LabelValueRow("引擎核心", "typebit 0.1.0 (Rust, no_std)")
+                    LabelValueRow("引擎核心", "TypeBit $ENGINE_VERSION · Rust")
                     LabelValueRow("UI 框架", "Jetpack Compose Multiplatform (Material 3)")
                     LabelValueRow("协议", "BitTorrent v1/v2 · DHT (BEP-5) · PEX (BEP-11) · WebSeed")
                 }
@@ -82,7 +86,7 @@ fun AboutScreen(onBack: () -> Unit) {
                     Spacer(Modifier.width(6.dp))
                     Text("TypeBit 引擎")
                 }
-                OutlinedButton(onClick = { openInBrowser("https://docs.rs/typebit/0.1.0/typebit/") }) {
+                OutlinedButton(onClick = { openInBrowser("https://docs.rs/typebit/$ENGINE_VERSION/typebit/") }) {
                     Icon(Icons.Default.Code, contentDescription = null)
                     Spacer(Modifier.width(6.dp))
                     Text("引擎文档")

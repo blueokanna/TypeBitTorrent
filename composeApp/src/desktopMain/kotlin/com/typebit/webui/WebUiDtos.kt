@@ -231,7 +231,7 @@ data class MakeProgressDto(
 
 @Serializable
 data class LogLineDto(
-    val seq: Int = 0,
+    val seq: Long = 0,
     val level: String = "",
     val message: String = "",
 )

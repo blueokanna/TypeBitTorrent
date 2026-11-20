@@ -8,10 +8,10 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::android_log::log as alog;
 
@@ -54,6 +54,7 @@ pub enum Cmd {
     AddMagnet {
         uri: String,
         save_dir: String,
+        cached_info: Vec<u8>,
         tx: Sender<Result<String, String>>,
     },
     Start {
@@ -395,30 +396,25 @@ fn run_loop(
     let mut meta = MetaRegistry::new();
     alog("run_loop: started");
 
-    // Exit via `break` on the stop flag / shutdown command; the loop simply
-    // runs until the engine is stopped (a `while running` with an immutable
-    // condition trips clippy::while_immutable_condition).
-    loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
-        }
-
-        let mut stop = false;
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                handle_cmd(&mut engine, &mut meta, cmd, &events)
-            }));
-            match handled {
-                Ok(Some(true)) => {
-                    stop = true;
-                    break;
+    let mut next_tick = Instant::now();
+    'worker: while !stop_flag.load(Ordering::Relaxed) {
+        if let Some(remaining) = next_tick.checked_duration_since(Instant::now()) {
+            let cmd = match cmd_rx.recv_timeout(remaining) {
+                Ok(cmd) => Some(cmd),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+            if let Some(cmd) = cmd {
+                let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_cmd(&mut engine, &mut meta, cmd, &events)
+                }));
+                match handled {
+                    Ok(Some(true)) => break 'worker,
+                    Ok(_) => {}
+                    Err(payload) => log_panic(&logs, &events, payload.as_ref()),
                 }
-                Ok(_) => {}
-                Err(payload) => log_panic(&logs, &events, payload.as_ref()),
+                continue;
             }
-        }
-        if stop {
-            break;
         }
 
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -474,7 +470,7 @@ fn run_loop(
             log_panic(&logs, &events, payload.as_ref());
         });
 
-        std::thread::sleep(Duration::from_millis(TICK_MS));
+        next_tick = Instant::now() + Duration::from_millis(TICK_MS);
     }
 
     alog("run_loop: exiting");
@@ -545,22 +541,17 @@ fn handle_cmd(
             file_priorities,
             tx,
         } => {
-            let res = engine.add_torrent(&data, &save_dir).map(|h| h.to_hex());
-            let res = match res {
-                Ok(hex) => {
-                    if let Ok(t) = typebit::metainfo::Torrent::from_bytes(&data) {
-                        meta.register(&t);
+            let res = match engine.add_torrent(&data, &save_dir) {
+                Ok(h) => {
+                    let hex = h.to_hex();
+                    if let Some(t) = engine.metainfo(&h) {
+                        meta.register(t);
                         meta.set_save_dir(&hex, &save_dir);
                     }
-                    if let Ok(h) = InfoHash::from_hex(&hex) {
-                        for (i, p) in file_priorities.iter().enumerate() {
-                            if *p != 1 {
-                                let _ = engine.set_file_priority(
-                                    &h,
-                                    i as u32,
-                                    file_priority_from_u8(*p),
-                                );
-                            }
+                    for (i, p) in file_priorities.iter().enumerate() {
+                        if *p != 1 {
+                            let _ =
+                                engine.set_file_priority(&h, i as u32, file_priority_from_u8(*p));
                         }
                     }
                     Ok(hex)
@@ -573,16 +564,33 @@ fn handle_cmd(
             };
             let _ = tx.send(res);
         }
-        Cmd::AddMagnet { uri, save_dir, tx } => {
-            let res = engine.add_magnet(&uri, &save_dir).map(|h| h.to_hex());
+        Cmd::AddMagnet {
+            uri,
+            save_dir,
+            cached_info,
+            tx,
+        } => {
+            let res = engine.add_magnet(&uri, &save_dir);
             let res = match res {
-                Ok(hex) => {
+                Ok(h) => {
+                    let hex = h.to_hex();
                     let name = typebit::magnet::Magnet::parse(&uri)
                         .ok()
                         .and_then(|m| m.name)
                         .unwrap_or_else(|| "magnet".to_string());
                     meta.register_magnet(&hex, &name);
                     meta.set_save_dir(&hex, &save_dir);
+                    if !cached_info.is_empty() {
+                        match engine.install_metadata(&h, &cached_info) {
+                            Ok(()) => {
+                                if let Some(t) = engine.metainfo(&h) {
+                                    meta.register_ready(t, &hex);
+                                }
+                            }
+                            Err(err) => engine.host.log(typebit::platform::LogLevel::Warn,
+                                &format!("Invalid cached magnet metadata for {hex}: {}; fetching from peers", err.tag())),
+                        }
+                    }
                     Ok(hex)
                 }
                 Err(e) => {
@@ -618,12 +626,14 @@ fn handle_cmd(
                         .map(|t| t.files.iter().map(|f| f.display_path()).collect())
                         .unwrap_or_default();
                     let r = engine.remove_torrent(&h).map_err(|e| e.tag().to_string());
-                    delete_staged_files(&mut engine.host, meta, &hash, &engine_paths);
+                    if r.is_ok() {
+                        delete_staged_files(&mut engine.host, meta, &hash, &engine_paths);
+                        meta.remove(&hash);
+                    }
                     r
                 }
                 Err(_) => Err("invalid hash".to_string()),
             };
-            meta.remove(&hash);
             let _ = tx.send(res);
         }
         Cmd::RenameFile {
@@ -724,9 +734,13 @@ fn handle_cmd(
                 }
                 w.begin_object();
                 w.kv_string("hash", &hex_of(&t.info_hash));
+                w.comma();
                 w.kv_string("save_path", &t.save_path);
+                w.comma();
                 w.kv_u64("have", count_bits(&t.have));
+                w.comma();
                 w.kv_string("hx", &hex_of(&t.have));
+                w.comma();
                 w.kv_bool("paused", t.paused);
                 w.end_object();
             }
@@ -832,6 +846,23 @@ fn handle_cmd(
                 w.kv_u64("pieces", pieces);
                 w.comma();
                 w.kv_bool("meta", meta_ready);
+                if let Some(h) = &ih {
+                    let peers = engine.peer_snapshot(h);
+                    w.comma();
+                    w.kv_u64("peers", peers.len() as u64);
+                    w.comma();
+                    w.kv_u64("seeds", peers.iter().filter(|p| p.is_seed).count() as u64);
+                    w.comma();
+                    w.key("trackers");
+                    w.begin_array();
+                    for (i, url) in engine.trackers(h).unwrap_or_default().iter().enumerate() {
+                        if i > 0 {
+                            w.comma();
+                        }
+                        w.string(url);
+                    }
+                    w.end_array();
+                }
                 w.end_object();
             }
             w.end_array();
@@ -1008,9 +1039,19 @@ fn handle_cmd(
             let _ = tx.send(out);
         }
         Cmd::SaveState { tx } => {
-            engine.flush_cache();
-            let st = engine.save_state();
-            let bytes = st.to_binary().ok();
+            let bytes = match engine.flush_cache() {
+                Ok(()) => engine.save_state().to_binary().ok(),
+                Err(error) => {
+                    engine.host.log(
+                        typebit::platform::LogLevel::Error,
+                        &format!(
+                            "resume checkpoint skipped: flush_cache failed ({})",
+                            error.tag()
+                        ),
+                    );
+                    None
+                }
+            };
             let _ = tx.send(bytes);
         }
         Cmd::LoadState { data } => {
@@ -2001,6 +2042,29 @@ mod tests {
             Duration::from_secs(10),
         );
         let hash = added.expect("add timed out").expect("add failed");
+        let (tx, rx) = channel();
+        let info = engine
+            .request(
+                Cmd::TorrentInfo {
+                    hash: hash.clone(),
+                    tx,
+                },
+                rx,
+                Duration::from_secs(2),
+            )
+            .unwrap()
+            .unwrap();
+        let info: nextjson::Value = nextjson::nextdecode(info.as_bytes()).unwrap();
+        assert_eq!(info.get("size").and_then(|v| v.as_u64()), Some(300_000));
+        let (tx, rx) = channel();
+        let states = engine
+            .request(Cmd::TorrentStates { tx }, rx, Duration::from_secs(2))
+            .unwrap();
+        let states: Vec<nextjson::Value> = nextjson::nextdecode(states.as_bytes()).unwrap();
+        assert_eq!(
+            states[0].get("hash").and_then(|v| v.as_str()),
+            Some(hash.as_str())
+        );
         let (tx2, rx2) = channel();
         let start_res: Option<Result<(), String>> = engine.request(
             Cmd::Start {
@@ -2207,6 +2271,7 @@ mod tests {
         let added = engine.request(
             Cmd::AddMagnet {
                 uri: magnet.clone(),
+                cached_info: Vec::new(),
                 save_dir: dir.to_str().unwrap().to_string(),
                 tx,
             },

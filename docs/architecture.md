@@ -20,7 +20,7 @@ the seams and the trade-offs.
                            │ JNI (one cdylib for both targets)
 ┌──────────────────────────▼───────────────────────────────┐
 │ native/ (Rust, PolyForm) │
-│  jni_glue.rs  49 JNI entry points (thin, defensive)       │
+│  jni_glue.rs  JNI entry points for the Kotlin bridge      │
 │  engine.rs    worker thread · mpsc commands · JSON events │
 │  host.rs       NativeHost — complete typebit::Host        │
 │  dns.rs        resolution (RecurseX) + the non-blocking   │
@@ -35,10 +35,10 @@ the seams and the trade-offs.
 └──────────────────────────┬───────────────────────────────┘
                            │ static link
 ┌──────────────────────────▼───────────────────────────────┐
-│ typebit 0.1.9 (Rust, PolyForm) — the actual torrent engine │
-│ recurse-x 0.2.3 — the resolver: iterative from the root + │
+│ typebit 0.1.10 (Rust, PolyForm) — the torrent engine       │
+│ recurse-x 0.2.6 — the resolver: iterative from the root + │
 │                   DoT/DoH, DNSSEC, semantic cache         │
-│ courierust 1.0.9 — HTTP/1.1 + HTTP/2 + TLS (in-tree; the  │
+│ courierust 1.1.3 — HTTP/1.1 + HTTP/2 + TLS (in-tree; the  │
 │                    only external input is the CA store)   │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -54,7 +54,6 @@ engine thread                      worker pools                 network
 ─────────────                      ────────────                 ───────
 resolve_host ──▶ memo ──hit──▶ address (hash probe, never blocks)
                    │ miss
-                   ├──▶ OS resolver (never blocks)  ─────────▶ getaddrinfo
                    └──▶ queue warm-up ──▶ resolver worker ──▶ RecurseX ──▶ DoT/DoH
 http_get_async ──▶ interactive queue ─┐                                or root walk
 http_get_range_async ─▶ bulk queue ───┴─▶ HTTP pool (4) ──▶ guard ──▶ client
@@ -68,7 +67,7 @@ udp_send ──▶ dual-stack socket (v4 ↔ v4-mapped) ────────
 Four rules hold the design together:
 
 1. **The engine thread never blocks on the network.** `resolve_host` reads the
-   memo or the OS resolver; HTTP work is queued onto pools; connects return a
+   memo and queues misses for background resolution. HTTP work uses a pool. Connects return a
    handle immediately. Anything that could take a second happens off-thread.
 2. **Nothing the torrent says is trusted.** Every URL is checked against
    [`crate::netpolicy`] before it is dialled, and a name is checked against the
@@ -103,9 +102,7 @@ because a resolver cannot supply it:
 
 Encrypted upstreams are only enabled when the trust store loaded; otherwise they
 are dropped with a logged reason and resolution continues iteratively. DNSSEC is
-requested and validated, but never *claimed*: RecurseX ships no root trust
-anchor, so `dnssec_anchored` stays off and the answer's `validated` flag is what
-gets reported.
+validated by RecurseX using its bundled IANA root trust anchors. A DNSSEC validation failure produces a negative result and skips the OS fallback.
 
 ## Two front ends, one client
 
@@ -137,18 +134,14 @@ Kotlin, nothing to catch. It happened here during development (a stale
    Android ABIs, and if the two ABI numbers disagree.
 
 Rule: bump `JNI_ABI` in the same commit as any native signature or JSON
-contract change, and rebuild every shipped library. The current revision is 3
-(2 added the make-torrent contract; 3 added the network-policy config keys), and
-`scripts/verify-native.ps1` fails the build if the two numbers disagree or if
-any declared entry point is missing from a shipped library.
+contract change, and rebuild every shipped library. Revision 5 adds peer and seed counts and the current tracker list to each torrent's snapshot. Revision 6 restores a magnet through its original URI and lets the engine verify the cached info dictionary against the magnet's hash.
 
 
 ## The engine boundary (why it looks like this)
 
 `typebit`'s `Engine` is not thread-safe and must be driven from a single
 thread. Its `Host` trait is the only seam the app can implement, and the
-engine never exposes its sessions (peers, trackers, bitmaps) through the
-public API. That drove three decisions:
+engine exposes session data through typed accessors and snapshots.
 
 1. **The bridge owns the engine.** `native/` compiles `typebit` and a full
    `std` `Host` into one `cdylib`. The engine runs on a dedicated Rust
@@ -157,11 +150,7 @@ public API. That drove three decisions:
    directly. Every JNI call submits a `Cmd` over mpsc; blocking calls wait
    on a one-shot reply bounded by a 30 s timeout. Non-blocking calls
    (pause, resume, limits) are fire-and-forget.
-3. **Metadata is mirrored at add time.** Because the engine has no getters,
-   the bridge re-parses `.torrent` bytes with the public
-   `metainfo::Torrent` API and keeps a `MetaRegistry`. Magnet torrents get a
-   placeholder (name from `dn`) plus a `metadata_ready` flag flipped by the
-   `MetadataComplete` event.
+3. **Metadata follows the engine.** After adding a `.torrent`, the bridge reads `Engine::metainfo` into `MetaRegistry`. For a magnet, the bridge records the display name and refreshes files, sizes and piece metadata when `MetadataComplete` arrives.
 
 ## NativeHost
 
@@ -172,14 +161,12 @@ A complete `typebit::Host` in `std`:
   `tcp_connect` never blocks the engine tick. Established streams are
   non-blocking. Inbound accepts are drained by the worker before each tick.
 - **UDP** — one non-blocking socket for DHT + UDP trackers.
-- **HTTP(S)** — delegated to `typebit::host_std::StdHost`, whose
-  `courierust` client has an in-tree TLS implementation (no system deps).
+- **HTTP(S)** — `NativeHost` runs Courierust on its worker pool with platform trust roots.
 - **Disk** — `std::fs` with `set_len` preallocation and `sync_data` flush.
 - **Global speed limits** — enforced by the engine's built-in token buckets
   (`EngineConfig::global_*_limit_bps`); the host only counts wire bytes for the
   status bar.
-- **Web seeds** (BEP-19) — `http_get_range` delegates Range requests to the
-  std host, which rejects bodies that are not exactly the requested window.
+- **Web seeds** (BEP-19) — the host checks the returned byte window before delivering blocks to the engine.
 - **UPnP/NAT-PMP** — `local_ip` is discovered with the UDP-connect trick;
   `default_gateway`/`http_post` are best-effort (the mapper degrades
   gracefully when the platform cannot discover them).
@@ -190,7 +177,7 @@ A complete `typebit::Host` in `std`:
 the store calls the engine, persists records, and updates state. A poll
 loop (cadence from settings, clamped 200–5000 ms) drains engine events,
 refreshes per-torrent stats, computes rates from deltas, and persists
-resume data every ~30 s.
+resume data at the configured interval and on metadata or download completion.
 
 Nothing outside the store mutates state. The engine facade
 (`TorrentEngine`) is a narrow interface so the store never sees JNI or JSON
@@ -213,14 +200,15 @@ polling.
 
 | UI feature | Status | Why |
 | --- | --- | --- |
-| Peer table | live (`session::PeerSnapshot`: address, client, country, phase, rates, in-flight blocks) | resolved in 0.1.9 — the earlier API only exposed counts |
-| Per-torrent uploaded bytes | live (`engine.uploaded`) | resolved in 0.1.9 |
-| Magnet file list | mirrored at add time / `MetadataComplete` flips `metadata_ready` | the engine emits the event without the info dict, so the bridge keeps its own mirror |
+| Peer table and task counts | live | `Engine::peer_snapshot` includes connecting, handshaking and ready peers. The seed count is the subset identified as seeds in that snapshot. |
+| Swarm report, batch add and per-session speed limits | engine APIs | TypeBit 0.1.10 exposes these APIs. The client adds tasks individually, applies global limits and displays the current peer snapshot. |
+| Per-torrent uploaded bytes | live | `Engine::uploaded` reports payload bytes for this torrent. |
+| Magnet file list | live after metadata resolution | `MetadataComplete` triggers a read of `Engine::metainfo`. The store persists the raw info dictionary for restart. |
 | Encryption / uTP | stored settings | the wire protocol is plaintext; uTP (BEP-29) exists but peers usually negotiate TCP |
 | WebUI over HTTPS | not built in | TLS is expected to be terminated by a reverse proxy; the server has no certificate store |
-| 日志 panel | no data source | `AppState.logs` is read by `/api/logs` and the panel but nothing assigns it — there is no JNI call that drains the native log ring. Engine diagnostics that *are* wired (DNS mode, per-upstream health, unusable upstream entries, port-mapping phase) are in 统计 and `/api/stats`; surfacing the ring as well is a JNI call plus a poll, not a redesign |
+| Engine log | live | The store drains the JNI log ring and retains the latest 500 entries. `/api/logs?after=N` returns retained entries starting at sequence N. |
 | Resolver-based DoH for HTTPS tracker/web-seed fetches | not possible here | the HTTP client resolves the URL host itself, and that name is also the TLS identity and the virtual host, so it cannot be replaced by an address. The resolver covers DHT bootstrap, UDP trackers and the URL guard; HTTPS fetches keep the OS resolver (but get a verified TLS connection, with the roots from `tlsroots.rs`) |
-| DNSSEC chain anchoring | not claimed | RecurseX validates signatures where a chain exists but ships no root trust anchor, so `dnssec_anchored` stays off and the stats report `validated` without over-claiming. Installing an anchor is a one-line change once the resolver accepts one |
+| DNSSEC chain anchoring | enabled | RecurseX validates chains against its configured IANA root anchors. |
 | DoQ / DoH3 upstreams | not compiled | `recurse-x`'s `doq`/`doh3` features pull a QUIC stack into every ABI for a capability no setting here exposes. `tls://` covers the same problem (an encrypted path that is not TCP/443), and the feature is one line in `native/Cargo.toml` away |
 | DNS rebinding on a plain-HTTP fetch | raised, not eliminated | the guard checks the address a name resolves to, but a hostile authoritative server can answer differently to the transport's own lookup. HTTPS is unaffected (certificate validation), and the obvious targets (loopback, metadata) are refused outright |
 

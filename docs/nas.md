@@ -106,7 +106,7 @@ Everything else (speed limits, concurrency, per-torrent defaults, trackers,
 WebUI security) applies live. *重启引擎* next to *保存设置* forces a rebuild by
 hand.
 
-Switches that the bundled engine (`typebit 0.1.9`) has no support for — PEX and
+Switches that the bundled engine has no support for — PEX and
 MSE/encryption — are displayed read-only instead of pretending to work.
 
 ---
@@ -433,10 +433,10 @@ for why this is not optional):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\verify-native.ps1
-# ABI revision: 2 (native == Kotlin)
-# declared JNI entry points: 50
-# desktop DLL : 50 entry points OK
-# arm64-v8a : 50 entry points OK   … and the other three ABIs
+# ABI revision: 6 (native == Kotlin)
+# declared JNI entry points: 53
+# desktop DLL : 53 entry points OK
+# arm64-v8a : 53 entry points OK   … and the other three ABIs
 ```
 
 The check fails if `JNI_ABI` and `EXPECTED_BRIDGE_ABI` disagree or if any

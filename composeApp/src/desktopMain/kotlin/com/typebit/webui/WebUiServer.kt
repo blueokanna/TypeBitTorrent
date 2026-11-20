@@ -328,12 +328,13 @@ private fun handleGet(exchange: HttpExchange, path: String) {
             }
             "/api/logs" ->
                 if (requireAuth(exchange)) {
-                    val after = query(exchange, "after")?.toIntOrNull() ?: 0
-                    val logs =
-                        store.state.value.logs
-                            .withIndex()
-                            .filter { it.index >= after }
-                            .map { LogLineDto(it.index, levelName(it.value.l), it.value.m) }
+                    val after = query(exchange, "after")?.toLongOrNull() ?: 0L
+                    val state = store.state.value
+                    val first = state.logCount - state.logs.size
+                    val logs = state.logs.mapIndexedNotNull { index, entry ->
+                        val seq = first + index
+                        if (seq >= after) LogLineDto(seq, entry.levelName, entry.m) else null
+                    }
                     sendJson(exchange, 200, jsonOf(logs))
                 }
             "/api/make-torrent/progress" ->
@@ -883,17 +884,8 @@ private fun stateDto(): StateDto {
         }
     }
 
-    private fun levelName(level: Int): String =
-        when (level) {
-            0 -> "trace"
-            1 -> "debug"
-            2 -> "info"
-            3 -> "warn"
-            else -> "error"
-        }
-
     companion object {
-        const val VERSION = "0.1.9"
+        const val VERSION = com.typebit.app.APP_VERSION
         private const val COOKIE = "typebit_session"
         private val MAGNET = Regex("magnet:\\?xt=urn:btih:[A-Za-z0-9]+[^\"'<>\\s\\\\]*")
 

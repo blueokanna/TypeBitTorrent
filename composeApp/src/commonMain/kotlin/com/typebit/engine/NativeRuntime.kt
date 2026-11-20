@@ -6,7 +6,7 @@ expect fun loadNativeLibrary(): Boolean
  * Must stay in sync with `JNI_ABI` in `native/src/lib.rs`: a mismatch must surface as a
  * version error, never as a crash inside a JNI call with a stale signature layout.
  */
-const val EXPECTED_BRIDGE_ABI = 4
+const val EXPECTED_BRIDGE_ABI = 6
 
 private var nativeReady = false
 

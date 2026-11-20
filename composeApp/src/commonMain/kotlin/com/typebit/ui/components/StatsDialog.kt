@@ -7,19 +7,33 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Tab
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.typebit.engine.EngineStatsDto
+import com.typebit.engine.LogEntryDto
 import com.typebit.ui.util.Format
 
 /** Statistics dialog: every row is a real engine counter (see [EngineStatsDto]). */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsDialog(
     stats: EngineStatsDto,
@@ -31,12 +45,27 @@ fun StatsDialog(
     lsdSent: Long = 0,
     lsdRecv: Long = 0,
     lsdPeers: Long = 0,
+    logs: List<LogEntryDto> = emptyList(),
 ) {
+    var showLogs by rememberSaveable { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("统计") },
         text = {
-            Column(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                PrimaryTabRow(selectedTabIndex = if (showLogs) 1 else 0) {
+                    Tab(selected = !showLogs, onClick = { showLogs = false }, text = { Text("统计") })
+                    Tab(selected = showLogs, onClick = { showLogs = true }, text = { Text("引擎日志") })
+                }
+                if (showLogs) {
+                    LazyColumn {
+                        if (logs.isEmpty()) item { Text("暂无日志", Modifier.padding(8.dp)) }
+                        items(logs.asReversed()) { line ->
+                            Text("[${line.levelName}] ${line.m}", Modifier.padding(vertical = 3.dp),
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                } else Column(Modifier.verticalScroll(rememberScrollState())) {
                 SectionTitle("网络统计")
                 StatRow("DHT 节点数", dhtNodes.toString())
                 StatRow("活跃 Tracker 数", trackerCount.toString())
@@ -82,6 +111,7 @@ fun StatsDialog(
                     stats.dnsProblems?.let { problems ->
                         StatRow("配置问题", problems)
                     }
+                }
                 }
             }
         },

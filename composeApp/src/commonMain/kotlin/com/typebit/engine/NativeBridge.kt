@@ -40,7 +40,7 @@ expect fun nativeRecheckCancel(): Int
 expect fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
 
 /** Adds a magnet URI; returns the hex infohash, or null on error. */
-expect fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
+expect fun nativeAddMagnet(handle: Long, uri: String, saveDir: String, cachedInfo: ByteArray): String?
 
 /** Announces and connects; 0 = ok, negative = error. */
 expect fun nativeStart(handle: Long, hash: String): Int

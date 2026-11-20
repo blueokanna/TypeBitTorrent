@@ -18,10 +18,11 @@ final class NativeBridgeKt {
         System.loadLibrary("typebit_native");
     }
 
+    static native int nativeBridgeAbi();
     static native long nativeCreateEngine(String configJson, String saveDir);
     static native void nativeDestroyEngine(long handle);
     static native String nativeAddTorrent(long handle, byte[] data, String saveDir, String prioritiesJson);
-    static native String nativeAddMagnet(long handle, String uri, String saveDir);
+    static native String nativeAddMagnet(long handle, String uri, String saveDir, byte[] cachedInfo);
     static native int nativeStart(long handle, String hash);
     static native int nativePause(long handle, String hash);
     static native int nativeResume(long handle, String hash);
@@ -52,6 +53,7 @@ final class NativeBridgeKt {
 public class SmokeTest {
 
     public static void main(String[] args) throws Exception {
+        check(NativeBridgeKt.nativeBridgeAbi() == 6, "bridge ABI 6");
         new java.io.File("./smoke-data").mkdirs();
         byte[] torrent = makeTorrent();
         java.nio.file.Files.write(java.nio.file.Paths.get("./smoke-torrent.bin"), torrent);
@@ -72,7 +74,7 @@ public class SmokeTest {
         System.out.println("[2] added torrent " + hash);
 
         String magnetHash = NativeBridgeKt.nativeAddMagnet(
-            h, "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=smoke-magnet", "./smoke-data");
+            h, "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=smoke-magnet", "./smoke-data", new byte[0]);
         check(magnetHash != null && magnetHash.length() == 40, "add magnet -> " + magnetHash);
         System.out.println("[3] added magnet " + magnetHash);
 

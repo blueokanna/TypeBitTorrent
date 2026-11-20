@@ -72,7 +72,7 @@ data class Torrent(
     val status: TorrentStatus,
     val sizeBytes: Long,
     val downloadedBytes: Long,
-    /** typebit 0.1.0 does not expose per-torrent uploads — always 0. */
+    /** Payload bytes reported by Engine::uploaded for this torrent. */
     val uploadedBytes: Long,
     val progress: Double,
     val pieceCount: Int,

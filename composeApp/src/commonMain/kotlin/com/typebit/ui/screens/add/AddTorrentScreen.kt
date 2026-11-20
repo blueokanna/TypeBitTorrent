@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -59,6 +60,8 @@ import com.typebit.ui.components.buildFileTree
 import com.typebit.ui.components.findNodeByKey
 import com.typebit.ui.util.Format
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -85,7 +88,7 @@ fun AddTorrentScreen(
     var saveDir by remember { mutableStateOf(state.settings.downloads.defaultSavePath) }
     var category by remember { mutableStateOf("") }
     var tagsText by remember { mutableStateOf("") }
-    var startNow by remember { mutableStateOf(true) }
+    var startNow by remember { mutableStateOf(!state.settings.downloads.addTorrentsInPause) }
 
     // Keyed by FLAT file index (not displayPath), so a dir toggle can address every leaf.
     val fileSel = remember { mutableStateMapOf<Int, Boolean>() }
@@ -109,23 +112,29 @@ fun AddTorrentScreen(
     val pickTorrent = rememberTorrentFilePicker { bytes, name ->
         pendingBytes = bytes
         pendingName = name
+        preview = null
         // A picked .torrent supersedes any in-flight magnet resolution.
-        magnetHash?.let { store.cancelMagnetPending(it) }
+        magnetHash?.let { store.remove(it) }
         magnetHash = null
         resolveError = null
         scope.launch {
             val parsed = withContext(Dispatchers.Default) { store.parseTorrentFile(bytes) }
-            preview = parsed
+            if (pendingBytes === bytes) {
+                preview = parsed
+                if (parsed == null) resolveError = "无法解析种子文件：$name"
+            }
         }
     }
 
-    val canAdd = pendingBytes != null || magnetHash != null || magnet.isNotBlank()
+    val canAdd = when {
+        pendingBytes != null || magnetHash != null -> preview != null
+        else -> magnet.isNotBlank()
+    }
 
     // A started magnet resolve is ALREADY a persisted task: leaving the dialog must not delete
     // it (metadata may just be slow on a cold DHT); only an explicit cancel clears it.
-    fun leaveDialog() {
-        magnetHash?.let { store.releaseMagnetPending(it) }
-        onBack()
+    DisposableEffect(store) {
+        onDispose { magnetHash?.let(store::releaseMagnetPending) }
     }
 
     fun buildPriorities(): List<Int> =
@@ -149,7 +158,7 @@ fun AddTorrentScreen(
                         title = { Text("添加种子") },
                         navigationIcon = {
                             if (showBack) {
-                                IconButton(onClick = { leaveDialog() }) {
+                                IconButton(onClick = onBack) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                                 }
                             }
@@ -185,6 +194,7 @@ fun AddTorrentScreen(
                     OutlinedTextField(
                             value = magnet,
                             onValueChange = { magnet = it },
+                            readOnly = resolving || magnetHash != null,
                             placeholder = { Text("magnet:?xt=urn:btih:…") },
                             minLines = 2,
                             modifier = Modifier.fillMaxWidth(),
@@ -197,7 +207,7 @@ fun AddTorrentScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.width(8.dp))
-                        OutlinedButton(onClick = { pickTorrent() }) {
+                        OutlinedButton(onClick = { pickTorrent() }, enabled = !resolving) {
                             Icon(Icons.Default.FileOpen, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text(if (pendingName.isBlank()) "选择 .torrent 文件" else pendingName)
@@ -404,23 +414,26 @@ fun AddTorrentScreen(
                                 )
                                 added = true
                             } else if (magnetHash != null) {
-                                store.commitMagnetSelection(
-                                        magnetHash!!,
-                                        buildPriorities(),
-                                        paused = !startNow,
-                                )
-                                added = true
+                                val hash = magnetHash!!
+                                val selection = buildPriorities()
+                                scope.launch {
+                                    added = store.commitMagnetSelection(hash, selection, paused = !startNow)
+                                }
                             } else {
                                 scope.launch {
                                     resolving = true
                                     resolveError = null
                                     val effSave = saveDir.ifBlank { Platform.defaultDownloadDir() }
-                                    val hash = store.addMagnetResolve(magnet, effSave)
+                                    val hash = withContext(NonCancellable) {
+                                        store.addMagnetResolve(magnet, effSave)?.also {
+                                            magnetHash = it
+                                            if (!scope.isActive) store.releaseMagnetPending(it)
+                                        }
+                                    }
                                     if (hash == null) {
                                         resolving = false
                                         return@launch
                                     }
-                                    magnetHash = hash
                                     // 180 s window: a cold-start DHT (empty routing table) and
                                     // unreachable public trackers make metadata take 60-120 s.
                                     val info = store.waitMetadata(hash, 180_000)
@@ -462,7 +475,7 @@ fun AddTorrentScreen(
                             }
                     )
                 }
-                OutlinedButton(onClick = { leaveDialog() }, modifier = Modifier.weight(1f)) {
+                OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
                     Text("取消")
                 }
             }

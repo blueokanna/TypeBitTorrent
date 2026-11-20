@@ -23,7 +23,7 @@ actual external fun nativeRecheckProgress(): String
 actual external fun nativeRecheckCancel(): Int
 
 actual external fun nativeAddTorrent(handle: Long, data: ByteArray, saveDir: String, prioritiesJson: String): String?
-actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String): String?
+actual external fun nativeAddMagnet(handle: Long, uri: String, saveDir: String, cachedInfo: ByteArray): String?
 actual external fun nativeStart(handle: Long, hash: String): Int
 actual external fun nativeSetFilePriorities(handle: Long, hash: String, prioritiesJson: String): Int
 actual external fun nativeSetHoldData(handle: Long, hash: String, hold: Int): Int

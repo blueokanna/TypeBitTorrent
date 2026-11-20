@@ -630,26 +630,21 @@ class AppStore(
         }
     }
 
-    fun remove(hash: String) {
+    fun remove(hash: String) = onEngine {
+        if (!engine.remove(hash) && engine.torrentInfo(hash) != null) {
+            _state.update { it.copy(lastError = "引擎移除任务失败") }
+            return@onEngine
+        }
+        infoCache.remove(hash)
+        lastSeen.remove(hash)
+        lastUpSeen.remove(hash)
+        records = records.filterNot { it.hash == hash }
+        persistRecords()
         _state.update {
             it.copy(
                     torrents = it.torrents.filterNot { t -> t.hash == hash },
                     selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
             )
-        }
-        onEngine {
-            engine.remove(hash)
-            infoCache.remove(hash)
-            lastSeen.remove(hash)
-            lastUpSeen.remove(hash)
-            records = records.filterNot { it.hash == hash }
-            persistRecords()
-            _state.update {
-                it.copy(
-                        torrents = it.torrents.filterNot { t -> t.hash == hash },
-                        selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
-                )
-            }
         }
     }
 
@@ -674,8 +669,9 @@ class AppStore(
     }
 
     fun magnetLink(hash: String, name: String): String {
-        val dn = name.ifBlank { hash }
-        return "magnet:?xt=urn:btih:$hash&dn=$dn"
+        val dn = com.typebit.ui.util.UrlCodec.encode(name.ifBlank { hash })
+        val topic = if (hash.length == 64) "btmh:1220$hash" else "btih:$hash"
+        return "magnet:?xt=urn:$topic&dn=$dn"
     }
 
     /** Signs `[0, downloadedBytes]` over the unix window `[addedAtMs, now]`; the JSON is persisted. */
@@ -742,8 +738,8 @@ class AppStore(
                         )
                 records = records + record
                 persistRecords()
-                engine.start(hash)
                 engine.setHoldData(hash, hold = true)
+                engine.start(hash)
                 refreshStats()
                 hash
             }
@@ -755,69 +751,47 @@ class AppStore(
                 while (System.currentTimeMillis() < deadline) {
                     val info = engine.torrentInfo(hash)
                     if (info?.metadata_ready == true) {
-                        infoCache[hash] = info
                         return@withContext info
                     }
                     delay(500)
                 }
-                engine.torrentInfo(hash)
+                engine.torrentInfo(hash)?.takeIf { it.metadata_ready }
             }
 
     /**
      * Phase 2b: applies per-file priorities to the resolved magnet and persists the raw `info` dict
      * so a restart never re-fetches metadata; pauses afterwards when `paused` was chosen.
      */
-    fun commitMagnetSelection(hash: String, filePriorities: List<Int>, paused: Boolean = false) =
-            onEngine {
-                engine.setFilePriorities(hash, filePriorities)
+    suspend fun commitMagnetSelection(hash: String, filePriorities: List<Int>, paused: Boolean): Boolean =
+            withContext(engineScope.coroutineContext) {
+                if (!engine.setFilePriorities(hash, filePriorities)) {
+                    _state.update { it.copy(lastError = "无法应用文件选择，请等待磁力元数据就绪后重试") }
+                    return@withContext false
+                }
+                if (paused) engine.pause(hash)
+                val raw = engine.torrentInfoRaw(hash)?.takeIf { it.isNotBlank() }
                 records =
                         records.map { rec ->
                             if (rec.hash == hash) {
                                 rec.copy(
                                         filePriorities = filePriorities,
+                                        infoBase64 = raw ?: rec.infoBase64,
+                                        paused = paused,
                                         pendingSelection = false,
                                 )
                             } else rec
                         }
                 persistRecords()
-                engine.torrentInfoRaw(hash)?.let { raw ->
-                    if (raw.isNotBlank()) {
-                        records =
-                                records.map {
-                                    if (it.hash == hash && it.infoBase64 != raw) {
-                                        it.copy(infoBase64 = raw)
-                                    } else it
-                                }
-                        persistRecords()
-                    }
-                }
-                if (paused) {
-                    engine.pause(hash)
-                    setRecordPaused(hash, paused = true)
-                }
                 refreshStats()
+                true
             }
-
-    fun cancelMagnetPending(hash: String) = onEngine {
-        engine.remove(hash)
-        infoCache.remove(hash)
-        lastSeen.remove(hash)
-        lastUpSeen.remove(hash)
-        records = records.filterNot { it.hash == hash }
-        persistRecords()
-        _state.update {
-            it.copy(
-                    torrents = it.torrents.filterNot { t -> t.hash == hash },
-                    selectedHash = if (it.selectedHash == hash) null else it.selectedHash,
-            )
-        }
-    }
 
     /**
      * Releases the data hold so a magnet whose metadata is slow keeps downloading with the default
      * selection instead of being removed when the dialog times out.
      */
     fun releaseMagnetPending(hash: String) = onEngine {
+        if (records.none { it.hash == hash && it.pendingSelection }) return@onEngine
         engine.setHoldData(hash, hold = false)
         records = records.map { if (it.hash == hash) it.copy(pendingSelection = false) else it }
         persistRecords()
@@ -1091,7 +1065,8 @@ class AppStore(
             refreshStats()
 
             val now = System.currentTimeMillis()
-            if (saveNow || now - lastSaveAt > 30_000) {
+            val saveInterval = _state.value.settings.advanced.saveResumeDataIntervalSec.coerceAtLeast(1) * 1000L
+            if (saveNow || now - lastSaveAt >= saveInterval) {
                 lastSaveAt = now
                 persistResume()
             }
@@ -1112,19 +1087,15 @@ class AppStore(
             var engineNotice: String? = null
             val antiLeechOn = s.settings.bitTorrent.antiLeechEnabled
 
-            val peerAbs = HashMap<String, Int>()
-            val peerAdj = HashMap<String, Int>()
             val pieceAdj = HashMap<String, Int>()
 
             for (ev in events) {
                 when (ev.t) {
-                    1 -> peerAdj.merge(ev.h, 1, Int::plus)
                     2 -> pieceAdj.merge(ev.h, 1, Int::plus)
                     3 -> Unit // hash failure — no state change surfaced
                     4 -> if (ev.h.isNotEmpty()) complete.add(ev.h)
                     5 -> if (ev.h.isNotEmpty()) metadata.add(ev.h)
                     6 -> Unit // metadata failed — surfaced via status
-                    7 -> if (ev.h.isNotEmpty()) peerAbs[ev.h] = ev.peers ?: 0
                     8 -> dht = ev.n ?: dht
                     9 ->
                             if (antiLeechOn) {
@@ -1156,7 +1127,7 @@ class AppStore(
                                     1 -> "引擎：DHT 引导失败，无法解析引导路由器（DHT 休眠，tracker 不受影响）"
                                     2 -> {
                                         val d = ev.detail?.takeIf { it.isNotBlank() }
-                                        "引擎：内部错误已自动恢复（下载不受影响）" + (if (d != null) "：$d" else "")
+                                        "引擎：已从内部错误恢复" + (if (d != null) "：$d" else "")
                                     }
                                     else -> "引擎：${ev.detail ?: "未知错误"}"
                                 }
@@ -1169,9 +1140,7 @@ class AppStore(
                 }
             }
 
-            if (peerAbs.isEmpty() &&
-                            peerAdj.isEmpty() &&
-                            pieceAdj.isEmpty() &&
+            if (pieceAdj.isEmpty() &&
                             complete.isEmpty() &&
                             metadata.isEmpty()
             ) {
@@ -1188,10 +1157,6 @@ class AppStore(
             val torrents =
                     s.torrents.map { t ->
                         var out = t
-                        peerAbs[t.hash]?.let { out = out.copy(peers = it) }
-                        peerAdj[t.hash]?.let {
-                            out = out.copy(peers = (out.peers + it).coerceAtLeast(0))
-                        }
                         pieceAdj[t.hash]?.let {
                             out =
                                     out.copy(
@@ -1259,16 +1224,15 @@ class AppStore(
             }
         }
 
+        val previous = _state.value.torrents.associateBy { it.hash }
+        val updated = records.map { rec -> buildTorrent(rec, previous[rec.hash], byHash[rec.hash], now) }
+        val recheck = if (recheckJob?.isActive == true) engine.recheckProgress() else null
+        val newLogs = engine.takeLogs()
         _state.update { s ->
-            val updated =
-                    records.map { rec ->
-                        val base = s.torrents.firstOrNull { it.hash == rec.hash }
-                        buildTorrent(rec, base, byHash[rec.hash], now)
-                    }
-            // Only polled while a pass runs, so the tick costs at most one extra JNI call.
-            val recheck = if (recheckJob?.isActive == true) engine.recheckProgress() else null
             s.copy(
                     torrents = updated,
+                    logs = if (newLogs.isEmpty()) s.logs else (s.logs + newLogs).takeLast(500),
+                    logCount = s.logCount + newLogs.size,
                     globalDownRate = downRate.coerceAtLeast(0),
                     globalUpRate = upRate.coerceAtLeast(0),
                     totalDownloaded = totals.first,
@@ -1354,14 +1318,14 @@ class AppStore(
                 createdBy = info?.created_by,
                 comment = info?.comment,
                 kind = info?.kind ?: rec.kind,
-                trackers = buildTrackers(rec.hash, info, rec, base),
+                trackers = buildTrackers(row?.trackers, info, rec, base),
                 // Prefer the fresh metainfo mirror: an earlier frame's list can be empty when that
                 // frame was built before the mirror existed (magnet resolved in the add dialog).
                 files = info?.files.orEmpty()
                                 .map { com.typebit.model.FileEntry(it.path, it.length, it.renamed) }
                                 .ifEmpty { base?.files.orEmpty() },
-                seeds = base?.seeds ?: 0,
-                peers = base?.peers ?: 0,
+                seeds = row?.seeds ?: base?.seeds ?: 0,
+                peers = row?.peers ?: base?.peers ?: 0,
                 downSpeed = downRate,
                 upSpeed = upRate,
                 completedAt = base?.completedAt,
@@ -1377,13 +1341,12 @@ class AppStore(
      * edits), so it is the source of truth; [base] supplies the last known per-URL state.
      */
     private fun buildTrackers(
-            hash: String,
+            live: List<String>?,
             info: TorrentInfoDto?,
             rec: TorrentRecord,
             base: Torrent?
     ): List<TrackerInfo> {
         val known = base?.trackers.orEmpty().associateBy { it.url }
-        val live = engine.trackers(hash)?.takeIf { it.isNotEmpty() }
         val urls =
                 live
                         ?: (info?.announce_list.orEmpty().flatten().filterNot {
@@ -1396,13 +1359,8 @@ class AppStore(
     private fun reAddRecord(rec: TorrentRecord) {
         val hash =
                 when {
-                    // A magnet whose metadata is known is re-added wrapped, so it never re-fetches.
-                    rec.kind == "MAGNET" && rec.infoBase64.isNotBlank() -> {
-                        val bytes = B64.decode(rec.infoBase64)
-                        if (bytes == null) null
-                        else engine.addTorrent(wrapInfoDict(bytes), rec.saveDir, rec.filePriorities)
-                    }
-                    rec.kind == "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir)
+                    rec.kind == "MAGNET" -> engine.addMagnet(rec.data, rec.saveDir,
+                            B64.decode(rec.infoBase64) ?: byteArrayOf())
                     else -> {
                         val bytes = B64.decode(rec.data)
                         if (bytes == null) null
@@ -1420,7 +1378,7 @@ class AppStore(
         for (t in rec.removedTrackers) {
             engine.removeTracker(hash, t)
         }
-        if (rec.kind != "MAGNET" && rec.filePriorities.isNotEmpty()) {
+        if (rec.kind == "MAGNET" && rec.filePriorities.isNotEmpty()) {
             applyPriorities(hash, rec.filePriorities)
         }
         // File renames are app-level data: re-apply so staged-path bookkeeping survives a restart.
@@ -1428,16 +1386,6 @@ class AppStore(
             applyRenames(hash, rec.renames)
         }
         engine.torrentInfo(hash)?.let { infoCache[hash] = it }
-    }
-
-    /** Wraps a raw bencoded `info` dict as `d4:info<info>e`, exactly as `typebit::metainfo::Torrent::from_info`. */
-    private fun wrapInfoDict(info: ByteArray): ByteArray {
-        val prefix = "d4:info".toByteArray(Charsets.ISO_8859_1)
-        val out = ByteArray(prefix.size + info.size + 1)
-        prefix.copyInto(out)
-        info.copyInto(out, prefix.size)
-        out[out.size - 1] = 'e'.code.toByte()
-        return out
     }
 
     private fun applyRenames(hash: String, renames: Map<Int, String>) {

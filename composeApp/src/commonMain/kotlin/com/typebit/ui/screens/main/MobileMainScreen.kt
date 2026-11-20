@@ -3,6 +3,12 @@
 
 package com.typebit.ui.screens.main
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import com.typebit.ui.theme.TypeBitMotion
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,11 +22,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -121,8 +125,8 @@ fun MobileMainScreen(
     store: AppStore,
     onRoute: (Route) -> Unit,
 ) {
-    var detailHash by remember { mutableStateOf<String?>(null) }
-    var section by remember { mutableStateOf(MobileSection.TORRENTS) }
+    var detailHash by rememberSaveable { mutableStateOf<String?>(null) }
+    var section by rememberSaveable { mutableStateOf(MobileSection.TORRENTS) }
 
     // Back closes an open detail page (one level up) instead of leaving the app; this
     // handler wins over the route-level one. On a section, back returns to Torrents.
@@ -131,21 +135,51 @@ fun MobileMainScreen(
         section = MobileSection.TORRENTS
     }
 
-    if (detailHash != null) {
-        val t = state.torrents.firstOrNull { it.hash == detailHash }
-        if (t != null) {
-            TorrentDetailPage(torrent = t, store = store, onBack = { detailHash = null })
-            return
-        }
-        detailHash = null
+    val selected = state.torrents.firstOrNull { it.hash == detailHash }
+    LaunchedEffect(detailHash, selected?.hash, state.engineRunning) {
+        if (state.engineRunning && selected == null) detailHash = null
     }
+    val savedState = rememberSaveableStateHolder()
+    SharedTransitionLayout {
+        AnimatedContent(
+            targetState = selected?.hash,
+            transitionSpec = { TypeBitMotion.containerTransition(targetState != null) },
+            label = "torrentDetail",
+        ) { hash ->
+            val page = this
+            val bounds: @Composable (String) -> Modifier = { id ->
+                Modifier.sharedBounds(rememberSharedContentState(id), page)
+            }
+            if (hash == null) {
+                savedState.SaveableStateProvider("home") {
+                    MobileSections(state, store, onRoute, section, { section = it }, { detailHash = it }, bounds)
+                }
+            } else {
+                state.torrents.firstOrNull { it.hash == hash }?.let { torrent ->
+                    TorrentDetailPage(torrent, store, { detailHash = null }, bounds(hash))
+                }
+            }
+        }
+    }
+}
 
-    var gridMode by remember { mutableStateOf(false) }
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun MobileSections(
+    state: AppState,
+    store: AppStore,
+    onRoute: (Route) -> Unit,
+    section: MobileSection,
+    onSection: (MobileSection) -> Unit,
+    onDetail: (String) -> Unit,
+    bounds: @Composable (String) -> Modifier,
+) {
+    var gridMode by rememberSaveable { mutableStateOf(false) }
     var showStats by remember { mutableStateOf(false) }
     var stats by remember { mutableStateOf<com.typebit.engine.EngineStatsDto?>(null) }
 
-    var sortKey by remember { mutableStateOf(MobileSort.NAME) }
-    var sortDesc by remember { mutableStateOf(false) }
+    var sortKey by rememberSaveable { mutableStateOf(MobileSort.NAME) }
+    var sortDesc by rememberSaveable { mutableStateOf(false) }
 
     var actionsFor by remember { mutableStateOf<Torrent?>(null) }
     var renameFor by remember { mutableStateOf<Torrent?>(null) }
@@ -244,7 +278,7 @@ fun MobileMainScreen(
                 MobileSection.entries.forEach { s ->
                     NavigationBarItem(
                         selected = section == s,
-                        onClick = { section = s },
+                        onClick = { onSection(s) },
                         icon = {
                             Icon(
                                 when (s) {
@@ -263,34 +297,37 @@ fun MobileMainScreen(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (section) {
+        AnimatedContent(section, Modifier.fillMaxSize().padding(padding),
+            transitionSpec = { TypeBitMotion.containerTransition(targetState.ordinal > initialState.ordinal) },
+            label = "mobileSection",
+        ) { active ->
+            when (active) {
                 MobileSection.ADD ->
                     AddTorrentScreen(
                         state = state,
                         store = store,
-                        onBack = { section = MobileSection.TORRENTS },
+                        onBack = { onSection(MobileSection.TORRENTS) },
                         showBack = false,
                     )
                 MobileSection.SEARCH ->
                     SearchScreen(
                         state = state,
                         store = store,
-                        onBack = { section = MobileSection.TORRENTS },
+                        onBack = { onSection(MobileSection.TORRENTS) },
                         showBack = false,
                     )
                 MobileSection.RSS ->
                     RssScreen(
                         state = state,
                         store = store,
-                        onBack = { section = MobileSection.TORRENTS },
+                        onBack = { onSection(MobileSection.TORRENTS) },
                         showBack = false,
                     )
                 MobileSection.SETTINGS ->
                     SettingsScreen(
                         state = state,
                         store = store,
-                        onBack = { section = MobileSection.TORRENTS },
+                        onBack = { onSection(MobileSection.TORRENTS) },
                         showBack = false,
                     )
                 MobileSection.TORRENTS -> {
@@ -299,30 +336,20 @@ fun MobileMainScreen(
                             title = "暂无种子",
                             subtitle = "点击底部「添加」导入 .torrent 或磁力链接",
                         )
-                    } else if (gridMode) {
+                    } else {
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(176.dp),
+                            columns = if (gridMode) GridCells.Adaptive(176.dp) else GridCells.Fixed(1),
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(if (gridMode) 12.dp else 0.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(if (gridMode) 12.dp else 0.dp),
                         ) {
                             items(sorted, key = { it.hash }) { t ->
-                                GridTorrentCard(
-                                    torrent = t,
-                                    onClick = { detailHash = t.hash },
-                                    onLongPress = { actionsFor = t },
-                                )
-                            }
-                        }
-                    } else {
-                        LazyColumn(Modifier.fillMaxSize()) {
-                            items(sorted, key = { it.hash }) { t ->
-                                TorrentCard(
-                                    torrent = t,
-                                    onClick = { detailHash = t.hash },
-                                    onLongPress = { actionsFor = t },
-                                )
+                                val item = Modifier.animateItem().then(bounds(t.hash))
+                                val open = { onDetail(t.hash) }
+                                val actions = { actionsFor = t }
+                                if (gridMode) GridTorrentCard(t, item, open, actions)
+                                else TorrentCard(t, item, open, actions)
                             }
                         }
                     }
@@ -384,6 +411,7 @@ fun MobileMainScreen(
         stats?.let { s ->
             StatsDialog(
                 stats = s,
+                logs = state.logs,
                 onDismiss = { showStats = false },
                 dhtNodes = state.dhtNodes,
                 trackerCount = state.trackerCount,
@@ -401,11 +429,12 @@ fun MobileMainScreen(
 @Composable
 private fun TorrentCard(
     torrent: Torrent,
+    modifier: Modifier,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
@@ -448,11 +477,12 @@ private fun TorrentCard(
 @Composable
 private fun GridTorrentCard(
     torrent: Torrent,
+    modifier: Modifier,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         shape = MaterialTheme.shapes.large,
@@ -529,8 +559,10 @@ private fun TorrentDetailPage(
     torrent: Torrent,
     store: AppStore,
     onBack: () -> Unit,
+    modifier: Modifier,
 ) {
     Scaffold(
+        modifier = modifier,
         topBar = {
             TopAppBar(
                 title = {
